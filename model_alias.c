@@ -3097,8 +3097,8 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	header = (iqmheader_t *)buffer;
 	if (memcmp(header->id, "INTERQUAKEMODEL", 16))
 		Host_Error ("Mod_INTERQUAKEMODEL_Load: %s is not an Inter-Quake Model", loadmodel->name);
-	if (LittleLong(header->version) != 0)
-		Host_Error ("Mod_INTERQUAKEMODEL_Load: only version 0 models are currently supported (name = %s)", loadmodel->name);
+	if (LittleLong(header->version) != 1)
+		Host_Error ("Mod_INTERQUAKEMODEL_Load: only version 1 models are currently supported (name = %s)", loadmodel->name);
 
 	loadmodel->modeldatatypestring = "IQM";
 
@@ -3211,7 +3211,7 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	loadmodel->numframes = header->num_anims;
 	loadmodel->num_bones = header->num_joints;
-	loadmodel->num_poses = loadmodel->numframes;
+	loadmodel->num_poses = header->num_frames;
 	loadmodel->nummodelsurfaces = loadmodel->num_surfaces = header->num_meshes;
 	loadmodel->num_textures = loadmodel->num_surfaces * loadmodel->numskins;
 	loadmodel->num_texturesperskin = loadmodel->num_surfaces;
@@ -3256,21 +3256,28 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	joint = (iqmjoint_t *) (pbase + header->ofs_joints);
 	for (i = 0;i < loadmodel->num_bones;i++)
 	{
-		matrix4x4_t base, invbase;
+		matrix4x4_t relbase, relinvbase, pinvbase, invbase;
 		joint[i].name = LittleLong(joint[i].name);
 		joint[i].parent = LittleLong(joint[i].parent);
 		for (j = 0;j < 3;j++)
 		{
 			joint[i].origin[j] = LittleFloat(joint[i].origin[j]);
 			joint[i].rotation[j] = LittleFloat(joint[i].rotation[j]);
+			joint[i].scale[j] = LittleFloat(joint[i].scale[j]);
 		}
 		strlcpy(loadmodel->data_bones[i].name, &text[joint[i].name], sizeof(loadmodel->data_bones[i].name));
 		loadmodel->data_bones[i].parent = joint[i].parent;
 		if (loadmodel->data_bones[i].parent >= i)
 			Host_Error("%s bone[%i].parent >= %i", loadmodel->name, i, i);
-		Matrix4x4_FromDoom3Joint(&base, joint[i].origin[0], joint[i].origin[1], joint[i].origin[2], joint[i].rotation[0], joint[i].rotation[1], joint[i].rotation[2]);
-		Matrix4x4_Invert_Simple(&invbase, &base);
-		Matrix4x4_ToArray12FloatD3D(&invbase, loadmodel->data_baseboneposeinverse + 12*i);
+		Matrix4x4_FromDoom3Joint(&relbase, joint[i].origin[0], joint[i].origin[1], joint[i].origin[2], joint[i].rotation[0], joint[i].rotation[1], joint[i].rotation[2]);
+		Matrix4x4_Invert_Simple(&relinvbase, &relbase);
+		if (loadmodel->data_bones[i].parent >= 0)
+		{
+			Matrix4x4_FromArray12FloatD3D(&pinvbase, loadmodel->data_baseboneposeinverse + 12*loadmodel->data_bones[i].parent);
+			Matrix4x4_Concat(&invbase, &relinvbase, &pinvbase);
+			Matrix4x4_ToArray12FloatD3D(&invbase, loadmodel->data_baseboneposeinverse + 12*i);
+		}	
+		else Matrix4x4_ToArray12FloatD3D(&relinvbase, loadmodel->data_baseboneposeinverse + 12*i);
 	}
 
 	// set up the animscenes based on the anims
@@ -3302,12 +3309,18 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 		pose[i].channeloffset[3] = LittleFloat(pose[i].channeloffset[3]);
 		pose[i].channeloffset[4] = LittleFloat(pose[i].channeloffset[4]);
 		pose[i].channeloffset[5] = LittleFloat(pose[i].channeloffset[5]);
+		pose[i].channeloffset[6] = LittleFloat(pose[i].channeloffset[6]);
+		pose[i].channeloffset[7] = LittleFloat(pose[i].channeloffset[7]);
+		pose[i].channeloffset[8] = LittleFloat(pose[i].channeloffset[8]);
 		pose[i].channelscale[0] = LittleFloat(pose[i].channelscale[0]);
 		pose[i].channelscale[1] = LittleFloat(pose[i].channelscale[1]);
 		pose[i].channelscale[2] = LittleFloat(pose[i].channelscale[2]);
 		pose[i].channelscale[3] = LittleFloat(pose[i].channelscale[3]);
 		pose[i].channelscale[4] = LittleFloat(pose[i].channelscale[4]);
 		pose[i].channelscale[5] = LittleFloat(pose[i].channelscale[5]);
+		pose[i].channelscale[6] = LittleFloat(pose[i].channelscale[6]);
+		pose[i].channelscale[7] = LittleFloat(pose[i].channelscale[7]);
+		pose[i].channelscale[8] = LittleFloat(pose[i].channelscale[8]);
 		f = fabs(pose[i].channeloffset[0]); biggestorigin = max(biggestorigin, f);
 		f = fabs(pose[i].channeloffset[1]); biggestorigin = max(biggestorigin, f);
 		f = fabs(pose[i].channeloffset[2]); biggestorigin = max(biggestorigin, f);
@@ -3330,6 +3343,10 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 			loadmodel->data_poses6s[k*6 + 3] = 32767.0f * (pose[j].channeloffset[3] + (pose[j].channelmask&8 ? (unsigned short)LittleShort(*framedata++) * pose[j].channelscale[3] : 0));
 			loadmodel->data_poses6s[k*6 + 4] = 32767.0f * (pose[j].channeloffset[4] + (pose[j].channelmask&16 ? (unsigned short)LittleShort(*framedata++) * pose[j].channelscale[4] : 0));
 			loadmodel->data_poses6s[k*6 + 5] = 32767.0f * (pose[j].channeloffset[5] + (pose[j].channelmask&32 ? (unsigned short)LittleShort(*framedata++) * pose[j].channelscale[5] : 0));
+			// skip scale data for now
+			if(pose[j].channelmask&64) framedata++;
+			if(pose[j].channelmask&128) framedata++;
+			if(pose[j].channelmask&256) framedata++;
 		}
 	}
 
