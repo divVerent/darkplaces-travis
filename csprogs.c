@@ -30,7 +30,7 @@ void CL_VM_PreventInformationLeaks(void)
 }
 
 //[515]: these are required funcs
-static char *cl_required_func[] =
+static const char *cl_required_func[] =
 {
 	"CSQC_Init",
 	"CSQC_InputEvent",
@@ -190,6 +190,11 @@ qboolean CSQC_AddRenderEdict(prvm_edict_t *ed, int edictnum)
 			return false;
 	}
 
+	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.userwavefunc_param0)))	entrender->userwavefunc_param[0] = val->_float;
+	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.userwavefunc_param1)))	entrender->userwavefunc_param[1] = val->_float;
+	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.userwavefunc_param2)))	entrender->userwavefunc_param[2] = val->_float;
+	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.userwavefunc_param3)))	entrender->userwavefunc_param[3] = val->_float;
+
 	entrender->model = model;
 	entrender->skinnum = (int)ed->fields.client->skin;
 	entrender->effects |= entrender->model->effects;
@@ -200,7 +205,7 @@ qboolean CSQC_AddRenderEdict(prvm_edict_t *ed, int edictnum)
 	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.scale)) && val->_float)		entrender->scale = scale = val->_float;
 	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.colormod)) && VectorLength2(val->vector))	VectorCopy(val->vector, entrender->colormod);
 	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.glowmod)) && VectorLength2(val->vector))	VectorCopy(val->vector, entrender->glowmod);
-	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.effects)) && val->_float)	entrender->effects |= (int)val->_float;
+	if(ed->fields.client->effects)	entrender->effects |= (int)ed->fields.client->effects;
 	if((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.tag_entity)) && val->edict)
 	{
 		int tagentity;
@@ -738,7 +743,7 @@ void CL_VM_CB_EndIncreaseEdicts(void)
 	prvm_edict_t *ent;
 
 	// link every entity except world
-	for (i = 1, ent = prog->edicts;i < prog->max_edicts;i++, ent++)
+	for (i = 1, ent = prog->edicts;i < prog->num_edicts;i++, ent++)
 		if (!ent->priv.server->free)
 			CL_LinkEdict(ent);
 }
@@ -976,13 +981,13 @@ void CL_VM_Init (void)
 	prog->globals.client->time = cl.time;
 	prog->globals.client->self = 0;
 
-	prog->globals.client->mapname = cl.worldmodel ? PRVM_SetEngineString(cl.worldmodel->name) : PRVM_SetEngineString("");
+	prog->globals.client->mapname = PRVM_SetEngineString(cl.worldname);
 	prog->globals.client->player_localentnum = cl.playerentity;
 
 	// set map description (use world entity 0)
 	val = PRVM_EDICTFIELDVALUE(prog->edicts, prog->fieldoffsets.message);
 	if(val)
-		val->string = PRVM_SetEngineString(cl.levelname);
+		val->string = PRVM_SetEngineString(cl.worldmessage);
 	VectorCopy(cl.world.mins, prog->edicts->fields.client->mins);
 	VectorCopy(cl.world.maxs, prog->edicts->fields.client->maxs);
 

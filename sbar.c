@@ -407,7 +407,7 @@ void Sbar_Init (void)
 		Cvar_RegisterVariable(&sbar_flagstatus_pos); // this cvar makes no sense in other games
 	}
 
-	R_RegisterModule("sbar", sbar_start, sbar_shutdown, sbar_newmap);
+	R_RegisterModule("sbar", sbar_start, sbar_shutdown, sbar_newmap, NULL, NULL);
 }
 
 
@@ -684,14 +684,8 @@ void Sbar_SoloScoreboard (void)
 	else if (cl.stats[STAT_SECRETS]) // LA: And similarly for secrets
 		Sbar_DrawString(8+22*8, 4, va("Secrets:%3i", cl.stats[STAT_SECRETS]));
 
-	// figure out the map's filename without path or extension
-	strlcpy(str, FS_FileWithoutPath(cl.worldmodel ? cl.worldmodel->name : ""), sizeof(str));
-	if (strrchr(str, '.'))
-		*(strrchr(str, '.')) = 0;
-
-	// append a : separator and then the full title
-	strlcat(str, ":", sizeof(str));
-	strlcat(str, cl.levelname, sizeof(str));
+	// format is like this: e1m1:The Sligpate Complex
+	dpsnprintf(str, sizeof(str), "%s:%s", cl.worldbasename, cl.worldmessage);
 
 	// if there's a newline character, terminate the string there
 	if (strchr(str, '\n'))
@@ -734,11 +728,11 @@ void Sbar_SoloScoreboard (void)
 
 // draw level name
 	if (gamemode == GAME_NEXUIZ) {
-		l = (int) strlen (cl.worldmodel->name);
-		Sbar_DrawString (232 - l*4, 12, cl.worldmodel->name);
+		l = (int) strlen (cl.worldname);
+		Sbar_DrawString (232 - l*4, 12, cl.worldname);
 	} else {
-		l = (int) strlen (cl.levelname);
-		Sbar_DrawString (232 - l*4, 12, cl.levelname);
+		l = (int) strlen (cl.worldmessage);
+		Sbar_DrawString (232 - l*4, 12, cl.worldmessage);
 	}
 #endif
 }
@@ -1060,7 +1054,7 @@ static void get_showspeed_unit(int unitnumber, double *conversion_factor, const 
 	{
 		default:
 		case 1:
-			if(gamemode == GAME_NEXUIZ)
+			if(gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 				*unit = "in/s";
 			else
 				*unit = "qu/s";
@@ -1069,23 +1063,23 @@ static void get_showspeed_unit(int unitnumber, double *conversion_factor, const 
 		case 2:
 			*unit = "m/s";
 			*conversion_factor = 0.0254;
-			if(gamemode != GAME_NEXUIZ) *conversion_factor *= 1.5;
-			// 1qu=1.5in is for non-Nexuiz only - Nexuiz players are overly large, but 1qu=1in fixes that
+			if(gamemode != GAME_NEXUIZ && gamemode != GAME_XONOTIC) *conversion_factor *= 1.5;
+			// 1qu=1.5in is for non-Nexuiz/Xonotic only - Nexuiz/Xonotic players are overly large, but 1qu=1in fixes that
 			break;
 		case 3:
 			*unit = "km/h";
 			*conversion_factor = 0.0254 * 3.6;
-			if(gamemode != GAME_NEXUIZ) *conversion_factor *= 1.5;
+			if(gamemode != GAME_NEXUIZ && gamemode != GAME_XONOTIC) *conversion_factor *= 1.5;
 			break;
 		case 4:
 			*unit = "mph";
 			*conversion_factor = 0.0254 * 3.6 * 0.6213711922;
-			if(gamemode != GAME_NEXUIZ) *conversion_factor *= 1.5;
+			if(gamemode != GAME_NEXUIZ && gamemode != GAME_XONOTIC) *conversion_factor *= 1.5;
 			break;
 		case 5:
 			*unit = "knots";
 			*conversion_factor = 0.0254 * 1.943844492; // 1 m/s = 1.943844492 knots, because 1 knot = 1.852 km/h
-			if(gamemode != GAME_NEXUIZ) *conversion_factor *= 1.5;
+			if(gamemode != GAME_NEXUIZ && gamemode != GAME_XONOTIC) *conversion_factor *= 1.5;
 			break;
 	}
 }
@@ -1209,6 +1203,7 @@ void Sbar_ShowFPS(void)
 		}
 		if (fpsstring[0])
 		{
+			r_draw2d_force = true;
 			fps_x = vid_conwidth.integer - DrawQ_TextWidth(fpsstring, 0, fps_scalex, fps_scaley, true, FONT_INFOBAR);
 			DrawQ_Fill(fps_x, fps_y, vid_conwidth.integer - fps_x, fps_scaley, 0, 0, 0, 0.5, 0);
 			if (red)
@@ -1216,6 +1211,7 @@ void Sbar_ShowFPS(void)
 			else
 				DrawQ_String(fps_x, fps_y, fpsstring, 0, fps_scalex, fps_scaley, 1, 1, 1, 1, 0, NULL, true, FONT_INFOBAR);
 			fps_y += fps_scaley;
+			r_draw2d_force = false;
 		}
 		if (timedemostring1[0])
 		{

@@ -114,15 +114,15 @@ typedef struct cvar_s
 {
 	int flags;
 
-	char *name;
+	const char *name;
 
-	char *string;
-	char *description;
+	const char *string;
+	const char *description;
 	int integer;
 	float value;
 	float vector[3];
 
-	char *defstring;
+	const char *defstring;
 
 	unsigned int globaldefindex_progid[3];
 	int globaldefindex[3];
@@ -205,6 +205,7 @@ void Cvar_List_f (void);
 
 void Cvar_Set_f (void);
 void Cvar_SetA_f (void);
+void Cvar_Del_f (void);
 // commands to create new cvars (or set existing ones)
 // seta creates an archived cvar (saved to config)
 
@@ -212,8 +213,10 @@ void Cvar_SetA_f (void);
 /// or merely sets its value if it already exists.
 cvar_t *Cvar_Get (const char *name, const char *value, int flags, const char *newdescription);
 
-extern char *cvar_dummy_description; // ALWAYS the same pointer
+extern const char *cvar_dummy_description; // ALWAYS the same pointer
 extern cvar_t *cvar_vars; // used to list all cvars
+
+void Cvar_UpdateAllAutoCvars(void); // updates ALL autocvars of the active prog to the cvar values (savegame loading)
 
 #ifdef FILLALLCVARSWITHRUBBISH
 void Cvar_FillAll_f();

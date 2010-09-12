@@ -19,12 +19,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 // console.c
 
-#include "quakedef.h"
-
 #if !defined(WIN32) || defined(__MINGW32__)
 # include <unistd.h>
 #endif
 #include <time.h>
+
+#include "quakedef.h"
 
 // for u8_encodech
 #include "ft2.h"
@@ -47,6 +47,9 @@ cvar_t con_notifyalign = {CVAR_SAVE, "con_notifyalign", "", "how to align notify
 cvar_t con_chattime = {CVAR_SAVE, "con_chattime","30", "how long chat lines last, in seconds"};
 cvar_t con_chat = {CVAR_SAVE, "con_chat","0", "how many chat lines to show in a dedicated chat area"};
 cvar_t con_chatpos = {CVAR_SAVE, "con_chatpos","0", "where to put chat (negative: lines from bottom of screen, positive: lines below notify, 0: at top)"};
+cvar_t con_chatrect = {CVAR_SAVE, "con_chatrect","0", "use con_chatrect_x and _y to position con_notify and con_chat freely instead of con_chatpos"};
+cvar_t con_chatrect_x = {CVAR_SAVE, "con_chatrect_x","", "where to put chat, relative x coordinate of left edge on screen (use con_chatwidth for width)"};
+cvar_t con_chatrect_y = {CVAR_SAVE, "con_chatrect_y","", "where to put chat, relative y coordinate of top edge on screen (use con_chat for line count)"};
 cvar_t con_chatwidth = {CVAR_SAVE, "con_chatwidth","1.0", "relative chat window width"};
 cvar_t con_textsize = {CVAR_SAVE, "con_textsize","8", "console text size in virtual 2D pixels"};
 cvar_t con_notifysize = {CVAR_SAVE, "con_notifysize","8", "notify text size in virtual 2D pixels"};
@@ -752,6 +755,9 @@ void Con_Init (void)
 	// register our cvars
 	Cvar_RegisterVariable (&con_chat);
 	Cvar_RegisterVariable (&con_chatpos);
+	Cvar_RegisterVariable (&con_chatrect_x);
+	Cvar_RegisterVariable (&con_chatrect_y);
+	Cvar_RegisterVariable (&con_chatrect);
 	Cvar_RegisterVariable (&con_chatsize);
 	Cvar_RegisterVariable (&con_chattime);
 	Cvar_RegisterVariable (&con_chatwidth);
@@ -1043,7 +1049,7 @@ void Con_MaskPrint(int additionalmask, const char *msg)
 				{
 					if (con_chatsound.value)
 					{
-						if(gamemode == GAME_NEXUIZ)
+						if(gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 						{
 							if(msg[1] == '\r' && cl.foundtalk2wav)
 								S_LocalSound ("sound/misc/talk2.wav");
@@ -1325,6 +1331,9 @@ Con_DPrint
 */
 void Con_DPrint(const char *msg)
 {
+	if(developer.integer < 0) // at 0, we still add to the buffer but hide
+		return;
+
 	Con_MaskPrint(CON_MASK_DEVELOPER, msg);
 }
 
@@ -1337,6 +1346,9 @@ void Con_DPrintf(const char *fmt, ...)
 {
 	va_list argptr;
 	char msg[MAX_INPUTLINE];
+
+	if(developer.integer < 0) // at 0, we still add to the buffer but hide
+		return;
 
 	va_start(argptr,fmt);
 	dpvsnprintf(msg,sizeof(msg),fmt,argptr);
@@ -1363,12 +1375,15 @@ The input line scrolls horizontally if typing goes beyond the right edge
 Modified by EvilTypeGuy eviltypeguy@qeradiant.com
 ================
 */
+extern cvar_t r_font_disable_freetype;
 void Con_DrawInput (void)
 {
 	int		y;
 	int		i;
 	char editlinecopy[MAX_INPUTLINE+1], *text;
-	float x;
+	float x, xo;
+	size_t len_out;
+	int col_out;
 
 	if (!key_consoleactive)
 		return;		// don't draw anything
@@ -1388,34 +1403,63 @@ void Con_DrawInput (void)
 		text[i] = 0;
 
 	// add the cursor frame
-	if ((int)(realtime*con_cursorspeed) & 1)		// cursor is visible
+	if (r_font_disable_freetype.integer)
 	{
-		if (!utf8_enable.integer)
-			text[key_linepos] = 11 + 130 * key_insert;	// either solid or triangle facing right
-		else if (y + 3 < (int)sizeof(editlinecopy)-1)
+		// this code is freetype incompatible!
+		if ((int)(realtime*con_cursorspeed) & 1)		// cursor is visible
 		{
-			int ofs = u8_bytelen(text + key_linepos, 1);
-			size_t len;
-			const char *curbuf;
-			curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len);
-
-			if (curbuf)
+			if (!utf8_enable.integer)
+				text[key_linepos] = 11 + 130 * key_insert;	// either solid or triangle facing right
+			else if (y + 3 < (int)sizeof(editlinecopy)-1)
 			{
-				memmove(text + key_linepos + len, text + key_linepos + ofs, sizeof(editlinecopy) - key_linepos - len);
-				memcpy(text + key_linepos, curbuf, len);
-			}
-		} else
-			text[key_linepos] = '-' + ('+' - '-') * key_insert;
+				int ofs = u8_bytelen(text + key_linepos, 1);
+				size_t len;
+				const char *curbuf;
+				curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len);
+
+				if (curbuf)
+				{
+					memmove(text + key_linepos + len, text + key_linepos + ofs, sizeof(editlinecopy) - key_linepos - len);
+					memcpy(text + key_linepos, curbuf, len);
+				}
+			} else
+				text[key_linepos] = '-' + ('+' - '-') * key_insert;
+		}
 	}
 
 //	text[key_linepos + 1] = 0;
 
-	x = vid_conwidth.value * 0.95 - DrawQ_TextWidth(text, key_linepos, con_textsize.value, con_textsize.value, false, FONT_CONSOLE);
+	len_out = key_linepos;
+	col_out = -1;
+	xo = DrawQ_TextWidth_UntilWidth_TrackColors(text, &len_out, con_textsize.value, con_textsize.value, &col_out, false, FONT_CONSOLE, 1000000000);
+	x = vid_conwidth.value * 0.95 - xo; // scroll
 	if(x >= 0)
 		x = 0;
 
 	// draw it
 	DrawQ_String(x, con_vislines - con_textsize.value*2, text, y + 3, con_textsize.value, con_textsize.value, 1.0, 1.0, 1.0, 1.0, 0, NULL, false, FONT_CONSOLE );
+
+	// add a cursor on top of this (when using freetype)
+	if (!r_font_disable_freetype.integer)
+	{
+		if ((int)(realtime*con_cursorspeed) & 1)		// cursor is visible
+		{
+			if (!utf8_enable.integer)
+			{
+				text[0] = 11 + 130 * key_insert;	// either solid or triangle facing right
+				text[1] = 0;
+			}
+			else
+			{
+				size_t len;
+				const char *curbuf;
+				curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len);
+				memcpy(text, curbuf, len);
+				text[len] = 0;
+			}
+			DrawQ_String(x + xo, con_vislines - con_textsize.value*2, text, 0, con_textsize.value, con_textsize.value, 1.0, 1.0, 1.0, 1.0, 0, &col_out, false, FONT_CONSOLE);
+		}
+	}
 
 	// remove cursor
 //	key_line[key_linepos] = 0;
@@ -1479,7 +1523,7 @@ int Con_DisplayLineFunc(void *passthrough, const char *line, size_t length, floa
 	{
 		int x = (int) (ti->x + (ti->width - width) * ti->alignment);
 		if(isContinuation && *ti->continuationString)
-			x += (int) DrawQ_String(x, ti->y, ti->continuationString, strlen(ti->continuationString), ti->fontsize, ti->fontsize, 1.0, 1.0, 1.0, 1.0, 0, NULL, false, ti->font);
+			x = (int) DrawQ_String(x, ti->y, ti->continuationString, strlen(ti->continuationString), ti->fontsize, ti->fontsize, 1.0, 1.0, 1.0, 1.0, 0, NULL, false, ti->font);
 		if(length > 0)
 			DrawQ_String(x, ti->y, line, length, ti->fontsize, ti->fontsize, 1.0, 1.0, 1.0, 1.0, 0, &(ti->colorindex), false, ti->font);
 	}
@@ -1572,8 +1616,8 @@ Draws the last few lines of output transparently over the game top
 */
 void Con_DrawNotify (void)
 {
-	float	x, v;
-	float chatstart, notifystart, inputsize;
+	float	x, v, xr;
+	float chatstart, notifystart, inputsize, height;
 	float align;
 	char	temptext[MAX_INPUTLINE];
 	int numChatlines;
@@ -1582,6 +1626,7 @@ void Con_DrawNotify (void)
 	ConBuffer_FixTimes(&con);
 
 	numChatlines = con_chat.integer;
+
 	chatpos = con_chatpos.integer;
 
 	if (con_notify.integer < 0)
@@ -1599,7 +1644,7 @@ void Con_DrawNotify (void)
 			align = 0.5;
 	}
 
-	if(numChatlines)
+	if(numChatlines || !con_chatrect.integer)
 	{
 		if(chatpos == 0)
 		{
@@ -1629,13 +1674,24 @@ void Con_DrawNotify (void)
 
 	v = notifystart + con_notifysize.value * Con_DrawNotifyRect(0, CON_MASK_INPUT | CON_MASK_HIDENOTIFY | (numChatlines ? CON_MASK_CHAT : 0) | CON_MASK_DEVELOPER, con_notifytime.value, 0, notifystart, vid_conwidth.value, con_notify.value * con_notifysize.value, con_notifysize.value, align, 0.0, "");
 
-	// chat?
+	if(con_chatrect.integer)
+	{
+		x = con_chatrect_x.value * vid_conwidth.value;
+		v = con_chatrect_y.value * vid_conheight.value;
+	}
+	else
+	{
+		x = 0;
+		if(numChatlines) // only do this if chat area is enabled, or this would move the input line wrong
+			v = chatstart;
+	}
+	height = numChatlines * con_chatsize.value;
+
 	if(numChatlines)
 	{
-		v = chatstart + numChatlines * con_chatsize.value;
-		Con_DrawNotifyRect(CON_MASK_CHAT, CON_MASK_INPUT, con_chattime.value, 0, chatstart, vid_conwidth.value * con_chatwidth.value, v - chatstart, con_chatsize.value, 0.0, 1.0, (utf8_enable.integer ? "^3\xee\x80\x8c\xee\x80\x8c\xee\x80\x8c " : "^3\014\014\014 ")); // 015 is ·> character in conchars.tga
+		Con_DrawNotifyRect(CON_MASK_CHAT, CON_MASK_INPUT, con_chattime.value, x, v, vid_conwidth.value * con_chatwidth.value, height, con_chatsize.value, 0.0, 1.0, (utf8_enable.integer ? "^3\xee\x80\x8c\xee\x80\x8c\xee\x80\x8c " : "^3\014\014\014 ")); // 015 is ·> character in conchars.tga
+		v += height;
 	}
-
 	if (key_dest == key_message)
 	{
 		//static char *cursor[2] = { "\xee\x80\x8a", "\xee\x80\x8b" }; // { off, on }
@@ -1653,9 +1709,8 @@ void Con_DrawNotify (void)
 
 		// FIXME word wrap
 		inputsize = (numChatlines ? con_chatsize : con_notifysize).value;
-		x = vid_conwidth.value - DrawQ_TextWidth(temptext, 0, inputsize, inputsize, false, FONT_CHAT);
-		if(x > 0)
-			x = 0;
+		xr = vid_conwidth.value - DrawQ_TextWidth(temptext, 0, inputsize, inputsize, false, FONT_CHAT);
+		x = min(xr, x);
 		DrawQ_String(x, v, temptext, 0, inputsize, inputsize, 1.0, 1.0, 1.0, 1.0, 0, &colorindex, false, FONT_CHAT);
 	}
 }
@@ -1767,8 +1822,10 @@ The typing input line at the bottom should only be drawn if typing is allowed
 */
 void Con_DrawConsole (int lines)
 {
+	float alpha, alpha0;
+	double sx, sy;
 	int mask_must = 0;
-	int mask_mustnot = developer.integer ? 0 : CON_MASK_DEVELOPER;
+	int mask_mustnot = (developer.integer>0) ? 0 : CON_MASK_DEVELOPER;
 	cachepic_t *conbackpic;
 
 	if (lines <= 0)
@@ -1779,12 +1836,57 @@ void Con_DrawConsole (int lines)
 
 	con_vislines = lines;
 
+	r_draw2d_force = true;
+
 // draw the background
-	conbackpic = scr_conbrightness.value >= 0.01f ? Draw_CachePic("gfx/conback") : NULL;
-	if (conbackpic && conbackpic->tex != r_texture_notexture)
-		DrawQ_Pic(0, lines - vid_conheight.integer, conbackpic, vid_conwidth.integer, vid_conheight.integer, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, cls.signon == SIGNONS ? scr_conalpha.value : 1.0f, 0); // always full alpha when not in game
-	else
-		DrawQ_Fill(0, lines - vid_conheight.integer, vid_conwidth.integer, vid_conheight.integer, 0.0f, 0.0f, 0.0f, cls.signon == SIGNONS ? scr_conalpha.value : 1.0f, 0); // always full alpha when not in game
+	alpha0 = cls.signon == SIGNONS ? scr_conalpha.value : 1.0f; // always full alpha when not in game
+	if((alpha = alpha0 * scr_conalphafactor.value) > 0)
+	{
+		sx = scr_conscroll_x.value;
+		sy = scr_conscroll_y.value;
+		conbackpic = scr_conbrightness.value >= 0.01f ? Draw_CachePic_Flags("gfx/conback", (sx != 0 || sy != 0) ? CACHEPICFLAG_NOCLAMP : 0) : NULL;
+		sx *= realtime; sy *= realtime;
+		sx -= floor(sx); sy -= floor(sy);
+		if (conbackpic && conbackpic->tex != r_texture_notexture)
+			DrawQ_SuperPic(0, lines - vid_conheight.integer, conbackpic, vid_conwidth.integer, vid_conheight.integer,
+					0 + sx, 0 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					1 + sx, 0 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					0 + sx, 1 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					1 + sx, 1 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					0);
+		else
+			DrawQ_Fill(0, lines - vid_conheight.integer, vid_conwidth.integer, vid_conheight.integer, 0.0f, 0.0f, 0.0f, alpha, 0);
+	}
+	if((alpha = alpha0 * scr_conalpha2factor.value) > 0)
+	{
+		sx = scr_conscroll2_x.value;
+		sy = scr_conscroll2_y.value;
+		conbackpic = Draw_CachePic_Flags("gfx/conback2", (sx != 0 || sy != 0) ? CACHEPICFLAG_NOCLAMP : 0);
+		sx *= realtime; sy *= realtime;
+		sx -= floor(sx); sy -= floor(sy);
+		if(conbackpic && conbackpic->tex != r_texture_notexture)
+			DrawQ_SuperPic(0, lines - vid_conheight.integer, conbackpic, vid_conwidth.integer, vid_conheight.integer,
+					0 + sx, 0 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					1 + sx, 0 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					0 + sx, 1 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					1 + sx, 1 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					0);
+	}
+	if((alpha = alpha0 * scr_conalpha3factor.value) > 0)
+	{
+		sx = scr_conscroll3_x.value;
+		sy = scr_conscroll3_y.value;
+		conbackpic = Draw_CachePic_Flags("gfx/conback3", (sx != 0 || sy != 0) ? CACHEPICFLAG_NOCLAMP : 0);
+		sx *= realtime; sy *= realtime;
+		sx -= floor(sx); sy -= floor(sy);
+		if(conbackpic && conbackpic->tex != r_texture_notexture)
+			DrawQ_SuperPic(0, lines - vid_conheight.integer, conbackpic, vid_conwidth.integer, vid_conheight.integer,
+					0 + sx, 0 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					1 + sx, 0 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					0 + sx, 1 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					1 + sx, 1 + sy, scr_conbrightness.value, scr_conbrightness.value, scr_conbrightness.value, alpha,
+					0);
+	}
 	DrawQ_String(vid_conwidth.integer - DrawQ_TextWidth(engineversion, 0, con_textsize.value, con_textsize.value, false, FONT_CONSOLE), lines - con_textsize.value, engineversion, 0, con_textsize.value, con_textsize.value, 1, 0, 0, 1, 0, NULL, true, FONT_CONSOLE);
 
 // draw the text
@@ -1833,6 +1935,8 @@ void Con_DrawConsole (int lines)
 
 // draw the input prompt, user text, and cursor if desired
 	Con_DrawInput ();
+
+	r_draw2d_force = false;
 }
 
 /*

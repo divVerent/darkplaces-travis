@@ -368,6 +368,11 @@ typedef struct entity_render_s
 	float *animcache_normal3f;
 	float *animcache_svector3f;
 	float *animcache_tvector3f;
+	// interleaved arrays for rendering and dynamic vertex buffers for them
+	r_vertexposition_t *animcache_vertexposition;
+	r_meshbuffer_t *animcache_vertexpositionbuffer;
+	r_vertexmesh_t *animcache_vertexmesh;
+	r_meshbuffer_t *animcache_vertexmeshbuffer;
 
 	// current lighting from map (updated ONLY by client code, not renderer)
 	vec3_t modellight_ambient;
@@ -382,6 +387,9 @@ typedef struct entity_render_s
 	// FIELDS UPDATED BY RENDERER:
 	// last time visible during trace culling
 	double last_trace_visibility;
+
+	// user wavefunc parameters (from csqc)
+	float userwavefunc_param[Q3WAVEFUNC_USER_COUNT];
 }
 entity_render_t;
 
@@ -529,7 +537,7 @@ qw_downloadtype_t;
 typedef enum capturevideoformat_e
 {
 	CAPTUREVIDEOFORMAT_AVI_I420,
-	CAPTUREVIDEOFORMAT_OGG_VORBIS_THEORA,
+	CAPTUREVIDEOFORMAT_OGG_VORBIS_THEORA
 }
 capturevideoformat_t;
 
@@ -701,6 +709,9 @@ typedef struct client_static_s
 	// this normally contains the following keys in quakeworld:
 	// password spectator name team skin topcolor bottomcolor rate noaim msg *ver *ip
 	char userinfo[MAX_USERINFO_STRING];
+
+	// extra user info for the "connect" command
+	char connect_userinfo[MAX_USERINFO_STRING];
 
 	// video capture stuff
 	capturevideostate_t capturevideo;
@@ -932,6 +943,17 @@ typedef struct client_state_s
 	// whether the replay should allow a jump at the first sequence
 	qboolean movement_replay_canjump;
 
+	// previous gun angles (for leaning effects)
+	vec3_t gunangles_prev;
+	vec3_t gunangles_highpass;
+	vec3_t gunangles_adjustment_lowpass;
+	vec3_t gunangles_adjustment_highpass;
+	// previous gun angles (for leaning effects)
+	vec3_t gunorg_prev;
+	vec3_t gunorg_highpass;
+	vec3_t gunorg_adjustment_lowpass;
+	vec3_t gunorg_adjustment_highpass;
+
 // pitch drifting vars
 	float idealpitch;
 	float pitchvel;
@@ -958,6 +980,9 @@ typedef struct client_state_s
 	qboolean oldonground;
 	double lastongroundtime;
 	double hitgroundtime;
+	float bob2_smooth;
+	float bobfall_speed;
+	float bobfall_swing;
 
 	// don't change view angle, full screen, etc
 	int intermission;
@@ -995,7 +1020,11 @@ typedef struct client_state_s
 	char sound_name[MAX_SOUNDS][MAX_QPATH];
 
 	// for display on solo scoreboard
-	char levelname[40];
+	char worldmessage[40]; // map title (not related to filename)
+	// variants of map name
+	char worldbasename[MAX_QPATH]; // %s
+	char worldname[MAX_QPATH]; // maps/%s.bsp
+	char worldnamenoextension[MAX_QPATH]; // maps/%s
 	// cl_entitites[cl.viewentity] = player
 	int viewentity;
 	// the real player entity (normally same as viewentity,
@@ -1171,13 +1200,17 @@ typedef struct client_state_s
 	float movevars_airstopaccelerate;
 	float movevars_airstrafeaccelerate;
 	float movevars_maxairstrafespeed;
+	float movevars_airstrafeaccel_qw;
 	float movevars_aircontrol;
+	float movevars_aircontrol_power;
+	float movevars_aircontrol_penalty;
 	float movevars_warsowbunny_airforwardaccel;
 	float movevars_warsowbunny_accel;
 	float movevars_warsowbunny_topspeed;
 	float movevars_warsowbunny_turnaccel;
 	float movevars_warsowbunny_backtosideratio;
 	float movevars_ticrate;
+	float movevars_airspeedlimit_nonqw;
 
 	// models used by qw protocol
 	int qw_modelindex_spike;
@@ -1271,6 +1304,7 @@ extern cvar_t m_side;
 
 extern cvar_t cl_autodemo;
 extern cvar_t cl_autodemo_nameformat;
+extern cvar_t cl_autodemo_delete;
 
 extern cvar_t r_draweffects;
 
@@ -1303,7 +1337,7 @@ void CL_Locs_FindLocationName(char *buffer, size_t buffersize, vec3_t point);
 void CL_Shutdown (void);
 void CL_Init (void);
 
-void CL_EstablishConnection(const char *host);
+void CL_EstablishConnection(const char *host, int firstarg);
 
 void CL_Disconnect (void);
 void CL_Disconnect_f (void);
@@ -1429,7 +1463,7 @@ extern cvar_t cl_decals_fadetime;
 void CL_Particles_Clear(void);
 void CL_Particles_Init(void);
 void CL_Particles_Shutdown(void);
-particle_t *CL_NewParticle(const vec3_t sortorigin, unsigned short ptypeindex, int pcolor1, int pcolor2, int ptex, float psize, float psizeincrease, float palpha, float palphafade, float pgravity, float pbounce, float px, float py, float pz, float pvx, float pvy, float pvz, float pairfriction, float pliquidfriction, float originjitter, float velocityjitter, qboolean pqualityreduction, float lifetime, float stretch, pblend_t blendmode, porientation_t orientation, int staincolor1, int staincolor2, int staintex, float stainalpha, float stainsize, float angle, float spin);
+particle_t *CL_NewParticle(const vec3_t sortorigin, unsigned short ptypeindex, int pcolor1, int pcolor2, int ptex, float psize, float psizeincrease, float palpha, float palphafade, float pgravity, float pbounce, float px, float py, float pz, float pvx, float pvy, float pvz, float pairfriction, float pliquidfriction, float originjitter, float velocityjitter, qboolean pqualityreduction, float lifetime, float stretch, pblend_t blendmode, porientation_t orientation, int staincolor1, int staincolor2, int staintex, float stainalpha, float stainsize, float angle, float spin, float tint[4]);
 
 typedef enum effectnameindex_s
 {
@@ -1476,7 +1510,7 @@ effectnameindex_t;
 int CL_ParticleEffectIndexForName(const char *name);
 const char *CL_ParticleEffectNameForIndex(int i);
 void CL_ParticleEffect(int effectindex, float pcount, const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, entity_t *ent, int palettecolor);
-void CL_ParticleTrail(int effectindex, float pcount, const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, entity_t *ent, int palettecolor, qboolean spawndlight, qboolean spawnparticles);
+void CL_ParticleTrail(int effectindex, float pcount, const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, entity_t *ent, int palettecolor, qboolean spawndlight, qboolean spawnparticles, float tintmins[4], float tintmaxs[4]);
 void CL_ParseParticleEffect (void);
 void CL_ParticleCube (const vec3_t mins, const vec3_t maxs, const vec3_t dir, int count, int colorbase, vec_t gravity, vec_t randomvel);
 void CL_ParticleRain (const vec3_t mins, const vec3_t maxs, const vec3_t dir, int count, int colorbase, int type);
@@ -1522,6 +1556,10 @@ typedef struct r_refdef_stats_s
 	int bloom;
 	int bloom_copypixels;
 	int bloom_drawpixels;
+	int indexbufferuploadcount;
+	int indexbufferuploadsize;
+	int vertexbufferuploadcount;
+	int vertexbufferuploadsize;
 }
 r_refdef_stats_t;
 
@@ -1740,7 +1778,7 @@ typedef struct r_refdef_s
 	float fog_height_texcoordscale;
 	char fogheighttexturename[64]; // detects changes to active fog height texture
 
-	qboolean draw2dstage;
+	int draw2dstage; // 0 = no, 1 = yes, other value = needs setting up again
 
 	// true during envmap command capture
 	qboolean envmap;

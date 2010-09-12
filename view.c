@@ -39,11 +39,40 @@ cvar_t cl_rollangle = {0, "cl_rollangle", "2.0", "how much to tilt the view when
 cvar_t cl_bob = {CVAR_SAVE, "cl_bob","0.02", "view bobbing amount"};
 cvar_t cl_bobcycle = {CVAR_SAVE, "cl_bobcycle","0.6", "view bobbing speed"};
 cvar_t cl_bobup = {CVAR_SAVE, "cl_bobup","0.5", "view bobbing adjustment that makes the up or down swing of the bob last longer"};
-
+cvar_t cl_bob2 = {CVAR_SAVE, "cl_bob2","0", "sideways view bobbing amount"};
+cvar_t cl_bob2cycle = {CVAR_SAVE, "cl_bob2cycle","0.6", "sideways view bobbing speed"};
+cvar_t cl_bob2smooth = {CVAR_SAVE, "cl_bob2smooth","0.05", "how fast the view goes back when you stop touching the ground"};
+cvar_t cl_bobfall = {CVAR_SAVE, "cl_bobfall","0", "how much the view swings down when falling (influenced by the speed you hit the ground with)"};
+cvar_t cl_bobfallcycle = {CVAR_SAVE, "cl_bobfallcycle","3", "speed of the bobfall swing"};
+cvar_t cl_bobfallminspeed = {CVAR_SAVE, "cl_bobfallminspeed","200", "necessary amount of speed for bob-falling to occur"};
 cvar_t cl_bobmodel = {CVAR_SAVE, "cl_bobmodel", "1", "enables gun bobbing"};
 cvar_t cl_bobmodel_side = {CVAR_SAVE, "cl_bobmodel_side", "0.15", "gun bobbing sideways sway amount"};
 cvar_t cl_bobmodel_up = {CVAR_SAVE, "cl_bobmodel_up", "0.06", "gun bobbing upward movement amount"};
 cvar_t cl_bobmodel_speed = {CVAR_SAVE, "cl_bobmodel_speed", "7", "gun bobbing speed"};
+
+cvar_t cl_leanmodel = {CVAR_SAVE, "cl_leanmodel", "0", "enables gun leaning"};
+cvar_t cl_leanmodel_side_speed = {CVAR_SAVE, "cl_leanmodel_side_speed", "0.7", "gun leaning sideways speed"};
+cvar_t cl_leanmodel_side_limit = {CVAR_SAVE, "cl_leanmodel_side_limit", "35", "gun leaning sideways limit"};
+cvar_t cl_leanmodel_side_highpass1 = {CVAR_SAVE, "cl_leanmodel_side_highpass1", "30", "gun leaning sideways pre-highpass in 1/s"};
+cvar_t cl_leanmodel_side_highpass = {CVAR_SAVE, "cl_leanmodel_side_highpass", "3", "gun leaning sideways highpass in 1/s"};
+cvar_t cl_leanmodel_side_lowpass = {CVAR_SAVE, "cl_leanmodel_side_lowpass", "20", "gun leaning sideways lowpass in 1/s"};
+cvar_t cl_leanmodel_up_speed = {CVAR_SAVE, "cl_leanmodel_up_speed", "0.65", "gun leaning upward speed"};
+cvar_t cl_leanmodel_up_limit = {CVAR_SAVE, "cl_leanmodel_up_limit", "50", "gun leaning upward limit"};
+cvar_t cl_leanmodel_up_highpass1 = {CVAR_SAVE, "cl_leanmodel_up_highpass1", "5", "gun leaning upward pre-highpass in 1/s"};
+cvar_t cl_leanmodel_up_highpass = {CVAR_SAVE, "cl_leanmodel_up_highpass", "15", "gun leaning upward highpass in 1/s"};
+cvar_t cl_leanmodel_up_lowpass = {CVAR_SAVE, "cl_leanmodel_up_lowpass", "20", "gun leaning upward lowpass in 1/s"};
+
+cvar_t cl_followmodel = {CVAR_SAVE, "cl_followmodel", "0", "enables gun following"};
+cvar_t cl_followmodel_side_speed = {CVAR_SAVE, "cl_followmodel_side_speed", "0.25", "gun following sideways speed"};
+cvar_t cl_followmodel_side_limit = {CVAR_SAVE, "cl_followmodel_side_limit", "6", "gun following sideways limit"};
+cvar_t cl_followmodel_side_highpass1 = {CVAR_SAVE, "cl_followmodel_side_highpass1", "30", "gun following sideways pre-highpass in 1/s"};
+cvar_t cl_followmodel_side_highpass = {CVAR_SAVE, "cl_followmodel_side_highpass", "5", "gun following sideways highpass in 1/s"};
+cvar_t cl_followmodel_side_lowpass = {CVAR_SAVE, "cl_followmodel_side_lowpass", "10", "gun following sideways lowpass in 1/s"};
+cvar_t cl_followmodel_up_speed = {CVAR_SAVE, "cl_followmodel_up_speed", "0.5", "gun following upward speed"};
+cvar_t cl_followmodel_up_limit = {CVAR_SAVE, "cl_followmodel_up_limit", "5", "gun following upward limit"};
+cvar_t cl_followmodel_up_highpass1 = {CVAR_SAVE, "cl_followmodel_up_highpass1", "60", "gun following upward pre-highpass in 1/s"};
+cvar_t cl_followmodel_up_highpass = {CVAR_SAVE, "cl_followmodel_up_highpass", "2", "gun following upward highpass in 1/s"};
+cvar_t cl_followmodel_up_lowpass = {CVAR_SAVE, "cl_followmodel_up_lowpass", "10", "gun following upward lowpass in 1/s"};
 
 cvar_t cl_viewmodel_scale = {0, "cl_viewmodel_scale", "1", "changes size of gun model, lower values prevent poking into walls but cause strange artifacts on lighting and especially r_stereo/vid_stereobuffer options where the size of the gun becomes visible"};
 
@@ -353,10 +382,55 @@ V_CalcRefdef
 static vec3_t eyeboxmins = {-16, -16, -24};
 static vec3_t eyeboxmaxs = { 16,  16,  32};
 #endif
+
+static vec_t lowpass(vec_t value, vec_t frac, vec_t *store)
+{
+	frac = bound(0, frac, 1);
+	return (*store = *store * (1 - frac) + value * frac);
+}
+
+static vec_t lowpass_limited(vec_t value, vec_t frac, vec_t limit, vec_t *store)
+{
+	lowpass(value, frac, store);
+	return (*store = bound(value - limit, *store, value + limit));
+}
+
+static vec_t highpass(vec_t value, vec_t frac, vec_t *store)
+{
+	return value - lowpass(value, frac, store);
+}
+
+static vec_t highpass_limited(vec_t value, vec_t frac, vec_t limit, vec_t *store)
+{
+	return value - lowpass_limited(value, frac, limit, store);
+}
+
+static void lowpass3(vec3_t value, vec_t fracx, vec_t fracy, vec_t fracz, vec3_t store, vec3_t out)
+{
+	out[0] = lowpass(value[0], fracx, &store[0]);
+	out[1] = lowpass(value[1], fracy, &store[1]);
+	out[2] = lowpass(value[2], fracz, &store[2]);
+}
+
+static void highpass3(vec3_t value, vec_t fracx, vec_t fracy, vec_t fracz, vec3_t store, vec3_t out)
+{
+	out[0] = highpass(value[0], fracx, &store[0]);
+	out[1] = highpass(value[1], fracy, &store[1]);
+	out[2] = highpass(value[2], fracz, &store[2]);
+}
+
+static void highpass3_limited(vec3_t value, vec_t fracx, vec_t limitx, vec_t fracy, vec_t limity, vec_t fracz, vec_t limitz, vec3_t store, vec3_t out)
+{
+	out[0] = highpass_limited(value[0], fracx, limitx, &store[0]);
+	out[1] = highpass_limited(value[1], fracy, limity, &store[1]);
+	out[2] = highpass_limited(value[2], fracz, limitz, &store[2]);
+}
+
 void V_CalcRefdef (void)
 {
 	entity_t *ent;
-	float vieworg[3], gunorg[3], viewangles[3], smoothtime;
+	float vieworg[3], viewangles[3], smoothtime;
+	float gunorg[3], gunangles[3];
 #if 0
 // begin of chase camera bounding box size for proper collisions by Alexander Zubov
 	vec3_t camboxmins = {-3, -3, -3};
@@ -399,14 +473,14 @@ void V_CalcRefdef (void)
 		else
 		{
 			// smooth stair stepping, but only if onground and enabled
-			if (!cl.onground || cl_stairsmoothspeed.value <= 0)
+			if (!cl.onground || cl_stairsmoothspeed.value <= 0 || !ent->persistent.trail_allowed) // FIXME use a better way to detect teleport/warp
 				cl.stairsmoothz = vieworg[2];
 			else
 			{
 				if (cl.stairsmoothz < vieworg[2])
-					vieworg[2] = cl.stairsmoothz = bound(vieworg[2] - 16, cl.stairsmoothz + smoothtime * cl_stairsmoothspeed.value, vieworg[2]);
+					vieworg[2] = cl.stairsmoothz = bound(vieworg[2] - cl.movevars_stepheight, cl.stairsmoothz + smoothtime * cl_stairsmoothspeed.value, vieworg[2]);
 				else if (cl.stairsmoothz > vieworg[2])
-					vieworg[2] = cl.stairsmoothz = bound(vieworg[2], cl.stairsmoothz - smoothtime * cl_stairsmoothspeed.value, vieworg[2] + 16);
+					vieworg[2] = cl.stairsmoothz = bound(vieworg[2], cl.stairsmoothz - smoothtime * cl_stairsmoothspeed.value, vieworg[2] + cl.movevars_stepheight);
 			}
 
 			// apply qw weapon recoil effect (this did not work in QW)
@@ -507,7 +581,7 @@ void V_CalcRefdef (void)
 				if (cl.stats[STAT_HEALTH] <= 0 && v_deathtilt.integer)
 					viewangles[ROLL] = v_deathtiltangle.value;
 				VectorAdd(viewangles, cl.punchangle, viewangles);
-				viewangles[ROLL] += V_CalcRoll(cl.viewangles, cl.movement_velocity);
+				viewangles[ROLL] += V_CalcRoll(cl.viewangles, cl.velocity);
 				if (v_dmg_time > 0)
 				{
 					viewangles[ROLL] += v_dmg_time/v_kicktime.value*v_dmg_roll;
@@ -517,12 +591,63 @@ void V_CalcRefdef (void)
 				VectorAdd(vieworg, cl.punchvector, vieworg);
 				if (cl.stats[STAT_HEALTH] > 0)
 				{
-					double xyspeed, bob;
+					double xyspeed, bob, bobfall;
+					float cycle;
+					vec_t frametime;
 
-					xyspeed = sqrt(cl.movement_velocity[0]*cl.movement_velocity[0] + cl.movement_velocity[1]*cl.movement_velocity[1]);
+					frametime = cl.realframetime * cl.movevars_timescale;
+
+					// 1. if we teleported, clear the frametime... the lowpass will recover the previous value then
+					if(!ent->persistent.trail_allowed) // FIXME improve this check
+					{
+						// try to fix the first highpass; result is NOT
+						// perfect! TODO find a better fix
+						VectorCopy(viewangles, cl.gunangles_prev);
+						VectorCopy(vieworg, cl.gunorg_prev);
+					}
+
+					// 2. for the gun origin, only keep the high frequency (non-DC) parts, which is "somewhat like velocity"
+					VectorAdd(cl.gunorg_highpass, cl.gunorg_prev, cl.gunorg_highpass);
+					highpass3_limited(vieworg, frametime*cl_followmodel_side_highpass1.value, cl_followmodel_side_limit.value, frametime*cl_followmodel_side_highpass1.value, cl_followmodel_side_limit.value, frametime*cl_followmodel_up_highpass1.value, cl_followmodel_up_limit.value, cl.gunorg_highpass, gunorg);
+					VectorCopy(vieworg, cl.gunorg_prev);
+					VectorSubtract(cl.gunorg_highpass, cl.gunorg_prev, cl.gunorg_highpass);
+
+					// in the highpass, we _store_ the DIFFERENCE to the actual view angles...
+					VectorAdd(cl.gunangles_highpass, cl.gunangles_prev, cl.gunangles_highpass);
+					cl.gunangles_highpass[PITCH] += 360 * floor((viewangles[PITCH] - cl.gunangles_highpass[PITCH]) / 360 + 0.5);
+					cl.gunangles_highpass[YAW] += 360 * floor((viewangles[YAW] - cl.gunangles_highpass[YAW]) / 360 + 0.5);
+					cl.gunangles_highpass[ROLL] += 360 * floor((viewangles[ROLL] - cl.gunangles_highpass[ROLL]) / 360 + 0.5);
+					highpass3_limited(viewangles, frametime*cl_leanmodel_up_highpass1.value, cl_leanmodel_up_limit.value, frametime*cl_leanmodel_side_highpass1.value, cl_leanmodel_side_limit.value, 0, 0, cl.gunangles_highpass, gunangles);
+					VectorCopy(viewangles, cl.gunangles_prev);
+					VectorSubtract(cl.gunangles_highpass, cl.gunangles_prev, cl.gunangles_highpass);
+
+					// 3. calculate the RAW adjustment vectors
+					gunorg[0] *= (cl_followmodel.value ? -cl_followmodel_side_speed.value : 0);
+					gunorg[1] *= (cl_followmodel.value ? -cl_followmodel_side_speed.value : 0);
+					gunorg[2] *= (cl_followmodel.value ? -cl_followmodel_up_speed.value : 0);
+
+					gunangles[PITCH] *= (cl_leanmodel.value ? -cl_leanmodel_up_speed.value : 0);
+					gunangles[YAW] *= (cl_leanmodel.value ? -cl_leanmodel_side_speed.value : 0);
+					gunangles[ROLL] = 0;
+
+					// 4. perform highpass/lowpass on the adjustment vectors (turning velocity into acceleration!)
+					//    trick: we must do the lowpass LAST, so the lowpass vector IS the final vector!
+					highpass3(gunorg, frametime*cl_followmodel_side_highpass.value, frametime*cl_followmodel_side_highpass.value, frametime*cl_followmodel_up_highpass.value, cl.gunorg_adjustment_highpass, gunorg);
+					lowpass3(gunorg, frametime*cl_followmodel_side_lowpass.value, frametime*cl_followmodel_side_lowpass.value, frametime*cl_followmodel_up_lowpass.value, cl.gunorg_adjustment_lowpass, gunorg);
+					// we assume here: PITCH = 0, YAW = 1, ROLL = 2
+					highpass3(gunangles, frametime*cl_leanmodel_up_highpass.value, frametime*cl_leanmodel_side_highpass.value, 0, cl.gunangles_adjustment_highpass, gunangles);
+					lowpass3(gunangles, frametime*cl_leanmodel_up_lowpass.value, frametime*cl_leanmodel_side_lowpass.value, 0, cl.gunangles_adjustment_lowpass, gunangles);
+
+					// 5. use the adjusted vectors
+					VectorAdd(vieworg, gunorg, gunorg);
+					VectorAdd(viewangles, gunangles, gunangles);
+
+					// bounded XY speed, used by several effects below
+					xyspeed = bound (0, sqrt(cl.velocity[0]*cl.velocity[0] + cl.velocity[1]*cl.velocity[1]), 400);
+
+					// vertical view bobbing code
 					if (cl_bob.value && cl_bobcycle.value)
 					{
-						float cycle;
 						// LordHavoc: this code is *weird*, but not replacable (I think it
 						// should be done in QC on the server, but oh well, quake is quake)
 						// LordHavoc: figured out bobup: the time at which the sin is at 180
@@ -535,14 +660,90 @@ void V_CalcRefdef (void)
 							cycle = sin(M_PI + M_PI * (cycle-cl_bobup.value)/(1.0 - cl_bobup.value));
 						// bob is proportional to velocity in the xy plane
 						// (don't count Z, or jumping messes it up)
-						bob = xyspeed * cl_bob.value;
+						bob = xyspeed * bound(0, cl_bob.value, 0.05);
 						bob = bob*0.3 + bob*0.7*cycle;
-						vieworg[2] += bound(-7, bob, 4);
+						vieworg[2] += bob;
+						// we also need to adjust gunorg, or this appears like pushing the gun!
+						// In the old code, this was applied to vieworg BEFORE copying to gunorg,
+						// but this is not viable with the new followmodel code as that would mean
+						// that followmodel would work on the munged-by-bob vieworg and do feedback
+						gunorg[2] += bob;
 					}
 
-					VectorCopy(vieworg, gunorg);
+					// horizontal view bobbing code
+					if (cl_bob2.value && cl_bob2cycle.value)
+					{
+						vec3_t bob2vel;
+						vec3_t forward, right, up;
+						float side, front;
 
-					if (cl_bob.value && cl_bobmodel.value)
+						cycle = cl.time / cl_bob2cycle.value;
+						cycle -= (int) cycle;
+						if (cycle < 0.5)
+							cycle = cos(M_PI * cycle / 0.5); // cos looks better here with the other view bobbing using sin
+						else
+							cycle = cos(M_PI + M_PI * (cycle-0.5)/0.5);
+						bob = bound(0, cl_bob2.value, 0.05) * cycle;
+
+						// this value slowly decreases from 1 to 0 when we stop touching the ground.
+						// The cycle is later multiplied with it so the view smooths back to normal
+						if (cl.onground && !cl.cmd.jump) // also block the effect while the jump button is pressed, to avoid twitches when bunny-hopping
+							cl.bob2_smooth = 1;
+						else
+						{
+							if(cl.bob2_smooth > 0)
+								cl.bob2_smooth -= bound(0, cl_bob2smooth.value, 1);
+							else
+								cl.bob2_smooth = 0;
+						}
+
+						// calculate the front and side of the player between the X and Y axes
+						AngleVectors(viewangles, forward, right, up);
+						// now get the speed based on those angles. The bounds should match the same value as xyspeed's
+						side = bound(-400, DotProduct (cl.velocity, right) * cl.bob2_smooth, 400);
+						front = bound(-400, DotProduct (cl.velocity, forward) * cl.bob2_smooth, 400);
+						VectorScale(forward, bob, forward);
+						VectorScale(right, bob, right);
+						// we use side with forward and front with right, so the bobbing goes
+						// to the side when we walk forward and to the front when we strafe
+						VectorMAMAM(side, forward, front, right, 0, up, bob2vel);
+						vieworg[0] += bob2vel[0];
+						vieworg[1] += bob2vel[1];
+						// we also need to adjust gunorg, or this appears like pushing the gun!
+						// In the old code, this was applied to vieworg BEFORE copying to gunorg,
+						// but this is not viable with the new followmodel code as that would mean
+						// that followmodel would work on the munged-by-bob vieworg and do feedback
+						gunorg[0] += bob2vel[0];
+						gunorg[1] += bob2vel[1];
+					}
+
+					// fall bobbing code
+					// causes the view to swing down and back up when touching the ground
+					if (cl_bobfall.value && cl_bobfallcycle.value)
+					{
+						if (!cl.onground)
+						{
+							cl.bobfall_speed = bound(-400, cl.velocity[2], 0) * bound(0, cl_bobfall.value, 0.1);
+							if (cl.velocity[2] < -cl_bobfallminspeed.value)
+								cl.bobfall_swing = 1;
+							else
+								cl.bobfall_swing = 0;
+						}
+						else
+						{
+							if(cl.bobfall_swing > 0)
+								cl.bobfall_swing -= bound(0, cl_bobfallcycle.value * frametime, 1);
+							else
+								cl.bobfall_swing = 0;
+
+							bobfall = sin(M_PI * cl.bobfall_swing) * cl.bobfall_speed;
+							vieworg[2] += bobfall;
+							gunorg[2] += bobfall;
+						}
+					}
+
+					// gun model bobbing code
+					if (cl_bobmodel.value)
 					{
 						// calculate for swinging gun model
 						// the gun bobs when running on the ground, but doesn't bob when you're in the air.
@@ -575,8 +776,8 @@ void V_CalcRefdef (void)
 							t *= 5;
 						}
 
-						bspeed = bound (0, xyspeed, 400) * 0.01f;
-						AngleVectors (viewangles, forward, right, up);
+						bspeed = xyspeed * 0.01f;
+						AngleVectors (gunangles, forward, right, up);
 						bob = bspeed * cl_bobmodel_side.value * cl_viewmodel_scale.value * sin (s) * t;
 						VectorMA (gunorg, bob, right, gunorg);
 						bob = bspeed * cl_bobmodel_up.value * cl_viewmodel_scale.value * cos (s * 2) * t;
@@ -590,7 +791,7 @@ void V_CalcRefdef (void)
 			else
 				Matrix4x4_CreateFromQuakeEntity(&r_refdef.view.matrix, vieworg[0], vieworg[1], vieworg[2], viewangles[0], viewangles[1], viewangles[2] + v_idlescale.value * sin(cl.time*v_iroll_cycle.value) * v_iroll_level.value, 1);
 			// calculate a viewmodel matrix for use in view-attached entities
-			Matrix4x4_CreateFromQuakeEntity(&viewmodelmatrix, gunorg[0], gunorg[1], gunorg[2], viewangles[0], viewangles[1], viewangles[2], cl_viewmodel_scale.value);
+			Matrix4x4_CreateFromQuakeEntity(&viewmodelmatrix, gunorg[0], gunorg[1], gunorg[2], gunangles[0], gunangles[1], gunangles[2], cl_viewmodel_scale.value);
 			VectorCopy(vieworg, cl.csqc_origin);
 			VectorCopy(viewangles, cl.csqc_angles);
 		}
@@ -775,10 +976,40 @@ void V_Init (void)
 	Cvar_RegisterVariable (&cl_bob);
 	Cvar_RegisterVariable (&cl_bobcycle);
 	Cvar_RegisterVariable (&cl_bobup);
+	Cvar_RegisterVariable (&cl_bob2);
+	Cvar_RegisterVariable (&cl_bob2cycle);
+	Cvar_RegisterVariable (&cl_bob2smooth);
+	Cvar_RegisterVariable (&cl_bobfall);
+	Cvar_RegisterVariable (&cl_bobfallcycle);
+	Cvar_RegisterVariable (&cl_bobfallminspeed);
 	Cvar_RegisterVariable (&cl_bobmodel);
 	Cvar_RegisterVariable (&cl_bobmodel_side);
 	Cvar_RegisterVariable (&cl_bobmodel_up);
 	Cvar_RegisterVariable (&cl_bobmodel_speed);
+
+	Cvar_RegisterVariable (&cl_leanmodel);
+	Cvar_RegisterVariable (&cl_leanmodel_side_speed);
+	Cvar_RegisterVariable (&cl_leanmodel_side_limit);
+	Cvar_RegisterVariable (&cl_leanmodel_side_highpass1);
+	Cvar_RegisterVariable (&cl_leanmodel_side_lowpass);
+	Cvar_RegisterVariable (&cl_leanmodel_side_highpass);
+	Cvar_RegisterVariable (&cl_leanmodel_up_speed);
+	Cvar_RegisterVariable (&cl_leanmodel_up_limit);
+	Cvar_RegisterVariable (&cl_leanmodel_up_highpass1);
+	Cvar_RegisterVariable (&cl_leanmodel_up_lowpass);
+	Cvar_RegisterVariable (&cl_leanmodel_up_highpass);
+
+	Cvar_RegisterVariable (&cl_followmodel);
+	Cvar_RegisterVariable (&cl_followmodel_side_speed);
+	Cvar_RegisterVariable (&cl_followmodel_side_limit);
+	Cvar_RegisterVariable (&cl_followmodel_side_highpass1);
+	Cvar_RegisterVariable (&cl_followmodel_side_lowpass);
+	Cvar_RegisterVariable (&cl_followmodel_side_highpass);
+	Cvar_RegisterVariable (&cl_followmodel_up_speed);
+	Cvar_RegisterVariable (&cl_followmodel_up_limit);
+	Cvar_RegisterVariable (&cl_followmodel_up_highpass1);
+	Cvar_RegisterVariable (&cl_followmodel_up_lowpass);
+	Cvar_RegisterVariable (&cl_followmodel_up_highpass);
 
 	Cvar_RegisterVariable (&cl_viewmodel_scale);
 

@@ -638,17 +638,10 @@ void CL_Input (void)
 	}
 
 	// if not in menu, apply mouse move to viewangles/movement
-	if (!key_consoleactive && key_dest == key_game && !cl.csqc_wantsmousemove)
+	if (!key_consoleactive && key_dest == key_game && !cl.csqc_wantsmousemove && cl_prydoncursor.integer <= 0)
 	{
 		float modulatedsensitivity = sensitivity.value * cl.sensitivityscale;
-		if (cl_prydoncursor.integer > 0)
-		{
-			// mouse interacting with the scene, mostly stationary view
-			V_StopPitchDrift();
-			cl.cmd.cursor_screen[0] += in_mouse_x * modulatedsensitivity / vid.width;
-			cl.cmd.cursor_screen[1] += in_mouse_y * modulatedsensitivity / vid.height;
-		}
-		else if (in_strafe.state & 1)
+		if (in_strafe.state & 1)
 		{
 			// strafing mode, all looking is movement
 			V_StopPitchDrift();
@@ -676,7 +669,13 @@ void CL_Input (void)
 		}
 	}
 	else // don't pitch drift when csqc is controlling the mouse
+	{
+		// mouse interacting with the scene, mostly stationary view
 		V_StopPitchDrift();
+		// update prydon cursor
+		cl.cmd.cursor_screen[0] = in_windowmouse_x * 2.0 / vid.width - 1.0;
+		cl.cmd.cursor_screen[1] = in_windowmouse_y * 2.0 / vid.height - 1.0;
+	}
 
 	if(v_flipped.integer)
 	{
@@ -1091,7 +1090,7 @@ void CL_ClientMovement_Physics_Swim(cl_clientmovement_state_t *s)
 				s->velocity[2] =  80;
 			else
 			{
-				if (gamemode == GAME_NEXUIZ)
+				if (gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 					s->velocity[2] = 200;
 				else
 					s->velocity[2] = 100;
@@ -1113,6 +1112,25 @@ static vec_t CL_IsMoveInDirection(vec_t forward, vec_t side, vec_t angle)
 	if(angle < -1)
 		return 0;
 	return 1 - fabs(angle);
+}
+
+static vec_t CL_GeomLerp(vec_t a, vec_t lerp, vec_t b)
+{
+	if(a == 0)
+	{
+		if(lerp < 1)
+			return 0;
+		else
+			return b;
+	}
+	if(b == 0)
+	{
+		if(lerp > 0)
+			return 0;
+		else
+			return a;
+	}
+	return a * pow(fabs(b / a), lerp);
 }
 
 void CL_ClientMovement_Physics_CPM_PM_Aircontrol(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed)
@@ -1137,9 +1155,11 @@ void CL_ClientMovement_Physics_CPM_PM_Aircontrol(cl_clientmovement_state_t *s, v
 	speed = VectorNormalizeLength(s->velocity);
 
 	dot = DotProduct(s->velocity, wishdir);
-	k *= cl.movevars_aircontrol*dot*dot*s->cmd.frametime;
 
 	if(dot > 0) { // we can't change direction while slowing down
+		k *= pow(dot, cl.movevars_aircontrol_power)*s->cmd.frametime;
+		speed = max(0, speed - cl.movevars_aircontrol_penalty * sqrt(max(0, 1 - dot*dot)) * k/32);
+		k *= cl.movevars_aircontrol;
 		VectorMAM(speed, s->velocity, k, wishdir, s->velocity);
 		VectorNormalize(s->velocity);
 	}
@@ -1148,7 +1168,15 @@ void CL_ClientMovement_Physics_CPM_PM_Aircontrol(cl_clientmovement_state_t *s, v
 	s->velocity[2] = zspeed;
 }
 
-void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed, vec_t wishspeed0, vec_t accel, vec_t accelqw, vec_t sidefric)
+float CL_ClientMovement_Physics_AdjustAirAccelQW(float accelqw, float factor)
+{
+	return
+		(accelqw < 0 ? -1 : +1)
+		*
+		bound(0.000001, 1 - (1 - fabs(accelqw)) * factor, 1);
+}
+
+void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed, vec_t wishspeed0, vec_t accel, vec_t accelqw, vec_t sidefric, vec_t speedlimit)
 {
 	vec_t vel_straight;
 	vec_t vel_z;
@@ -1174,6 +1202,8 @@ void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_
 	step = accel * s->cmd.frametime * wishspeed0;
 
 	vel_xy_current  = VectorLength(vel_xy);
+	if(speedlimit > 0)
+		accelqw = CL_ClientMovement_Physics_AdjustAirAccelQW(accelqw, (speedlimit - bound(wishspeed, vel_xy_current, speedlimit)) / max(1, speedlimit - wishspeed));
 	vel_xy_forward  = vel_xy_current + bound(0, wishspeed - vel_xy_current, step) * accelqw + step * (1 - accelqw);
 	vel_xy_backward = vel_xy_current - bound(0, wishspeed + vel_xy_current, step) * accelqw - step * (1 - accelqw);
 	if(vel_xy_backward < 0)
@@ -1369,7 +1399,7 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 		if (s->waterjumptime <= 0)
 		{
 			// apply air speed limit
-			vec_t accel, wishspeed0, wishspeed2, accelqw;
+			vec_t accel, wishspeed0, wishspeed2, accelqw, strafity;
 			qboolean accelerating;
 
 			accelqw = cl.movevars_airaccel_qw;
@@ -1384,39 +1414,30 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 
 			// CPM: air control
 			if(cl.movevars_airstopaccelerate != 0)
-				if(DotProduct(s->velocity, wishdir) < 0)
-					accel = cl.movevars_airstopaccelerate;
-			// this doesn't play well with analog input, but can't really be
-			// fixed like the AirControl can. So, don't set the maxairstrafe*
-			// cvars when you want to support analog input.
-			if(s->cmd.forwardmove == 0 && s->cmd.sidemove != 0)
 			{
-				if(cl.movevars_maxairstrafespeed)
-				{
-					if(wishspeed > cl.movevars_maxairstrafespeed)
-						wishspeed = cl.movevars_maxairstrafespeed;
-					if(cl.movevars_maxairstrafespeed < cl.movevars_maxairspeed)
-						accelqw = 1;
-						// otherwise, CPMA-style air acceleration misbehaves a lot
-						// if partially non-QW acceleration is used (as in, strafing
-						// would get faster than moving forward straight)
-				}
-				if(cl.movevars_airstrafeaccelerate)
-				{
-					accel = cl.movevars_airstrafeaccelerate;
-					if(cl.movevars_airstrafeaccelerate > cl.movevars_airaccelerate)
-						accelqw = 1;
-						// otherwise, CPMA-style air acceleration misbehaves a lot
-						// if partially non-QW acceleration is used (as in, strafing
-						// would get faster than moving forward straight)
-				}
+				vec3_t curdir;
+				curdir[0] = s->velocity[0];
+				curdir[1] = s->velocity[1];
+				curdir[2] = 0;
+				VectorNormalize(curdir);
+				accel = accel + (cl.movevars_airstopaccelerate - accel) * max(0, -DotProduct(curdir, wishdir));
 			}
+			strafity = CL_IsMoveInDirection(s->cmd.forwardmove, s->cmd.sidemove, -90) + CL_IsMoveInDirection(s->cmd.forwardmove, s->cmd.sidemove, +90); // if one is nonzero, other is always zero
+			if(cl.movevars_maxairstrafespeed)
+				wishspeed = min(wishspeed, CL_GeomLerp(cl.movevars_maxairspeed, strafity, cl.movevars_maxairstrafespeed));
+			if(cl.movevars_airstrafeaccelerate)
+				accel = CL_GeomLerp(cl.movevars_airaccelerate, strafity, cl.movevars_airstrafeaccelerate);
+			if(cl.movevars_airstrafeaccel_qw)
+				accelqw =
+					(((strafity > 0.5 ? cl.movevars_airstrafeaccel_qw : cl.movevars_airaccel_qw) >= 0) ? +1 : -1)
+					*
+					(1 - CL_GeomLerp(1 - fabs(cl.movevars_airaccel_qw), strafity, 1 - fabs(cl.movevars_airstrafeaccel_qw)));
 			// !CPM
 
 			if(cl.movevars_warsowbunny_turnaccel && accelerating && s->cmd.sidemove == 0 && s->cmd.forwardmove != 0)
 				CL_ClientMovement_Physics_PM_AirAccelerate(s, wishdir, wishspeed2);
 			else
-				CL_ClientMovement_Physics_PM_Accelerate(s, wishdir, wishspeed, wishspeed0, accel, accelqw, cl.movevars_airaccel_sideways_friction / cl.movevars_maxairspeed);
+				CL_ClientMovement_Physics_PM_Accelerate(s, wishdir, wishspeed, wishspeed0, accel, accelqw, cl.movevars_airaccel_sideways_friction / cl.movevars_maxairspeed, cl.movevars_airspeedlimit_nonqw);
 
 			if(cl.movevars_aircontrol)
 				CL_ClientMovement_Physics_CPM_PM_Aircontrol(s, wishdir, wishspeed2);
@@ -1477,12 +1498,16 @@ void CL_UpdateMoveVars(void)
 		cl.movevars_airstopaccelerate = cl.statsf[STAT_MOVEVARS_AIRSTOPACCELERATE];
 		cl.movevars_airstrafeaccelerate = cl.statsf[STAT_MOVEVARS_AIRSTRAFEACCELERATE];
 		cl.movevars_maxairstrafespeed = cl.statsf[STAT_MOVEVARS_MAXAIRSTRAFESPEED];
+		cl.movevars_airstrafeaccel_qw = cl.statsf[STAT_MOVEVARS_AIRSTRAFEACCEL_QW];
 		cl.movevars_aircontrol = cl.statsf[STAT_MOVEVARS_AIRCONTROL];
+		cl.movevars_aircontrol_power = cl.statsf[STAT_MOVEVARS_AIRCONTROL_POWER];
+		cl.movevars_aircontrol_penalty = cl.statsf[STAT_MOVEVARS_AIRCONTROL_PENALTY];
 		cl.movevars_warsowbunny_airforwardaccel = cl.statsf[STAT_MOVEVARS_WARSOWBUNNY_AIRFORWARDACCEL];
 		cl.movevars_warsowbunny_accel = cl.statsf[STAT_MOVEVARS_WARSOWBUNNY_ACCEL];
 		cl.movevars_warsowbunny_topspeed = cl.statsf[STAT_MOVEVARS_WARSOWBUNNY_TOPSPEED];
 		cl.movevars_warsowbunny_turnaccel = cl.statsf[STAT_MOVEVARS_WARSOWBUNNY_TURNACCEL];
 		cl.movevars_warsowbunny_backtosideratio = cl.statsf[STAT_MOVEVARS_WARSOWBUNNY_BACKTOSIDERATIO];
+		cl.movevars_airspeedlimit_nonqw = cl.statsf[STAT_MOVEVARS_AIRSPEEDLIMIT_NONQW];
 	}
 	else
 	{
@@ -1509,12 +1534,16 @@ void CL_UpdateMoveVars(void)
 		cl.movevars_airstopaccelerate = 0;
 		cl.movevars_airstrafeaccelerate = 0;
 		cl.movevars_maxairstrafespeed = 0;
+		cl.movevars_airstrafeaccel_qw = 0;
 		cl.movevars_aircontrol = 0;
+		cl.movevars_aircontrol_power = 2;
+		cl.movevars_aircontrol_penalty = 0;
 		cl.movevars_warsowbunny_airforwardaccel = 0;
 		cl.movevars_warsowbunny_accel = 0;
 		cl.movevars_warsowbunny_topspeed = 0;
 		cl.movevars_warsowbunny_turnaccel = 0;
 		cl.movevars_warsowbunny_backtosideratio = 0;
+		cl.movevars_airspeedlimit_nonqw = 0;
 	}
 
 	if(!(cl.moveflags & MOVEFLAG_VALID))
@@ -1522,6 +1551,9 @@ void CL_UpdateMoveVars(void)
 		if(gamemode == GAME_NEXUIZ)
 			cl.moveflags = MOVEFLAG_Q2AIRACCELERATE;
 	}
+
+	if(cl.movevars_aircontrol_power <= 0)
+		cl.movevars_aircontrol_power = 2; // CPMA default
 }
 
 void CL_ClientMovement_Replay(void)
@@ -2001,10 +2033,13 @@ void CL_SendMove(void)
 	if (in_button16.state  & 3) bits |= 262144;
 	// button bits 19-31 unused currently
 	// rotate/zoom view serverside if PRYDON_CLIENTCURSOR cursor is at edge of screen
-	if (cl.cmd.cursor_screen[0] <= -1) bits |= 8;
-	if (cl.cmd.cursor_screen[0] >=  1) bits |= 16;
-	if (cl.cmd.cursor_screen[1] <= -1) bits |= 32;
-	if (cl.cmd.cursor_screen[1] >=  1) bits |= 64;
+	if(cl_prydoncursor.integer > 0)
+	{
+		if (cl.cmd.cursor_screen[0] <= -1) bits |= 8;
+		if (cl.cmd.cursor_screen[0] >=  1) bits |= 16;
+		if (cl.cmd.cursor_screen[1] <= -1) bits |= 32;
+		if (cl.cmd.cursor_screen[1] >=  1) bits |= 64;
+	}
 
 	// set buttons and impulse
 	cl.cmd.buttons = bits;
@@ -2046,7 +2081,7 @@ void CL_SendMove(void)
 		break;
 	case PROTOCOL_DARKPLACES6:
 	case PROTOCOL_DARKPLACES7:
-		// FIXME: cl.cmd.buttons & 16 is +button5, Nexuiz specific
+		// FIXME: cl.cmd.buttons & 16 is +button5, Nexuiz/Xonotic specific
 		cl.cmd.crouch = (cl.cmd.buttons & 16) != 0;
 		break;
 	case PROTOCOL_UNKNOWN:

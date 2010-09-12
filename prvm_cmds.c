@@ -188,7 +188,7 @@ void VM_UpdateEdictSkeleton(prvm_edict_t *ed, const dp_model_t *edmodel, const f
 		ed->priv.server->skeleton.model = edmodel;
 	}
 	if (!ed->priv.server->skeleton.relativetransforms && ed->priv.server->skeleton.model && ed->priv.server->skeleton.model->num_bones)
-		ed->priv.server->skeleton.relativetransforms = Mem_Alloc(prog->progs_mempool, ed->priv.server->skeleton.model->num_bones * sizeof(matrix4x4_t));
+		ed->priv.server->skeleton.relativetransforms = (matrix4x4_t *)Mem_Alloc(prog->progs_mempool, ed->priv.server->skeleton.model->num_bones * sizeof(matrix4x4_t));
 	if (ed->priv.server->skeleton.relativetransforms)
 	{
 		int skeletonindex = -1;
@@ -269,7 +269,7 @@ checkextension(extensionname)
 static qboolean checkextension(const char *name)
 {
 	int len;
-	char *e, *start;
+	const char *e, *start;
 	len = (int)strlen(name);
 
 	for (e = prog->extensionstring;*e;e++)
@@ -973,12 +973,12 @@ void VM_remove (void)
 	ed = PRVM_G_EDICT(OFS_PARM0);
 	if( PRVM_NUM_FOR_EDICT(ed) <= prog->reserved_edicts )
 	{
-		if (developer.integer)
+		if (developer.integer > 0)
 			VM_Warning( "VM_remove: tried to remove the null entity or a reserved entity!\n" );
 	}
 	else if( ed->priv.required->free )
 	{
-		if (developer.integer)
+		if (developer.integer > 0)
 			VM_Warning( "VM_remove: tried to remove an already freed entity!\n" );
 	}
 	else
@@ -3234,7 +3234,7 @@ void VM_precache_pic(void)
 	VM_CheckEmptyString (s);
 
 	// AK Draw_CachePic is supposed to always return a valid pointer
-	if( Draw_CachePic_Flags(s, CACHEPICFLAG_NOTPERSISTENT)->tex == r_texture_notexture )
+	if( Draw_CachePic_Flags(s, 0)->tex == r_texture_notexture )
 		PRVM_G_INT(OFS_RETURN) = OFS_NULL;
 }
 
@@ -3277,9 +3277,9 @@ dp_font_t *getdrawfont(void)
 	if(prog->globaloffsets.drawfont >= 0)
 	{
 		int f = (int) PRVM_G_FLOAT(prog->globaloffsets.drawfont);
-		if(f < 0 || f >= MAX_FONTS)
+		if(f < 0 || f >= dp_fonts.maxsize)
 			return FONT_DEFAULT;
-		return &dp_fonts[f];
+		return &dp_fonts.f[f];
 	}
 	else
 		return FONT_DEFAULT;
@@ -3478,8 +3478,176 @@ void VM_stringwidth(void)
 
 	PRVM_G_FLOAT(OFS_RETURN) = DrawQ_TextWidth(string, 0, !colors, getdrawfont()) * mult; // 1x1 characters, don't actually draw
 */
-
 }
+
+/*
+=========
+VM_findfont
+
+float findfont(string s)
+=========
+*/
+
+float getdrawfontnum(const char *fontname)
+{
+	int i;
+
+	for(i = 0; i < dp_fonts.maxsize; ++i)
+		if(!strcmp(dp_fonts.f[i].title, fontname))
+			return i;
+	return -1;
+}
+
+void VM_findfont(void)
+{
+	VM_SAFEPARMCOUNT(1,VM_findfont);
+	PRVM_G_FLOAT(OFS_RETURN) = getdrawfontnum(PRVM_G_STRING(OFS_PARM0));
+}
+
+/*
+=========
+VM_loadfont
+
+float loadfont(string fontname, string fontmaps, string sizes, float slot)
+=========
+*/
+
+dp_font_t *FindFont(const char *title, qboolean allocate_new);
+void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, float voffset);
+void VM_loadfont(void)
+{
+	const char *fontname, *filelist, *sizes, *c, *cm;
+	char mainfont[MAX_QPATH];
+	int i, numsizes;
+	float sz, scale, voffset;
+	dp_font_t *f;
+
+	VM_SAFEPARMCOUNTRANGE(3,6,VM_loadfont);
+
+	fontname = PRVM_G_STRING(OFS_PARM0);
+	if (!fontname[0])
+		fontname = "default";
+
+	filelist = PRVM_G_STRING(OFS_PARM1);
+	if (!filelist[0])
+		filelist = "gfx/conchars";
+
+	sizes = PRVM_G_STRING(OFS_PARM2);
+	if (!sizes[0])
+		sizes = "10";
+
+	// find a font
+	f = NULL;
+	if (prog->argc >= 4)
+	{
+		i = PRVM_G_FLOAT(OFS_PARM3);
+		if (i >= 0 && i < dp_fonts.maxsize)
+		{
+			f = &dp_fonts.f[i];
+			strlcpy(f->title, fontname, sizeof(f->title)); // replace name
+		}
+	}
+	if (!f)
+		f = FindFont(fontname, true);
+	if (!f)
+	{
+		PRVM_G_FLOAT(OFS_RETURN) = -1;
+		return; // something go wrong
+	}
+
+	memset(f->fallbacks, 0, sizeof(f->fallbacks));
+	memset(f->fallback_faces, 0, sizeof(f->fallback_faces));
+
+	// first font is handled "normally"
+	c = strchr(filelist, ':');
+	cm = strchr(filelist, ',');
+	if(c && (!cm || c < cm))
+		f->req_face = atoi(c+1);
+	else
+	{
+		f->req_face = 0;
+		c = cm;
+	}
+	if(!c || (c - filelist) > MAX_QPATH)
+		strlcpy(mainfont, filelist, sizeof(mainfont));
+	else
+	{
+		memcpy(mainfont, filelist, c - filelist);
+		mainfont[c - filelist] = 0;
+	}
+
+	// handle fallbacks
+	for(i = 0; i < MAX_FONT_FALLBACKS; ++i)
+	{
+		c = strchr(filelist, ',');
+		if(!c)
+			break;
+		filelist = c + 1;
+		if(!*filelist)
+			break;
+		c = strchr(filelist, ':');
+		cm = strchr(filelist, ',');
+		if(c && (!cm || c < cm))
+			f->fallback_faces[i] = atoi(c+1);
+		else
+		{
+			f->fallback_faces[i] = 0; // f->req_face; could make it stick to the default-font's face index
+			c = cm;
+		}
+		if(!c || (c-filelist) > MAX_QPATH)
+		{
+			strlcpy(f->fallbacks[i], filelist, sizeof(mainfont));
+		}
+		else
+		{
+			memcpy(f->fallbacks[i], filelist, c - filelist);
+			f->fallbacks[i][c - filelist] = 0;
+		}
+	}
+
+	// handle sizes
+	for(i = 0; i < MAX_FONT_SIZES; ++i)
+		f->req_sizes[i] = -1;
+	for (numsizes = 0,c = sizes;;)
+	{
+		if (!COM_ParseToken_VM_Tokenize(&c, 0))
+			break;
+		sz = atof(com_token);
+		// detect crap size
+		if (sz < 0.001f || sz > 1000.0f)
+		{
+			VM_Warning("VM_loadfont: crap size %s", com_token);
+			continue;
+		}
+		// check overflow
+		if (numsizes == MAX_FONT_SIZES)
+		{
+			VM_Warning("VM_loadfont: MAX_FONT_SIZES = %i exceeded", MAX_FONT_SIZES);
+			break;
+		}
+		f->req_sizes[numsizes] = sz;
+		numsizes++;
+	}
+
+	// additional scale/hoffset parms
+	scale = 1;
+	voffset = 0;
+	if (prog->argc >= 5)
+	{
+		scale = PRVM_G_FLOAT(OFS_PARM4);
+		if (scale <= 0)
+			scale = 1;
+	}
+	if (prog->argc >= 6)
+		voffset = PRVM_G_FLOAT(OFS_PARM5);
+
+	// load
+	LoadFont(true, mainfont, f, scale, voffset);
+
+	// return index of loaded font
+	PRVM_G_FLOAT(OFS_RETURN) = (f - dp_fonts.f);
+}
+
 /*
 =========
 VM_drawpic
@@ -3521,7 +3689,7 @@ void VM_drawpic(void)
 	if(pos[2] || size[2])
 		Con_Printf("VM_drawpic: z value%s from %s discarded\n",(pos[2] && size[2]) ? "s" : " ",((pos[2] && size[2]) ? "pos and size" : (pos[2] ? "pos" : "size")));
 
-	DrawQ_Pic(pos[0], pos[1], Draw_CachePic (picname), size[0], size[1], rgb[0], rgb[1], rgb[2], PRVM_G_FLOAT(OFS_PARM4), flag);
+	DrawQ_Pic(pos[0], pos[1], Draw_CachePic_Flags (picname, CACHEPICFLAG_NOTPERSISTENT), size[0], size[1], rgb[0], rgb[1], rgb[2], PRVM_G_FLOAT(OFS_PARM4), flag);
 	PRVM_G_FLOAT(OFS_RETURN) = 1;
 }
 /*
@@ -3566,7 +3734,7 @@ void VM_drawrotpic(void)
 	if(pos[2] || size[2] || org[2])
 		Con_Printf("VM_drawrotpic: z value from pos/size/org discarded\n");
 
-	DrawQ_RotPic(pos[0], pos[1], Draw_CachePic(picname), size[0], size[1], org[0], org[1], PRVM_G_FLOAT(OFS_PARM4), rgb[0], rgb[1], rgb[2], PRVM_G_FLOAT(OFS_PARM6), flag);
+	DrawQ_RotPic(pos[0], pos[1], Draw_CachePic_Flags(picname, CACHEPICFLAG_NOTPERSISTENT), size[0], size[1], org[0], org[1], PRVM_G_FLOAT(OFS_PARM4), rgb[0], rgb[1], rgb[2], PRVM_G_FLOAT(OFS_PARM6), flag);
 	PRVM_G_FLOAT(OFS_RETURN) = 1;
 }
 /*
@@ -3614,7 +3782,7 @@ void VM_drawsubpic(void)
 	if(pos[2] || size[2])
 		Con_Printf("VM_drawsubpic: z value%s from %s discarded\n",(pos[2] && size[2]) ? "s" : " ",((pos[2] && size[2]) ? "pos and size" : (pos[2] ? "pos" : "size")));
 
-	DrawQ_SuperPic(pos[0], pos[1], Draw_CachePic (picname),
+	DrawQ_SuperPic(pos[0], pos[1], Draw_CachePic_Flags (picname, CACHEPICFLAG_NOTPERSISTENT),
 		size[0], size[1],
 		srcPos[0],              srcPos[1],              rgb[0], rgb[1], rgb[2], alpha,
 		srcPos[0] + srcSize[0], srcPos[1],              rgb[0], rgb[1], rgb[2], alpha,
@@ -3734,31 +3902,35 @@ void VM_keynumtostring (void)
 =========
 VM_findkeysforcommand
 
-string	findkeysforcommand(string command)
+string	findkeysforcommand(string command, float bindmap)
 
 the returned string is an altstring
 =========
 */
-#define NUMKEYS 5 // TODO: merge the constant in keys.c with this one somewhen
-
+#define FKFC_NUMKEYS 5
 void M_FindKeysForCommand(const char *command, int *keys);
 void VM_findkeysforcommand(void)
 {
 	const char *cmd;
 	char ret[VM_STRINGTEMP_LENGTH];
-	int keys[NUMKEYS];
+	int keys[FKFC_NUMKEYS];
 	int i;
+	int bindmap;
 
-	VM_SAFEPARMCOUNT(1, VM_findkeysforcommand);
+	VM_SAFEPARMCOUNTRANGE(1, 2, VM_findkeysforcommand);
 
 	cmd = PRVM_G_STRING(OFS_PARM0);
+	if(prog->argc == 2)
+		bindmap = bound(-1, PRVM_G_FLOAT(OFS_PARM1), MAX_BINDMAPS-1);
+	else
+		bindmap = 0; // consistent to "bind"
 
 	VM_CheckEmptyString(cmd);
 
-	M_FindKeysForCommand(cmd, keys);
+	Key_FindKeysForCommand(cmd, keys, FKFC_NUMKEYS, bindmap);
 
 	ret[0] = 0;
-	for(i = 0; i < NUMKEYS; i++)
+	for(i = 0; i < FKFC_NUMKEYS; i++)
 		strlcat(ret, va(" \'%i\'", keys[i]), sizeof(ret));
 
 	PRVM_G_INT(OFS_RETURN) = PRVM_SetTempString(ret);
@@ -3775,7 +3947,80 @@ void VM_stringtokeynum (void)
 {
 	VM_SAFEPARMCOUNT( 1, VM_keynumtostring );
 
-	PRVM_G_INT(OFS_RETURN) = Key_StringToKeynum(PRVM_G_STRING(OFS_PARM0));
+	PRVM_G_FLOAT(OFS_RETURN) = Key_StringToKeynum(PRVM_G_STRING(OFS_PARM0));
+}
+
+/*
+=========
+VM_getkeybind
+
+string getkeybind(float key, float bindmap)
+=========
+*/
+void VM_getkeybind (void)
+{
+	int bindmap;
+	VM_SAFEPARMCOUNTRANGE(1, 2, VM_CL_getkeybind);
+	if(prog->argc == 2)
+		bindmap = bound(-1, PRVM_G_FLOAT(OFS_PARM1), MAX_BINDMAPS-1);
+	else
+		bindmap = 0; // consistent to "bind"
+
+	PRVM_G_INT(OFS_RETURN) = PRVM_SetTempString(Key_GetBind((int)PRVM_G_FLOAT(OFS_PARM0), bindmap));
+}
+
+/*
+=========
+VM_setkeybind
+
+float setkeybind(float key, string cmd, float bindmap)
+=========
+*/
+void VM_setkeybind (void)
+{
+	int bindmap;
+	VM_SAFEPARMCOUNTRANGE(2, 3, VM_CL_setkeybind);
+	if(prog->argc == 3)
+		bindmap = bound(-1, PRVM_G_FLOAT(OFS_PARM2), MAX_BINDMAPS-1);
+	else
+		bindmap = 0; // consistent to "bind"
+
+	PRVM_G_FLOAT(OFS_RETURN) = 0;
+	if(Key_SetBinding((int)PRVM_G_FLOAT(OFS_PARM0), bindmap, PRVM_G_STRING(OFS_PARM1)))
+		PRVM_G_FLOAT(OFS_RETURN) = 1;
+}
+
+/*
+=========
+VM_getbindmap
+
+vector getbindmaps()
+=========
+*/
+void VM_getbindmaps (void)
+{
+	int fg, bg;
+	VM_SAFEPARMCOUNT(0, VM_CL_getbindmap);
+	Key_GetBindMap(&fg, &bg);
+	PRVM_G_VECTOR(OFS_RETURN)[0] = fg;
+	PRVM_G_VECTOR(OFS_RETURN)[1] = bg;
+	PRVM_G_VECTOR(OFS_RETURN)[2] = 0;
+}
+
+/*
+=========
+VM_setbindmap
+
+float setbindmaps(vector bindmap)
+=========
+*/
+void VM_setbindmaps (void)
+{
+	VM_SAFEPARMCOUNT(1, VM_CL_setbindmap);
+	PRVM_G_FLOAT(OFS_RETURN) = 0;
+	if(PRVM_G_VECTOR(OFS_PARM0)[2] == 0)
+		if(Key_SetBindMap((int)PRVM_G_VECTOR(OFS_PARM0)[0], (int)PRVM_G_VECTOR(OFS_PARM0)[1]))
+			PRVM_G_FLOAT(OFS_RETURN) = 1;
 }
 
 // CL_Video interface functions
@@ -3800,7 +4045,7 @@ void VM_cin_open( void )
 	VM_CheckEmptyString( file );
     VM_CheckEmptyString( name );
 
-	if( CL_OpenVideo( file, name, MENUOWNER ) )
+	if( CL_OpenVideo( file, name, MENUOWNER, "" ) )
 		PRVM_G_FLOAT( OFS_RETURN ) = 1;
 	else
 		PRVM_G_FLOAT( OFS_RETURN ) = 0;
@@ -4463,8 +4708,8 @@ static int BufStr_SortStringsUP (const void *in1, const void *in2)
 	const char *a, *b;
 	a = *((const char **) in1);
 	b = *((const char **) in2);
-	if(!a[0])	return 1;
-	if(!b[0])	return -1;
+	if(!a || !a[0])	return 1;
+	if(!b || !b[0])	return -1;
 	return strncmp(a, b, stringbuffers_sortlength);
 }
 
@@ -4473,8 +4718,8 @@ static int BufStr_SortStringsDOWN (const void *in1, const void *in2)
 	const char *a, *b;
 	a = *((const char **) in1);
 	b = *((const char **) in2);
-	if(!a[0])	return 1;
-	if(!b[0])	return -1;
+	if(!a || !a[0])	return 1;
+	if(!b || !b[0])	return -1;
 	return strncmp(b, a, stringbuffers_sortlength);
 }
 
@@ -4734,6 +4979,7 @@ void bufstr_set(float bufhandle, float string_index, string str) = #466;
 */
 void VM_bufstr_set (void)
 {
+	size_t alloclen;
 	int				strindex;
 	prvm_stringbuffer_t *stringbuffer;
 	const char		*news;
@@ -4760,10 +5006,11 @@ void VM_bufstr_set (void)
 		Mem_Free(stringbuffer->strings[strindex]);
 	stringbuffer->strings[strindex] = NULL;
 
-	news = PRVM_G_STRING(OFS_PARM2);
-	if (news && news[0])
+	if(PRVM_G_INT(OFS_PARM2))
 	{
-		size_t alloclen = strlen(news) + 1;
+		// not the NULL string!
+		news = PRVM_G_STRING(OFS_PARM2);
+		alloclen = strlen(news) + 1;
 		stringbuffer->strings[strindex] = (char *)Mem_Alloc(prog->progs_mempool, alloclen);
 		memcpy(stringbuffer->strings[strindex], news, alloclen);
 	}
@@ -4795,12 +5042,12 @@ void VM_bufstr_add (void)
 		VM_Warning("VM_bufstr_add: invalid buffer %i used in %s\n", (int)PRVM_G_FLOAT(OFS_PARM0), PRVM_NAME);
 		return;
 	}
-	string = PRVM_G_STRING(OFS_PARM1);
-	if(!string || !string[0])
+	if(!PRVM_G_INT(OFS_PARM1)) // NULL string
 	{
 		VM_Warning("VM_bufstr_add: can not add an empty string to buffer %i in %s\n", (int)PRVM_G_FLOAT(OFS_PARM0), PRVM_NAME);
 		return;
 	}
+	string = PRVM_G_STRING(OFS_PARM1);
 	order = (int)PRVM_G_FLOAT(OFS_PARM2);
 	if(order)
 		strindex = stringbuffer->num_strings;
@@ -5682,6 +5929,26 @@ void VM_SV_getextresponse (void)
 
 /*
 =========
+Common functions between menu.dat and clsprogs
+=========
+*/
+
+//#349 float() isdemo 
+void VM_CL_isdemo (void)
+{
+	VM_SAFEPARMCOUNT(0, VM_CL_isdemo);
+	PRVM_G_FLOAT(OFS_RETURN) = cls.demoplayback;
+}
+
+//#355 float() videoplaying 
+void VM_CL_videoplaying (void)
+{
+	VM_SAFEPARMCOUNT(0, VM_CL_videoplaying);
+	PRVM_G_FLOAT(OFS_RETURN) = cl_videoplaying;
+}
+
+/*
+=========
 VM_M_callfunction
 
 	callfunction(...,string function_name)
@@ -5766,7 +6033,7 @@ void VM_sprintf(void)
 	int width, precision, thisarg, flags;
 	char formatbuf[16];
 	char *f;
-	qboolean isfloat;
+	int isfloat;
 	static int dummyivec[3] = {0, 0, 0};
 	static float dummyvec[3] = {0, 0, 0};
 
@@ -5806,6 +6073,7 @@ void VM_sprintf(void)
 				precision = -1;
 				thisarg = -1;
 				flags = 0;
+				isfloat = -1;
 
 				// is number following?
 				if(*s >= '0' && *s <= '9')
@@ -5928,14 +6196,13 @@ noflags:
 					}
 				}
 
-				isfloat = true;
 				for(;;)
 				{
 					switch(*s)
 					{
-						case 'h': isfloat = true; break;
-						case 'l': isfloat = false; break;
-						case 'L': isfloat = false; break;
+						case 'h': isfloat = 1; break;
+						case 'l': isfloat = 0; break;
+						case 'L': isfloat = 0; break;
 						case 'j': break;
 						case 'z': break;
 						case 't': break;
@@ -5945,6 +6212,15 @@ noflags:
 					++s;
 				}
 nolength:
+
+				// now s points to the final directive char and is no longer changed
+				if(isfloat < 0)
+				{
+					if(*s == 'i')
+						isfloat = 0;
+					else
+						isfloat = 1;
+				}
 
 				if(thisarg < 0)
 					thisarg = argpos++;
@@ -6090,13 +6366,13 @@ void animatemodel(dp_model_t *model, prvm_edict_t *ed)
 	need |= (animatemodel_cache.model != model);
 	VM_GenerateFrameGroupBlend(ed->priv.server->framegroupblend, ed);
 	VM_FrameBlendFromFrameGroupBlend(ed->priv.server->frameblend, ed->priv.server->framegroupblend, model);
-	need |= (memcmp(&animatemodel_cache.frameblend, &ed->priv.server->frameblend, sizeof(ed->priv.server->frameblend)));
+	need |= (memcmp(&animatemodel_cache.frameblend, &ed->priv.server->frameblend, sizeof(ed->priv.server->frameblend))) != 0;
 	if ((val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.skeletonindex))) skeletonindex = (int)val->_float - 1;
 	if (!(skeletonindex >= 0 && skeletonindex < MAX_EDICTS && (skeleton = prog->skeletons[skeletonindex]) && skeleton->model->num_bones == ed->priv.server->skeleton.model->num_bones))
 		skeleton = NULL;
 	need |= (animatemodel_cache.skeleton_p != skeleton);
 	if(skeleton)
-		need |= (memcmp(&animatemodel_cache.skeleton, skeleton, sizeof(ed->priv.server->skeleton)));
+		need |= (memcmp(&animatemodel_cache.skeleton, skeleton, sizeof(ed->priv.server->skeleton))) != 0;
 	if(!need)
 		return;
 	if(model->surfmesh.num_vertices > animatemodel_cache.max_vertices)
@@ -6106,10 +6382,10 @@ void animatemodel(dp_model_t *model, prvm_edict_t *ed)
 		if(animatemodel_cache.buf_svector3f) Mem_Free(animatemodel_cache.buf_svector3f);
 		if(animatemodel_cache.buf_tvector3f) Mem_Free(animatemodel_cache.buf_tvector3f);
 		if(animatemodel_cache.buf_normal3f) Mem_Free(animatemodel_cache.buf_normal3f);
-		animatemodel_cache.buf_vertex3f = Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
-		animatemodel_cache.buf_svector3f = Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
-		animatemodel_cache.buf_tvector3f = Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
-		animatemodel_cache.buf_normal3f = Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
+		animatemodel_cache.buf_vertex3f = (float *)Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
+		animatemodel_cache.buf_svector3f = (float *)Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
+		animatemodel_cache.buf_tvector3f = (float *)Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
+		animatemodel_cache.buf_normal3f = (float *)Mem_Alloc(prog->progs_mempool, sizeof(float[3]) * animatemodel_cache.max_vertices);
 	}
 	animatemodel_cache.data_vertex3f = animatemodel_cache.buf_vertex3f;
 	animatemodel_cache.data_svector3f = animatemodel_cache.buf_svector3f;
@@ -6159,7 +6435,7 @@ static void applytransform_inverted(const vec3_t in, prvm_edict_t *ed, vec3_t ou
 {
 	matrix4x4_t m, n;
 	getmatrix(ed, &m);
-	Matrix4x4_Invert_Full(&m, &n);
+	Matrix4x4_Invert_Full(&n, &m);
 	Matrix4x4_Transform3x3(&n, in, out);
 }
 

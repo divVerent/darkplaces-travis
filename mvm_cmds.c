@@ -9,9 +9,13 @@
 //============================================================================
 // Menu
 
-char *vm_m_extensions =
+const char *vm_m_extensions =
 "BX_WAL_SUPPORT "
 "DP_CINEMATIC_DPV "
+"DP_CSQC_BINDMAPS "
+"DP_GFX_FONTS "
+"DP_GFX_FONTS_FREETYPE "
+"DP_UTF8 "
 "DP_FONT_VARIABLEWIDTH "
 "DP_GECKO_SUPPORT "
 "DP_MENU_EXTRESPONSEPACKET "
@@ -746,13 +750,6 @@ static void VM_M_getmousepos(void)
 		VectorSet(PRVM_G_VECTOR(OFS_RETURN), in_mouse_x * vid_conwidth.integer / vid.width, in_mouse_y * vid_conheight.integer / vid.height, 0);
 }
 
-//#349 float() isdemo (EXT_CSQC)
-static void VM_M_isdemo (void)
-{
-	VM_SAFEPARMCOUNT(0, VM_M_isdemo);
-	PRVM_G_FLOAT(OFS_RETURN) = cls.demoplayback;
-}
-
 prvm_builtin_t vm_m_builtins[] = {
 NULL,									//   #0 NULL function (not callable)
 VM_checkextension,				//   #1
@@ -1121,24 +1118,24 @@ NULL,									// #336
 NULL,									// #337
 NULL,									// #338
 NULL,									// #339
-NULL,									// #340
-NULL,									// #341
-NULL,									// #342
+VM_keynumtostring,				// #340 string keynumtostring(float keynum)
+VM_stringtokeynum,				// #341 float stringtokeynum(string key)
+VM_getkeybind,							// #342 string(float keynum[, float bindmap]) getkeybind (EXT_CSQC)
 NULL,									// #343
 NULL,									// #344
 NULL,									// #345
 NULL,									// #346
 NULL,									// #347
 NULL,									// #348
-VM_M_isdemo,								// #349
+VM_CL_isdemo,							// #349
 NULL,									// #350
 NULL,									// #351
 NULL,									// #352
 NULL,									// #353
 NULL,									// #354
-NULL,									// #355
-NULL,									// #356
-NULL,									// #357
+VM_CL_videoplaying,						// #355
+VM_findfont,							// #356 float(string fontname) loadfont (DP_GFX_FONTS)
+VM_loadfont,							// #357 float(string fontname, string fontmaps, string sizes, float slot) loadfont (DP_GFX_FONTS)
 NULL,									// #358
 NULL,									// #359
 NULL,									// #360
@@ -1391,7 +1388,7 @@ VM_writetofile,					// #606 void writetofile(float fhandle, entity ent)
 VM_isfunction,					// #607 float isfunction(string function_name)
 VM_M_getresolution,				// #608 vector getresolution(float number, [float forfullscreen])
 VM_keynumtostring,				// #609 string keynumtostring(float keynum)
-VM_findkeysforcommand,		// #610 string findkeysforcommand(string command)
+VM_findkeysforcommand,		// #610 string findkeysforcommand(string command[, float bindmap])
 VM_M_getserverliststat,			// #611 float gethostcachevalue(float type)
 VM_M_getserverliststring,		// #612 string gethostcachestring(float type, float hostnr)
 VM_parseentitydata,				// #613 void parseentitydata(entity ent, string data)
@@ -1409,6 +1406,11 @@ VM_CL_getextresponse,			// #624 string getextresponse(void)
 VM_netaddress_resolve,          // #625 string netaddress_resolve(string, float)
 VM_M_getgamedirinfo,            // #626 string getgamedirinfo(float n, float prop)
 VM_sprintf,                     // #627 string sprintf(string format, ...)
+NULL, // #628
+NULL, // #629
+VM_setkeybind,						// #630 float(float key, string bind[, float bindmap]) setkeybind
+VM_getbindmaps,						// #631 vector(void) getbindmap
+VM_setbindmaps,						// #632 float(vector bm) setbindmap
 NULL
 };
 

@@ -34,6 +34,9 @@ typedef enum renderpath_e
 	RENDERPATH_GL13,
 	RENDERPATH_GL20,
 	RENDERPATH_CGGL,
+	RENDERPATH_D3D9,
+	RENDERPATH_D3D10,
+	RENDERPATH_D3D11
 }
 renderpath_t;
 
@@ -100,6 +103,7 @@ typedef struct viddef_s
 	void *cgcontext;
 
 	renderpath_t renderpath;
+	qboolean forcevbo; // some renderpaths can not operate without it
 
 	unsigned int texunits;
 	unsigned int teximageunits;
@@ -181,12 +185,13 @@ extern qboolean isG200;
 extern qboolean isRagePro;
 
 void *GL_GetProcAddress(const char *name);
-int GL_CheckExtension(const char *minglver_or_ext, const dllfunction_t *funcs, const char *disableparm, int silent);
+qboolean GL_CheckExtension(const char *minglver_or_ext, const dllfunction_t *funcs, const char *disableparm, int silent);
 
 void VID_Shared_Init(void);
 
 void GL_Init (void);
 
+void VID_ClearExtensions(void);
 void VID_CheckExtensions(void);
 
 void VID_Init (void);

@@ -9,7 +9,7 @@
 typedef enum biherror_e
 {
 	BIHERROR_OK, // no error, be happy
-	BIHERROR_OUT_OF_NODES, // could not produce complete hierarchy, maxnodes too low (should be roughly half of numleafs)
+	BIHERROR_OUT_OF_NODES // could not produce complete hierarchy, maxnodes too low (should be roughly half of numleafs)
 }
 biherror_t;
 
@@ -17,7 +17,7 @@ typedef enum bih_nodetype_e
 {
 	BIH_SPLITX = 0,
 	BIH_SPLITY = 1,
-	BIH_SPLITZ = 2,
+	BIH_SPLITZ = 2
 }
 bih_nodetype_t;
 
@@ -25,7 +25,7 @@ typedef enum bih_leaftype_e
 {
 	BIH_BRUSH = 3,
 	BIH_COLLISIONTRIANGLE = 4,
-	BIH_RENDERTRIANGLE = 5,
+	BIH_RENDERTRIANGLE = 5
 }
 bih_leaftype_t;
 
@@ -52,6 +52,7 @@ typedef struct bih_leaf_s
 	float maxs[3];
 	// data past this point is generic and entirely up to the caller...
 	int textureindex;
+	int surfaceindex;
 	int itemindex; // triangle or brush index
 }
 bih_leaf_t;
@@ -79,5 +80,7 @@ typedef struct bih_s
 bih_t;
 
 int BIH_Build(bih_t *bih, int numleafs, bih_leaf_t *leafs, int maxnodes, bih_node_t *nodes, int *temp_leafsort, int *temp_leafsortscratch);
+
+int BIH_GetTriangleListForBox(const bih_t *bih, int maxtriangles, int *trianglelist_idx, int *trianglelist_surf, const float *mins, const float *maxs);
 
 #endif

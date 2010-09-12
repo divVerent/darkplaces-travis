@@ -134,6 +134,8 @@ qboolean snd_threaded = false;
 qboolean snd_usethreadedmixing = false;
 
 vec3_t listener_origin;
+static unsigned char *listener_pvs = NULL;
+static int listener_pvsbytes = 0;
 matrix4x4_t listener_matrix[SND_LISTENERS];
 mempool_t *snd_mempool;
 
@@ -157,6 +159,7 @@ spatialmethod_t spatialmethod;
 
 // Cvars declared in sound.h (part of the sound API)
 cvar_t bgmvolume = {CVAR_SAVE, "bgmvolume", "1", "volume of background music (such as CD music or replacement files such as sound/cdtracks/track002.ogg)"};
+cvar_t mastervolume = {CVAR_SAVE, "mastervolume", "0.7", "master volume"};
 cvar_t volume = {CVAR_SAVE, "volume", "0.7", "volume of sound effects"};
 cvar_t snd_initialized = { CVAR_READONLY, "snd_initialized", "0", "indicates the sound subsystem is active"};
 cvar_t snd_staticvolume = {CVAR_SAVE, "snd_staticvolume", "1", "volume of ambient sound effects (such as swampy sounds at the start of e1m2)"};
@@ -167,7 +170,7 @@ cvar_t snd_spatialization_min = {CVAR_SAVE, "snd_spatialization_min", "0.70", "m
 cvar_t snd_spatialization_max = {CVAR_SAVE, "snd_spatialization_max", "0.95", "maximum spatialization of sounds"};
 cvar_t snd_spatialization_power = {CVAR_SAVE, "snd_spatialization_power", "0", "exponent of the spatialization falloff curve (0: logarithmic)"};
 cvar_t snd_spatialization_control = {CVAR_SAVE, "snd_spatialization_control", "0", "enable spatialization control (headphone friendly mode)"};
-cvar_t snd_spatialization_occlusion = {CVAR_SAVE, "snd_spatialization_occlusion", "1", "enable occlusion testing on spatialized sounds, which simply quiets sounds that are blocked by the world"};
+cvar_t snd_spatialization_occlusion = {CVAR_SAVE, "snd_spatialization_occlusion", "1", "enable occlusion testing on spatialized sounds, which simply quiets sounds that are blocked by the world; 1 enables PVS method, 2 enables LineOfSight method, 3 enables both"};
 
 // Cvars declared in snd_main.h (shared with other snd_*.c files)
 cvar_t _snd_mixahead = {CVAR_SAVE, "_snd_mixahead", "0.15", "how much sound to mix ahead of time"};
@@ -771,6 +774,7 @@ void S_Init(void)
 {
 	Cvar_RegisterVariable(&volume);
 	Cvar_RegisterVariable(&bgmvolume);
+	Cvar_RegisterVariable(&mastervolume);
 	Cvar_RegisterVariable(&snd_staticvolume);
 	Cvar_RegisterVariable(&snd_entchannel0volume);
 	Cvar_RegisterVariable(&snd_entchannel1volume);
@@ -1372,6 +1376,25 @@ void SND_Spatialize(channel_t *ch, qboolean isstatic)
 		intensity = mastervol * (1.0 - dist * ch->dist_mult);
 		if (intensity > 0)
 		{
+			qboolean occluded = false;
+			if (snd_spatialization_occlusion.integer)
+			{
+				if(snd_spatialization_occlusion.integer & 1)
+					if(listener_pvs)
+					{
+						int cluster = cl.worldmodel->brush.PointInLeaf(cl.worldmodel, ch->origin)->clusterindex;
+						if(cluster >= 0 && cluster < 8 * listener_pvsbytes && !CHECKPVSBIT(listener_pvs, cluster))
+							occluded = true;
+					}
+
+				if(snd_spatialization_occlusion.integer & 2)
+					if(!occluded)
+						if(cl.worldmodel && cl.worldmodel->brush.TraceLineOfSight && !cl.worldmodel->brush.TraceLineOfSight(cl.worldmodel, listener_origin, ch->origin))
+							occluded = true;
+			}
+			if(occluded)
+				intensity *= 0.5;
+
 			for (i = 0;i < SND_LISTENERS;i++)
 			{
 				Matrix4x4_Transform(&listener_matrix[i], ch->origin, source_vec);
@@ -1401,16 +1424,6 @@ void SND_Spatialize(channel_t *ch, qboolean isstatic)
 				}
 
 				vol = intensity * max(0, source_vec[0] * snd_speakerlayout.listeners[i].dotscale + snd_speakerlayout.listeners[i].dotbias);
-
-				if (snd_spatialization_occlusion.integer)
-				{
-					if (cl.worldmodel
-					&& cl.worldmodel->brush.TraceLineOfSight
-					&& !cl.worldmodel->brush.TraceLineOfSight(cl.worldmodel, listener_origin, ch->origin))
-					{
-						vol *= 0.5f;
-					}
-				}
 
 				ch->listener_volume[i] = (int)bound(0, vol, 255);
 			}
@@ -1676,7 +1689,8 @@ static void S_SetChannelVolume_WithSfx (unsigned int ch_ind, float fvol, sfx_t *
 void S_SetChannelVolume(unsigned int ch_ind, float fvol)
 {
 	sfx_t *sfx = channels[ch_ind].sfx;
-	S_SetChannelVolume_WithSfx(ch_ind, fvol, sfx);
+	if(sfx)
+		S_SetChannelVolume_WithSfx(ch_ind, fvol, sfx);
 }
 
 float S_GetChannelPosition (unsigned int ch_ind)
@@ -1996,6 +2010,26 @@ void S_Update(const matrix4x4_t *listenermatrix)
 
 	Matrix4x4_Invert_Simple(&basematrix, listenermatrix);
 	Matrix4x4_OriginFromMatrix(listenermatrix, listener_origin);
+	if (cl.worldmodel && cl.worldmodel->brush.FatPVS && cl.worldmodel->brush.num_pvsclusterbytes && cl.worldmodel->brush.PointInLeaf)
+	{
+		if(cl.worldmodel->brush.num_pvsclusterbytes != listener_pvsbytes)
+		{
+			if(listener_pvs)
+				Mem_Free(listener_pvs);
+			listener_pvsbytes = cl.worldmodel->brush.num_pvsclusterbytes;
+			listener_pvs = (unsigned char *) Mem_Alloc(snd_mempool, listener_pvsbytes);
+		}
+		cl.worldmodel->brush.FatPVS(cl.worldmodel, listener_origin, 2, listener_pvs, listener_pvsbytes, 0);
+	}
+	else
+	{
+		if(listener_pvs)
+		{
+			Mem_Free(listener_pvs);
+			listener_pvs = NULL;
+		}
+		listener_pvsbytes = 0;
+	}
 
 	// calculate the current matrices
 	for (j = 0;j < SND_LISTENERS;j++)

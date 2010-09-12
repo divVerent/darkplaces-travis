@@ -33,6 +33,11 @@ extern cvar_t net_connecttimeout;
 void VM_CustomStats_Clear (void);
 void VM_SV_UpdateCustomStats (client_t *client, prvm_edict_t *ent, sizebuf_t *msg, int *stats);
 
+cvar_t sv_worldmessage = {CVAR_READONLY, "sv_worldmessage", "", "title of current level"};
+cvar_t sv_worldname = {CVAR_READONLY, "sv_worldname", "", "name of current worldmodel"};
+cvar_t sv_worldnamenoextension = {CVAR_READONLY, "sv_worldnamenoextension", "", "name of current worldmodel without extension"};
+cvar_t sv_worldbasename = {CVAR_READONLY, "sv_worldbasename", "", "name of current worldmodel without maps/ prefix or extension"};
+
 cvar_t coop = {0, "coop","0", "coop mode, 0 = no coop, 1 = coop mode, multiple players playing through the singleplayer game (coop mode also shuts off deathmatch)"};
 cvar_t deathmatch = {0, "deathmatch","0", "deathmatch mode, values depend on mod but typically 0 = no deathmatch, 1 = normal deathmatch with respawning weapons, 2 = weapons stay (players can only pick up new weapons)"};
 cvar_t fraglimit = {CVAR_NOTIFY, "fraglimit","0", "ends level if this many frags is reached by any player"};
@@ -51,9 +56,13 @@ cvar_t sv_airaccel_qw = {0, "sv_airaccel_qw", "1", "ratio of QW-style air contro
 cvar_t sv_airaccel_sideways_friction = {0, "sv_airaccel_sideways_friction", "", "anti-sideways movement stabilization (reduces speed gain when zigzagging); when < 0, only so much friction is applied that braking (by accelerating backwards) cannot be stronger"};
 cvar_t sv_airaccelerate = {0, "sv_airaccelerate", "-1", "rate at which a player accelerates to sv_maxairspeed while in the air, if less than 0 the sv_accelerate variable is used instead"};
 cvar_t sv_airstopaccelerate = {0, "sv_airstopaccelerate", "0", "when set, replacement for sv_airaccelerate when moving backwards"};
+cvar_t sv_airspeedlimit_nonqw = {0, "sv_airspeedlimit_nonqw", "0", "when set, this is a soft speed limit while in air when using airaccel_qw not equal to 1"};
 cvar_t sv_airstrafeaccelerate = {0, "sv_airstrafeaccelerate", "0", "when set, replacement for sv_airaccelerate when just strafing"};
 cvar_t sv_maxairstrafespeed = {0, "sv_maxairstrafespeed", "0", "when set, replacement for sv_maxairspeed when just strafing"};
+cvar_t sv_airstrafeaccel_qw = {0, "sv_airstrafeaccel_qw", "0", "when set, replacement for sv_airaccel_qw when just strafing"};
 cvar_t sv_aircontrol = {0, "sv_aircontrol", "0", "CPMA-style air control"};
+cvar_t sv_aircontrol_power = {0, "sv_aircontrol_power", "2", "CPMA-style air control exponent"};
+cvar_t sv_aircontrol_penalty = {0, "sv_aircontrol_penalty", "0", "deceleration while using CPMA-style air control"};
 cvar_t sv_allowdownloads = {0, "sv_allowdownloads", "1", "whether to allow clients to download files from the server (does not affect http downloads)"};
 cvar_t sv_allowdownloads_archive = {0, "sv_allowdownloads_archive", "0", "whether to allow downloads of archives (pak/pk3)"};
 cvar_t sv_allowdownloads_config = {0, "sv_allowdownloads_config", "0", "whether to allow downloads of config files (cfg)"};
@@ -100,12 +109,12 @@ cvar_t sv_gameplayfix_noairborncorpse_allowsuspendeditems = {0, "sv_gameplayfix_
 cvar_t sv_gameplayfix_nudgeoutofsolid = {0, "sv_gameplayfix_nudgeoutofsolid", "1", "attempts to fix physics errors (where an object ended up in solid for some reason)"};
 cvar_t sv_gameplayfix_nudgeoutofsolid_bias = {0, "sv_gameplayfix_nudgeoutofsolid_bias", "0", "over-correction on nudgeoutofsolid logic, to prevent constant contact"};
 cvar_t sv_gameplayfix_q2airaccelerate = {0, "sv_gameplayfix_q2airaccelerate", "0", "Quake2-style air acceleration"};
-cvar_t sv_gameplayfix_nogravityonground = {0, "sv_gameplayfix_nogravityonground", "0", "Quake2-style air acceleration"};
+cvar_t sv_gameplayfix_nogravityonground = {0, "sv_gameplayfix_nogravityonground", "0", "turn off gravity when on ground (to get rid of sliding)"};
 cvar_t sv_gameplayfix_setmodelrealbox = {0, "sv_gameplayfix_setmodelrealbox", "1", "fixes a bug in Quake that made setmodel always set the entity box to ('-16 -16 -16', '16 16 16') rather than properly checking the model box, breaks some poorly coded mods"};
 cvar_t sv_gameplayfix_slidemoveprojectiles = {0, "sv_gameplayfix_slidemoveprojectiles", "1", "allows MOVETYPE_FLY/FLYMISSILE/TOSS/BOUNCE/BOUNCEMISSILE entities to finish their move in a frame even if they hit something, fixes 'gravity accumulation' bug for grenades on steep slopes"};
 cvar_t sv_gameplayfix_stepdown = {0, "sv_gameplayfix_stepdown", "0", "attempts to step down stairs, not just up them (prevents the familiar thud..thud..thud.. when running down stairs and slopes)"};
 cvar_t sv_gameplayfix_stepwhilejumping = {0, "sv_gameplayfix_stepwhilejumping", "1", "applies step-up onto a ledge even while airborn, useful if you would otherwise just-miss the floor when running across small areas with gaps (for instance running across the moving platforms in dm2, or jumping to the megahealth and red armor in dm2 rather than using the bridge)"};
-cvar_t sv_gameplayfix_stepmultipletimes = {0, "sv_gameplayfix_stepmultipletimes", "1", "applies step-up onto a ledge more than once in a single frame, when running quickly up stairs"};
+cvar_t sv_gameplayfix_stepmultipletimes = {0, "sv_gameplayfix_stepmultipletimes", "0", "applies step-up onto a ledge more than once in a single frame, when running quickly up stairs"};
 cvar_t sv_gameplayfix_swiminbmodels = {0, "sv_gameplayfix_swiminbmodels", "1", "causes pointcontents (used to determine if you are in a liquid) to check bmodel entities as well as the world model, so you can swim around in (possibly moving) water bmodel entities"};
 cvar_t sv_gameplayfix_upwardvelocityclearsongroundflag = {0, "sv_gameplayfix_upwardvelocityclearsongroundflag", "1", "prevents monsters, items, and most other objects from being stuck to the floor when pushed around by damage, and other situations in mods"};
 cvar_t sv_gameplayfix_downtracesupportsongroundflag = {0, "sv_gameplayfix_downtracesupportsongroundflag", "1", "prevents very short moves from clearing onground (which may make the player stick to the floor at high netfps)"};
@@ -175,6 +184,7 @@ cvar_t cutscene = {0, "cutscene", "1", "enables cutscenes in nehahra, can be use
 
 cvar_t sv_autodemo_perclient = {CVAR_SAVE, "sv_autodemo_perclient", "0", "set to 1 to enable autorecorded per-client demos (they'll start to record at the beginning of a match); set it to 2 to also record client->server packets (for debugging)"};
 cvar_t sv_autodemo_perclient_nameformat = {CVAR_SAVE, "sv_autodemo_perclient_nameformat", "sv_autodemos/%Y-%m-%d_%H-%M", "The format of the sv_autodemo_perclient filename, followed by the map name, the client number and the IP address + port number, separated by underscores (the date is encoded using strftime escapes)" };
+cvar_t sv_autodemo_perclient_discardable = {CVAR_SAVE, "sv_autodemo_perclient_discardable", "0", "Allow game code to decide whether a demo should be kept or discarded."};
 
 cvar_t halflifebsp = {0, "halflifebsp", "0", "indicates the current map is hlbsp format (useful to know because of different bounding box sizes)"};
 
@@ -338,6 +348,12 @@ void SV_Init (void)
 	extern cvar_t csqc_progname;	//[515]: csqc crc check and right csprogs name according to progs.dat
 	extern cvar_t csqc_progcrc;
 	extern cvar_t csqc_progsize;
+
+	Cvar_RegisterVariable(&sv_worldmessage);
+	Cvar_RegisterVariable(&sv_worldname);
+	Cvar_RegisterVariable(&sv_worldnamenoextension);
+	Cvar_RegisterVariable(&sv_worldbasename);
+
 	Cvar_RegisterVariable (&csqc_progname);
 	Cvar_RegisterVariable (&csqc_progcrc);
 	Cvar_RegisterVariable (&csqc_progsize);
@@ -366,7 +382,11 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_airstopaccelerate);
 	Cvar_RegisterVariable (&sv_airstrafeaccelerate);
 	Cvar_RegisterVariable (&sv_maxairstrafespeed);
+	Cvar_RegisterVariable (&sv_airstrafeaccel_qw);
+	Cvar_RegisterVariable (&sv_airspeedlimit_nonqw);
 	Cvar_RegisterVariable (&sv_aircontrol);
+	Cvar_RegisterVariable (&sv_aircontrol_power);
+	Cvar_RegisterVariable (&sv_aircontrol_penalty);
 	Cvar_RegisterVariable (&sv_allowdownloads);
 	Cvar_RegisterVariable (&sv_allowdownloads_archive);
 	Cvar_RegisterVariable (&sv_allowdownloads_config);
@@ -492,6 +512,7 @@ void SV_Init (void)
 
 	Cvar_RegisterVariable (&sv_autodemo_perclient);
 	Cvar_RegisterVariable (&sv_autodemo_perclient_nameformat);
+	Cvar_RegisterVariable (&sv_autodemo_perclient_discardable);
 
 	Cvar_RegisterVariable (&halflifebsp);
 
@@ -520,6 +541,7 @@ void SV_Init (void)
 	if (gamemode == GAME_NEXUIZ)
 	{
 		Cvar_SetValueQuick (&sv_gameplayfix_q2airaccelerate, 1);
+		Cvar_SetValueQuick (&sv_gameplayfix_stepmultipletimes, 1);
 	}
 
 	sv_mempool = Mem_AllocPool("server", 0, NULL);
@@ -527,14 +549,12 @@ void SV_Init (void)
 
 static void SV_SaveEntFile_f(void)
 {
-	char basename[MAX_QPATH];
 	if (!sv.active || !sv.worldmodel)
 	{
 		Con_Print("Not running a server\n");
 		return;
 	}
-	FS_StripExtension(sv.worldmodel->name, basename, sizeof(basename));
-	FS_WriteFile(va("%s.ent", basename), sv.worldmodel->brush.entities, (fs_offset_t)strlen(sv.worldmodel->brush.entities));
+	FS_WriteFile(va("%s.ent", sv.worldnamenoextension), sv.worldmodel->brush.entities, (fs_offset_t)strlen(sv.worldmodel->brush.entities));
 }
 
 
@@ -831,20 +851,15 @@ void SV_SendServerinfo (client_t *client)
 	if(sv_autodemo_perclient.integer && client->netconnection)
 	{
 		char demofile[MAX_OSPATH];
-		char levelname[MAX_QPATH];
 		char ipaddress[MAX_QPATH];
 		size_t i;
 
 		// start a new demo file
-		strlcpy(levelname, FS_FileWithoutPath(sv.worldmodel->name), sizeof(levelname));
-		if (strrchr(levelname, '.'))
-			*(strrchr(levelname, '.')) = 0;
-
 		LHNETADDRESS_ToString(&(client->netconnection->peeraddress), ipaddress, sizeof(ipaddress), true);
 		for(i = 0; ipaddress[i]; ++i)
 			if(!isalnum(ipaddress[i]))
 				ipaddress[i] = '-';
-		dpsnprintf (demofile, sizeof(demofile), "%s_%s_%d_%s.dem", Sys_TimeString (sv_autodemo_perclient_nameformat.string), levelname, PRVM_NUM_FOR_EDICT(client->edict), ipaddress);
+		dpsnprintf (demofile, sizeof(demofile), "%s_%s_%d_%s.dem", Sys_TimeString (sv_autodemo_perclient_nameformat.string), sv.worldbasename, PRVM_NUM_FOR_EDICT(client->edict), ipaddress);
 
 		SV_StartDemoRecording(client, demofile, -1);
 	}
@@ -964,14 +979,19 @@ void SV_ConnectClient (int clientnum, netconn_t *netconnection)
 {
 	client_t		*client;
 	int				i;
-	float			spawn_parms[NUM_SPAWN_PARMS];
 
 	client = svs.clients + clientnum;
 
 // set up the client_t
 	if (sv.loadgame)
-		memcpy (spawn_parms, client->spawn_parms, sizeof(spawn_parms));
-	memset (client, 0, sizeof(*client));
+	{
+		float backupparms[NUM_SPAWN_PARMS];
+		memcpy(backupparms, client->spawn_parms, sizeof(backupparms));
+		memset(client, 0, sizeof(*client));
+		memcpy(client->spawn_parms, backupparms, sizeof(backupparms));
+	}
+	else
+		memset(client, 0, sizeof(*client));
 	client->active = true;
 	client->netconnection = netconnection;
 
@@ -993,9 +1013,7 @@ void SV_ConnectClient (int clientnum, netconn_t *netconnection)
 		client->rate = 1000000000;
 	client->connecttime = realtime;
 
-	if (sv.loadgame)
-		memcpy (client->spawn_parms, spawn_parms, sizeof(spawn_parms));
-	else
+	if (!sv.loadgame)
 	{
 		// call the progs to get default spawn parms for the new client
 		// set self to world to intentionally cause errors with broken SetNewParms code in some mods
@@ -1591,9 +1609,9 @@ void SV_AddCameraEyes(void)
 {
 	int e, i, j, k;
 	prvm_edict_t *ed;
-	int cameras[MAX_LEVELNETWORKEYES];
-	vec3_t camera_origins[MAX_LEVELNETWORKEYES];
-	int eye_levels[MAX_CLIENTNETWORKEYES];
+	static int cameras[MAX_LEVELNETWORKEYES];
+	static vec3_t camera_origins[MAX_LEVELNETWORKEYES];
+	static int eye_levels[MAX_CLIENTNETWORKEYES];
 	int n_cameras = 0;
 	vec3_t mi, ma;
 	prvm_eval_t *valendpos, *val;
@@ -1958,12 +1976,16 @@ void SV_WriteClientdataToMessage (client_t *client, prvm_edict_t *ent, sizebuf_t
 	statsf[STAT_MOVEVARS_AIRSTOPACCELERATE] = sv_airstopaccelerate.value;
 	statsf[STAT_MOVEVARS_AIRSTRAFEACCELERATE] = sv_airstrafeaccelerate.value;
 	statsf[STAT_MOVEVARS_MAXAIRSTRAFESPEED] = sv_maxairstrafespeed.value;
+	statsf[STAT_MOVEVARS_AIRSTRAFEACCEL_QW] = sv_airstrafeaccel_qw.value;
 	statsf[STAT_MOVEVARS_AIRCONTROL] = sv_aircontrol.value;
+	statsf[STAT_MOVEVARS_AIRCONTROL_POWER] = sv_aircontrol_power.value;
+	statsf[STAT_MOVEVARS_AIRCONTROL_PENALTY] = sv_aircontrol_penalty.value;
 	statsf[STAT_MOVEVARS_WARSOWBUNNY_AIRFORWARDACCEL] = sv_warsowbunny_airforwardaccel.value;
 	statsf[STAT_MOVEVARS_WARSOWBUNNY_ACCEL] = sv_warsowbunny_accel.value;
 	statsf[STAT_MOVEVARS_WARSOWBUNNY_TOPSPEED] = sv_warsowbunny_topspeed.value;
 	statsf[STAT_MOVEVARS_WARSOWBUNNY_TURNACCEL] = sv_warsowbunny_turnaccel.value;
 	statsf[STAT_MOVEVARS_WARSOWBUNNY_BACKTOSIDERATIO] = sv_warsowbunny_backtosideratio.value;
+	statsf[STAT_MOVEVARS_AIRSPEEDLIMIT_NONQW] = sv_airspeedlimit_nonqw.value;
 	statsf[STAT_FRAGLIMIT] = fraglimit.value;
 	statsf[STAT_TIMELIMIT] = timelimit.value;
 
@@ -2373,7 +2395,7 @@ static void SV_UpdateToReliableMessages (void)
 
 		// frags
 		host_client->frags = (int)host_client->edict->fields.server->frags;
-		if(gamemode == GAME_NEXUIZ)
+		if(gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 			if(!host_client->spawned && host_client->netconnection)
 				host_client->frags = -666;
 		if (host_client->old_frags != host_client->frags)
@@ -2713,7 +2735,7 @@ int SV_ModelIndex(const char *s, int precachemode)
 				if (precachemode == 1)
 					Con_Printf("SV_ModelIndex(\"%s\"): not precached (fix your code), precaching anyway\n", filename);
 				strlcpy(sv.model_precache[i], filename, sizeof(sv.model_precache[i]));
-				sv.models[i] = Mod_ForName (sv.model_precache[i], true, false, s[0] == '*' ? sv.modelname : NULL);
+				sv.models[i] = Mod_ForName (sv.model_precache[i], true, false, s[0] == '*' ? sv.worldname : NULL);
 				if (sv.state != ss_loading)
 				{
 					MSG_WriteByte(&sv.reliable_datagram, svc_precache);
@@ -2808,7 +2830,7 @@ int SV_ParticleEffectIndex(const char *name)
 			if (filepass == 0)
 				dpsnprintf(filename, sizeof(filename), "effectinfo.txt");
 			else if (filepass == 1)
-				dpsnprintf(filename, sizeof(filename), "maps/%s_effectinfo.txt", sv.name);
+				dpsnprintf(filename, sizeof(filename), "%s_effectinfo.txt", sv.worldnamenoextension);
 			else
 				break;
 			filedata = FS_LoadFile(filename, tempmempool, true, &filesize);
@@ -3056,7 +3078,7 @@ void SV_SpawnServer (const char *server)
 	int i;
 	char *entities;
 	dp_model_t *worldmodel;
-	char modelname[sizeof(sv.modelname)];
+	char modelname[sizeof(sv.worldname)];
 
 	Con_DPrintf("SpawnServer: %s\n", server);
 
@@ -3064,8 +3086,12 @@ void SV_SpawnServer (const char *server)
 
 	if (!FS_FileExists(modelname))
 	{
-		Con_Printf("SpawnServer: no map file named %s\n", modelname);
-		return;
+		dpsnprintf (modelname, sizeof(modelname), "maps/%s", server);
+		if (!FS_FileExists(modelname))
+		{
+			Con_Printf("SpawnServer: no map file named maps/%s.bsp\n", server);
+			return;
+		}
 	}
 
 	if (cls.state != ca_dedicated)
@@ -3090,7 +3116,7 @@ void SV_SpawnServer (const char *server)
 	// free q3 shaders so that any newly downloaded shaders will be active
 	Mod_FreeQ3Shaders();
 
-	worldmodel = Mod_ForName(modelname, false, developer.integer != 0, NULL);
+	worldmodel = Mod_ForName(modelname, false, developer.integer > 0, NULL);
 	if (!worldmodel || !worldmodel->TraceBox)
 	{
 		Con_Printf("Couldn't load map %s\n", modelname);
@@ -3159,7 +3185,15 @@ void SV_SpawnServer (const char *server)
 
 	sv.active = true;
 
+	// set level base name variables for later use
 	strlcpy (sv.name, server, sizeof (sv.name));
+	strlcpy(sv.worldname, modelname, sizeof(sv.worldname));
+	FS_StripExtension(sv.worldname, sv.worldnamenoextension, sizeof(sv.worldnamenoextension));
+	strlcpy(sv.worldbasename, !strncmp(sv.worldnamenoextension, "maps/", 5) ? sv.worldnamenoextension + 5 : sv.worldnamenoextension, sizeof(sv.worldbasename));
+	//Cvar_SetQuick(&sv_worldmessage, sv.worldmessage); // set later after QC is spawned
+	Cvar_SetQuick(&sv_worldname, sv.worldname);
+	Cvar_SetQuick(&sv_worldnamenoextension, sv.worldnamenoextension);
+	Cvar_SetQuick(&sv_worldbasename, sv.worldbasename);
 
 	sv.protocol = Protocol_EnumForName(sv_protocolname.string);
 	if (sv.protocol == PROTOCOL_UNKNOWN)
@@ -3199,25 +3233,23 @@ void SV_SpawnServer (const char *server)
 	Mod_ClearUsed();
 	worldmodel->used = true;
 
-	strlcpy (sv.name, server, sizeof (sv.name));
-	strlcpy(sv.modelname, modelname, sizeof(sv.modelname));
 	sv.worldmodel = worldmodel;
 	sv.models[1] = sv.worldmodel;
 
 //
 // clear world interaction links
 //
-	World_SetSize(&sv.world, sv.worldmodel->name, sv.worldmodel->normalmins, sv.worldmodel->normalmaxs);
+	World_SetSize(&sv.world, sv.worldname, sv.worldmodel->normalmins, sv.worldmodel->normalmaxs);
 	World_Start(&sv.world);
 
 	strlcpy(sv.sound_precache[0], "", sizeof(sv.sound_precache[0]));
 
 	strlcpy(sv.model_precache[0], "", sizeof(sv.model_precache[0]));
-	strlcpy(sv.model_precache[1], sv.modelname, sizeof(sv.model_precache[1]));
+	strlcpy(sv.model_precache[1], sv.worldname, sizeof(sv.model_precache[1]));
 	for (i = 1;i < sv.worldmodel->brush.numsubmodels && i+1 < MAX_MODELS;i++)
 	{
 		dpsnprintf(sv.model_precache[i+1], sizeof(sv.model_precache[i+1]), "*%i", i);
-		sv.models[i+1] = Mod_ForName (sv.model_precache[i+1], false, false, sv.modelname);
+		sv.models[i+1] = Mod_ForName (sv.model_precache[i+1], false, false, sv.worldname);
 	}
 	if(i < sv.worldmodel->brush.numsubmodels)
 		Con_Printf("Too many submodels (MAX_MODELS is %i)\n", MAX_MODELS);
@@ -3229,7 +3261,7 @@ void SV_SpawnServer (const char *server)
 	ent = PRVM_EDICT_NUM(0);
 	memset (ent->fields.server, 0, prog->progs->entityfields * 4);
 	ent->priv.server->free = false;
-	ent->fields.server->model = PRVM_SetEngineString(sv.modelname);
+	ent->fields.server->model = PRVM_SetEngineString(sv.worldname);
 	ent->fields.server->modelindex = 1;		// world model
 	ent->fields.server->solid = SOLID_BSP;
 	ent->fields.server->movetype = MOVETYPE_PUSH;
@@ -3260,9 +3292,9 @@ void SV_SpawnServer (const char *server)
 	}
 
 	// load replacement entity file if found
-	if (sv_entpatch.integer && (entities = (char *)FS_LoadFile(va("maps/%s.ent", sv.name), tempmempool, true, NULL)))
+	if (sv_entpatch.integer && (entities = (char *)FS_LoadFile(va("%s.ent", sv.worldnamenoextension), tempmempool, true, NULL)))
 	{
-		Con_Printf("Loaded maps/%s.ent\n", sv.name);
+		Con_Printf("Loaded %s.ent\n", sv.worldnamenoextension);
 		PRVM_ED_LoadFromFile (entities);
 		Mem_Free(entities);
 	}
@@ -3325,6 +3357,10 @@ void SV_SpawnServer (const char *server)
 		}
 	}
 
+	// update the map title cvar
+	strlcpy(sv.worldmessage, PRVM_GetString(prog->edicts->fields.server->message), sizeof(sv.worldmessage)); // map title (not related to filename)
+	Cvar_SetQuick(&sv_worldmessage, sv.worldmessage);
+
 	Con_DPrint("Server spawned.\n");
 	NetConn_Heartbeat (2);
 
@@ -3346,7 +3382,7 @@ static void SV_VM_CB_EndIncreaseEdicts(void)
 	prvm_edict_t *ent;
 
 	// link every entity except world
-	for (i = 1, ent = prog->edicts;i < prog->max_edicts;i++, ent++)
+	for (i = 1, ent = prog->edicts;i < prog->num_edicts;i++, ent++)
 		if (!ent->priv.server->free)
 			SV_LinkEdict(ent);
 }

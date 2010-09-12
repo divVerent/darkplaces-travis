@@ -28,7 +28,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "ft2.h"
 #include "ft2_fontdefs.h"
 
-dp_font_t dp_fonts[MAX_FONTS] = {{0}};
+dp_fonts_t dp_fonts;
+static mempool_t *fonts_mempool = NULL;
 
 cvar_t r_textshadow = {CVAR_SAVE, "r_textshadow", "0", "draws a shadow on all text to improve readability (note: value controls offset, 1 = 1 pixel, 1.5 = 1.5 pixels, etc)"};
 cvar_t r_textbrightness = {CVAR_SAVE, "r_textbrightness", "0", "additional brightness for text color codes (0 keeps colors as is, 1 makes them all white)"};
@@ -66,7 +67,7 @@ static rtexture_t *draw_generateconchars(void)
 	double random;
 	rtexture_t *tex;
 
-	data = LoadTGA_BGRA (concharimage, FONT_FILESIZE);
+	data = LoadTGA_BGRA (concharimage, FONT_FILESIZE, NULL);
 // Gold numbers
 	for (i = 0;i < 8192;i++)
 	{
@@ -108,7 +109,7 @@ static rtexture_t *draw_generateconchars(void)
 	Image_WriteTGABGRA ("gfx/generated_conchars.tga", 256, 256, data);
 #endif
 
-	tex = R_LoadTexture2D(drawtexturepool, "conchars", 256, 256, data, TEXTYPE_BGRA, TEXF_ALPHA, NULL);
+	tex = R_LoadTexture2D(drawtexturepool, "conchars", 256, 256, data, TEXTYPE_BGRA, TEXF_ALPHA, -1, NULL);
 	Mem_Free(data);
 	return tex;
 }
@@ -120,7 +121,7 @@ static rtexture_t *draw_generateditherpattern(void)
 	for (y = 0;y < 8;y++)
 		for (x = 0;x < 8;x++)
 			pixels[y][x] = ((x^y) & 4) ? 254 : 0;
-	return R_LoadTexture2D(drawtexturepool, "ditherpattern", 8, 8, pixels[0], TEXTYPE_PALETTE, TEXF_FORCENEAREST, palette_bgra_transparent);
+	return R_LoadTexture2D(drawtexturepool, "ditherpattern", 8, 8, pixels[0], TEXTYPE_PALETTE, TEXF_FORCENEAREST, -1, palette_bgra_transparent);
 }
 
 typedef struct embeddedpic_s
@@ -291,7 +292,7 @@ static rtexture_t *draw_generatepic(const char *name, qboolean quiet)
 	const embeddedpic_t *p;
 	for (p = embeddedpics;p->name;p++)
 		if (!strcmp(name, p->name))
-			return R_LoadTexture2D(drawtexturepool, p->name, p->width, p->height, (const unsigned char *)p->pixels, TEXTYPE_PALETTE, TEXF_ALPHA, palette_bgra_embeddedpic);
+			return R_LoadTexture2D(drawtexturepool, p->name, p->width, p->height, (const unsigned char *)p->pixels, TEXTYPE_PALETTE, TEXF_ALPHA, -1, palette_bgra_embeddedpic);
 	if (!strcmp(name, "gfx/conchars"))
 		return draw_generateconchars();
 	if (!strcmp(name, "gfx/colorcontrol/ditherpattern"))
@@ -316,13 +317,26 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 	fs_offset_t lmpsize;
 	unsigned char *lmpdata;
 	char lmpname[MAX_QPATH];
+	int texflags;
+	int j;
+
+	texflags = TEXF_ALPHA;
+	if (!(cachepicflags & CACHEPICFLAG_NOCLAMP))
+		texflags |= TEXF_CLAMP;
+	if (!(cachepicflags & CACHEPICFLAG_NOCOMPRESSION) && gl_texturecompression_2d.integer)
+		texflags |= TEXF_COMPRESS;
 
 	// check whether the picture has already been cached
 	crc = CRC_Block((unsigned char *)path, strlen(path));
 	hashkey = ((crc >> 8) ^ crc) % CACHEPICHASHSIZE;
 	for (pic = cachepichash[hashkey];pic;pic = pic->chain)
 		if (!strcmp (path, pic->name))
-			return pic;
+			if(!((pic->texflags ^ texflags) & ~(TEXF_COMPRESS))) // ignore TEXF_COMPRESS when comparing, because fallback pics remove the flag
+			{
+				if(!(cachepicflags & CACHEPICFLAG_NOTPERSISTENT))
+					pic->autoload = false; // persist it
+				return pic;
+			}
 
 	if (numcachepics == MAX_CACHED_PICS)
 	{
@@ -346,24 +360,33 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 		return pic;
 	}
 
-	pic->texflags = TEXF_ALPHA;
-	if (!(cachepicflags & CACHEPICFLAG_NOCLAMP))
-		pic->texflags |= TEXF_CLAMP;
-	if (!(cachepicflags & CACHEPICFLAG_NOCOMPRESSION) && gl_texturecompression_2d.integer)
-		pic->texflags |= TEXF_COMPRESS;
-
+	pic->hasalpha = true; // assume alpha unless we know it has none
+	pic->texflags = texflags;
 	pic->autoload = (cachepicflags & CACHEPICFLAG_NOTPERSISTENT);
 
 	// load a high quality image from disk if possible
-	pixels = loadimagepixelsbgra(path, false, true, r_texture_convertsRGB_2d.integer);
+	pixels = loadimagepixelsbgra(path, false, true, r_texture_convertsRGB_2d.integer != 0, NULL);
 	if (pixels == NULL && !strncmp(path, "gfx/", 4))
-		pixels = loadimagepixelsbgra(path+4, false, true, r_texture_convertsRGB_2d.integer);
+		pixels = loadimagepixelsbgra(path+4, false, true, r_texture_convertsRGB_2d.integer != 0, NULL);
 	if (pixels)
 	{
+		pic->hasalpha = false;
+		if (pic->texflags & TEXF_ALPHA)
+		{
+			for (j = 3;j < image_width * image_height * 4;j += 4)
+			{
+				if (pixels[j] < 255)
+				{
+					pic->hasalpha = true;
+					break;
+				}
+			}
+		}
+
 		pic->width = image_width;
 		pic->height = image_height;
 		if (!pic->autoload)
-			pic->tex = R_LoadTexture2D(drawtexturepool, path, image_width, image_height, pixels, TEXTYPE_BGRA, pic->texflags, NULL);
+			pic->tex = R_LoadTexture2D(drawtexturepool, path, image_width, image_height, pixels, TEXTYPE_BGRA, pic->texflags & (pic->hasalpha ? ~0 : ~TEXF_ALPHA), -1, NULL);
 	}
 	else
 	{
@@ -388,7 +411,7 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 			pic->height = lmpdata[4] + lmpdata[5] * 256 + lmpdata[6] * 65536 + lmpdata[7] * 16777216;
 			// if no high quality replacement image was found, upload the original low quality texture
 			if (!pixels)
-				pic->tex = R_LoadTexture2D(drawtexturepool, path, pic->width, pic->height, lmpdata + 8, TEXTYPE_PALETTE, pic->texflags, palette_bgra_transparent);
+				pic->tex = R_LoadTexture2D(drawtexturepool, path, pic->width, pic->height, lmpdata + 8, TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_transparent);
 		}
 		Mem_Free(lmpdata);
 	}
@@ -404,7 +427,7 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 			pic->height = 128;
 			// if no high quality replacement image was found, upload the original low quality texture
 			if (!pixels)
-				pic->tex = R_LoadTexture2D(drawtexturepool, path, 128, 128, lmpdata, TEXTYPE_PALETTE, pic->texflags, palette_bgra_font);
+				pic->tex = R_LoadTexture2D(drawtexturepool, path, 128, 128, lmpdata, TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_font);
 		}
 		else
 		{
@@ -412,7 +435,7 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 			pic->height = lmpdata[4] + lmpdata[5] * 256 + lmpdata[6] * 65536 + lmpdata[7] * 16777216;
 			// if no high quality replacement image was found, upload the original low quality texture
 			if (!pixels)
-				pic->tex = R_LoadTexture2D(drawtexturepool, path, pic->width, pic->height, lmpdata + 8, TEXTYPE_PALETTE, pic->texflags, palette_bgra_transparent);
+				pic->tex = R_LoadTexture2D(drawtexturepool, path, pic->width, pic->height, lmpdata + 8, TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_transparent);
 		}
 	}
 
@@ -434,7 +457,7 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 
 cachepic_t *Draw_CachePic (const char *path)
 {
-	return Draw_CachePic_Flags (path, 0);
+	return Draw_CachePic_Flags (path, 0); // default to persistent!
 }
 
 int draw_frame = 1;
@@ -443,9 +466,9 @@ rtexture_t *Draw_GetPicTexture(cachepic_t *pic)
 {
 	if (pic->autoload && !pic->tex)
 	{
-		pic->tex = loadtextureimage(drawtexturepool, pic->name, false, pic->texflags, true, r_texture_convertsRGB_2d.integer);
+		pic->tex = loadtextureimage(drawtexturepool, pic->name, false, pic->texflags, true, r_texture_convertsRGB_2d.integer != 0);
 		if (pic->tex == NULL && !strncmp(pic->name, "gfx/", 4))
-			pic->tex = loadtextureimage(drawtexturepool, pic->name+4, false, pic->texflags, true, r_texture_convertsRGB_2d.integer);
+			pic->tex = loadtextureimage(drawtexturepool, pic->name+4, false, pic->texflags, true, r_texture_convertsRGB_2d.integer != 0);
 		if (pic->tex == NULL)
 			pic->tex = draw_generatepic(pic->name, true);
 	}
@@ -513,7 +536,7 @@ cachepic_t *Draw_NewPic(const char *picname, int width, int height, int alpha, u
 	pic->height = height;
 	if (pic->tex)
 		R_FreeTexture(pic->tex);
-	pic->tex = R_LoadTexture2D(drawtexturepool, picname, width, height, pixels_bgra, TEXTYPE_BGRA, (alpha ? TEXF_ALPHA : 0) | TEXF_ALLOWUPDATES, NULL);
+	pic->tex = R_LoadTexture2D(drawtexturepool, picname, width, height, pixels_bgra, TEXTYPE_BGRA, (alpha ? TEXF_ALPHA : 0), -1, NULL);
 	return pic;
 }
 
@@ -540,10 +563,10 @@ void Draw_FreePic(const char *picname)
 
 static float snap_to_pixel_x(float x, float roundUpAt);
 extern int con_linewidth; // to force rewrapping
-static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
+void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, float voffset)
 {
-	int i;
-	float maxwidth, scale;
+	int i, ch;
+	float maxwidth;
 	char widthfile[MAX_QPATH];
 	char *widthbuf;
 	fs_offset_t widthbufsize;
@@ -551,8 +574,9 @@ static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
 	if(override || !fnt->texpath[0])
 	{
 		strlcpy(fnt->texpath, name, sizeof(fnt->texpath));
-
-		// load the cvars when the font is FIRST loaded
+		// load the cvars when the font is FIRST loader
+		fnt->settings.scale = scale;
+		fnt->settings.voffset = voffset;
 		fnt->settings.antialias = r_font_antialias.integer;
 		fnt->settings.hinting = r_font_hinting.integer;
 		fnt->settings.outline = r_font_postprocess_outline.value;
@@ -561,6 +585,9 @@ static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
 		fnt->settings.shadowy = r_font_postprocess_shadow_y.value;
 		fnt->settings.shadowz = r_font_postprocess_shadow_z.value;
 	}
+	// fix bad scale
+	if (fnt->settings.scale <= 0)
+		fnt->settings.scale = 1;
 
 	if(drawtexturepool == NULL)
 		return; // before gl_draw_start, so will be loaded later
@@ -602,17 +629,16 @@ static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
 		dpsnprintf(widthfile, sizeof(widthfile), "%s.width", fnt->texpath);
 
 	// unspecified width == 1 (base width)
-	for(i = 1; i < 256; ++i)
-		fnt->width_of[i] = 1;
-	scale = 1;
+	for(ch = 0; ch < 256; ++ch)
+		fnt->width_of[ch] = 1;
 
 	// FIXME load "name.width", if it fails, fill all with 1
 	if((widthbuf = (char *) FS_LoadFile(widthfile, tempmempool, true, &widthbufsize)))
 	{
 		float extraspacing = 0;
 		const char *p = widthbuf;
-		int ch = 0;
 
+		ch = 0;
 		while(ch < 256)
 		{
 			if(!COM_ParseToken_Simple(&p, false, false))
@@ -634,17 +660,6 @@ static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
 				case '-':
 				case '.':
 					fnt->width_of[ch] = atof(com_token) + extraspacing;
-					if (fnt->ft2)
-					{
-						for (i = 0; i < MAX_FONT_SIZES; ++i)
-						{
-							//Font_MapForIndex(fnt->ft2, i)->width_of[ch] = snap_to_pixel_x(fnt->width_of[ch] * fnt->req_sizes[i], 0.4);
-							ft2_font_map_t *map = Font_MapForIndex(fnt->ft2, i);
-							if (!map)
-								break;
-							map->width_of[ch] = Font_SnapTo(fnt->width_of[ch], 1/map->size);
-						}
-					}
 					ch++;
 					break;
 				default:
@@ -658,7 +673,7 @@ static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
 					{
 						if(!COM_ParseToken_Simple(&p, false, false))
 							return;
-						scale = atof(com_token);
+						fnt->settings.scale = atof(com_token);
 					}
 					else
 					{
@@ -673,25 +688,61 @@ static void LoadFont(qboolean override, const char *name, dp_font_t *fnt)
 		Mem_Free(widthbuf);
 	}
 
-	maxwidth = fnt->width_of[1];
-	for(i = 2; i < 256; ++i)
+	if(fnt->ft2)
+	{
+		for (i = 0; i < MAX_FONT_SIZES; ++i)
+		{
+			ft2_font_map_t *map = Font_MapForIndex(fnt->ft2, i);
+			if (!map)
+				break;
+			for(ch = 0; ch < 256; ++ch)
+				map->width_of[ch] = Font_SnapTo(fnt->width_of[ch], 1/map->size);
+		}
+	}
+
+	maxwidth = fnt->width_of[0];
+	for(i = 1; i < 256; ++i)
 		maxwidth = max(maxwidth, fnt->width_of[i]);
 	fnt->maxwidth = maxwidth;
 
 	// fix up maxwidth for overlap
-	fnt->maxwidth *= scale;
-	fnt->scale = scale;
+	fnt->maxwidth *= fnt->settings.scale;
 
 	if(fnt == FONT_CONSOLE)
 		con_linewidth = -1; // rewrap console in next frame
 }
 
-static dp_font_t *FindFont(const char *title)
+extern cvar_t developer_font;
+dp_font_t *FindFont(const char *title, qboolean allocate_new)
 {
 	int i;
-	for(i = 0; i < MAX_FONTS; ++i)
-		if(!strcmp(dp_fonts[i].title, title))
-			return &dp_fonts[i];
+
+	// find font
+	for(i = 0; i < dp_fonts.maxsize; ++i)
+		if(!strcmp(dp_fonts.f[i].title, title))
+			return &dp_fonts.f[i];
+	// if not found - try allocate
+	if (allocate_new)
+	{
+		// find any font with empty title
+		for(i = 0; i < dp_fonts.maxsize; ++i)
+		{
+			if(!strcmp(dp_fonts.f[i].title, ""))
+			{
+				strlcpy(dp_fonts.f[i].title, title, sizeof(dp_fonts.f[i].title));
+				return &dp_fonts.f[i];
+			}
+		}
+		// if no any 'free' fonts - expand buffer
+		i = dp_fonts.maxsize;
+		dp_fonts.maxsize = dp_fonts.maxsize + FONTS_EXPAND;
+		if (developer_font.integer)
+			Con_Printf("FindFont: enlarging fonts buffer (%i -> %i)\n", i, dp_fonts.maxsize);
+		dp_fonts.f = (dp_font_t *)Mem_Realloc(fonts_mempool, dp_fonts.f, sizeof(dp_font_t) * dp_fonts.maxsize);
+		// register a font in first expanded slot
+		strlcpy(dp_fonts.f[i].title, title, sizeof(dp_fonts.f[i].title));
+		return &dp_fonts.f[i];
+	}
 	return NULL;
 }
 
@@ -724,16 +775,17 @@ static float snap_to_pixel_y(float y, float roundUpAt)
 static void LoadFont_f(void)
 {
 	dp_font_t *f;
-	int i;
+	int i, sizes;
 	const char *filelist, *c, *cm;
-	float sz;
+	float sz, scale, voffset;
 	char mainfont[MAX_QPATH];
 
 	if(Cmd_Argc() < 2)
 	{
 		Con_Printf("Available font commands:\n");
-		for(i = 0; i < MAX_FONTS; ++i)
-			Con_Printf("  loadfont %s gfx/tgafile[...] [sizes...]\n", dp_fonts[i].title);
+		for(i = 0; i < dp_fonts.maxsize; ++i)
+			if (dp_fonts.f[i].title[0])
+				Con_Printf("  loadfont %s gfx/tgafile[...] [custom switches] [sizes...]\n", dp_fonts.f[i].title);
 		Con_Printf("A font can simply be gfx/tgafile, or alternatively you\n"
 			   "can specify multiple fonts and faces\n"
 			   "Like this: gfx/vera-sans:2,gfx/fallback:1\n"
@@ -742,10 +794,13 @@ static void LoadFont_f(void)
 			   "You can also specify a list of font sizes to load, like this:\n"
 			   "loadfont console gfx/conchars,gfx/fallback 8 12 16 24 32\n"
 			   "In many cases, 8 12 16 24 32 should be a good choice.\n"
+			   "custom switches:\n"
+			   " scale x : scale all characters by this amount when rendering (doesnt change line height)\n"
+			   " voffset x : offset all chars vertical when rendering, this is multiplied to character height\n"
 			);
 		return;
 	}
-	f = FindFont(Cmd_Argv(1));
+	f = FindFont(Cmd_Argv(1), true);
 	if(f == NULL)
 	{
 		Con_Printf("font function not found\n");
@@ -812,17 +867,38 @@ static void LoadFont_f(void)
 	for(i = 1; i < MAX_FONT_SIZES; ++i)
 		f->req_sizes[i] = -1;
 
-	if(Cmd_Argc() >= 3)
+	scale = 1;
+	voffset = 0;
+	if(Cmd_Argc() >= 4)
 	{
-		for(i = 0; i < Cmd_Argc()-3; ++i)
+		for(sizes = 0, i = 3; i < Cmd_Argc(); ++i)
 		{
-			sz = atof(Cmd_Argv(i+3));
+			// special switches
+			if (!strcmp(Cmd_Argv(i), "scale"))
+			{
+				i++;
+				if (i < Cmd_Argc())
+					scale = atof(Cmd_Argv(i));
+				continue;
+			}
+			if (!strcmp(Cmd_Argv(i), "voffset"))
+			{
+				i++;
+				if (i < Cmd_Argc())
+					voffset = atof(Cmd_Argv(i));
+				continue;
+			}
+			// parse one of sizes
+			sz = atof(Cmd_Argv(i));
 			if (sz > 0.001f && sz < 1000.0f) // do not use crap sizes
-				f->req_sizes[i] = sz;
+			{
+				f->req_sizes[sizes] = sz;
+				sizes++;
+			}
 		}
 	}
 
-	LoadFont(true, mainfont, f);
+	LoadFont(true, mainfont, f, scale, voffset);
 }
 
 /*
@@ -840,8 +916,10 @@ static void gl_draw_start(void)
 
 	font_start();
 
-	for(i = 0; i < MAX_FONTS; ++i)
-		LoadFont(false, va("gfx/font_%s", dp_fonts[i].title), &dp_fonts[i]);
+	// load default font textures
+	for(i = 0; i < dp_fonts.maxsize; ++i)
+		if (dp_fonts.f[i].title[0])
+			LoadFont(false, va("gfx/font_%s", dp_fonts.f[i].title), &dp_fonts.f[i], 1, 0);
 
 	// draw the loading screen so people have something to see in the newly opened window
 	SCR_UpdateLoadingScreen(true);
@@ -865,6 +943,7 @@ static void gl_draw_newmap(void)
 void GL_Draw_Init (void)
 {
 	int i, j;
+
 	Cvar_RegisterVariable(&r_font_postprocess_blur);
 	Cvar_RegisterVariable(&r_font_postprocess_outline);
 	Cvar_RegisterVariable(&r_font_postprocess_shadow_x);
@@ -875,11 +954,16 @@ void GL_Draw_Init (void)
 	Cvar_RegisterVariable(&r_textshadow);
 	Cvar_RegisterVariable(&r_textbrightness);
 	Cvar_RegisterVariable(&r_textcontrast);
-	Cmd_AddCommand ("loadfont",LoadFont_f, "loadfont function tganame loads a font; example: loadfont console gfx/veramono; loadfont without arguments lists the available functions");
-	R_RegisterModule("GL_Draw", gl_draw_start, gl_draw_shutdown, gl_draw_newmap);
 
+	// allocate fonts storage
+	fonts_mempool = Mem_AllocPool("FONTS", 0, NULL);
+	dp_fonts.maxsize = MAX_FONTS;
+	dp_fonts.f = (dp_font_t *)Mem_Alloc(fonts_mempool, sizeof(dp_font_t) * dp_fonts.maxsize);
+	memset(dp_fonts.f, 0, sizeof(dp_font_t) * dp_fonts.maxsize);
+
+	// assign starting font names
 	strlcpy(FONT_DEFAULT->title, "default", sizeof(FONT_DEFAULT->title));
-		strlcpy(FONT_DEFAULT->texpath, "gfx/conchars", sizeof(FONT_DEFAULT->texpath));
+	strlcpy(FONT_DEFAULT->texpath, "gfx/conchars", sizeof(FONT_DEFAULT->texpath));
 	strlcpy(FONT_CONSOLE->title, "console", sizeof(FONT_CONSOLE->title));
 	strlcpy(FONT_SBAR->title, "sbar", sizeof(FONT_SBAR->title));
 	strlcpy(FONT_NOTIFY->title, "notify", sizeof(FONT_NOTIFY->title));
@@ -888,60 +972,95 @@ void GL_Draw_Init (void)
 	strlcpy(FONT_INFOBAR->title, "infobar", sizeof(FONT_INFOBAR->title));
 	strlcpy(FONT_MENU->title, "menu", sizeof(FONT_MENU->title));
 	for(i = 0, j = 0; i < MAX_USERFONTS; ++i)
-		if(!FONT_USER[i].title[0])
-			dpsnprintf(FONT_USER[i].title, sizeof(FONT_USER[i].title), "user%d", j++);
+		if(!FONT_USER(i)->title[0])
+			dpsnprintf(FONT_USER(i)->title, sizeof(FONT_USER(i)->title), "user%d", j++);
+
+	Cmd_AddCommand ("loadfont",LoadFont_f, "loadfont function tganame loads a font; example: loadfont console gfx/veramono; loadfont without arguments lists the available functions");
+	R_RegisterModule("GL_Draw", gl_draw_start, gl_draw_shutdown, gl_draw_newmap, NULL, NULL);
 }
 
-void _DrawQ_Setup(void)
+static void _DrawQ_Setup(void)
 {
 	r_viewport_t viewport;
-	if (r_refdef.draw2dstage)
+	if (r_refdef.draw2dstage == 1)
 		return;
-	r_refdef.draw2dstage = true;
+	r_refdef.draw2dstage = 1;
 	CHECKGLERROR
 	R_Viewport_InitOrtho(&viewport, &identitymatrix, r_refdef.view.x, vid.height - r_refdef.view.y - r_refdef.view.height, r_refdef.view.width, r_refdef.view.height, 0, 0, vid_conwidth.integer, vid_conheight.integer, -10, 100, NULL);
 	R_SetViewport(&viewport);
 	GL_ColorMask(r_refdef.view.colormask[0], r_refdef.view.colormask[1], r_refdef.view.colormask[2], 1);
-	qglDepthFunc(GL_LEQUAL);CHECKGLERROR
-	qglDisable(GL_POLYGON_OFFSET_FILL);CHECKGLERROR
-	GL_CullFace(GL_FRONT); // quake is backwards, this culls back faces
+	GL_DepthFunc(GL_LEQUAL);
+	GL_PolygonOffset(0,0);
+	GL_CullFace(GL_NONE);
 	R_EntityMatrix(&identitymatrix);
 
-	GL_DepthMask(true);
 	GL_DepthRange(0, 1);
 	GL_PolygonOffset(0, 0);
 	GL_DepthTest(false);
 	GL_Color(1,1,1,1);
 	GL_AlphaTest(false);
-	GL_BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
-static void _DrawQ_ProcessDrawFlag(int flags)
+qboolean r_draw2d_force = false;
+void _DrawQ_SetupAndProcessDrawFlag(int flags, cachepic_t *pic, float alpha)
 {
 	_DrawQ_Setup();
 	CHECKGLERROR
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
+	DrawQ_ProcessDrawFlag(flags, (alpha < 1) || (pic && pic->hasalpha));
+}
+void DrawQ_ProcessDrawFlag(int flags, qboolean alpha)
+{
 	if(flags == DRAWFLAG_ADDITIVE)
-		GL_BlendFunc(GL_SRC_ALPHA, GL_ONE);
+	{
+		GL_DepthMask(false);
+		GL_BlendFunc(alpha ? GL_SRC_ALPHA : GL_ONE, GL_ONE);
+	}
 	else if(flags == DRAWFLAG_MODULATE)
+	{
+		GL_DepthMask(false);
 		GL_BlendFunc(GL_DST_COLOR, GL_ZERO);
+	}
 	else if(flags == DRAWFLAG_2XMODULATE)
-		GL_BlendFunc(GL_DST_COLOR,GL_SRC_COLOR);
+	{
+		GL_DepthMask(false);
+		GL_BlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
+	}
 	else if(flags == DRAWFLAG_SCREEN)
-		GL_BlendFunc(GL_ONE_MINUS_DST_COLOR,GL_ONE);
-	else
+	{
+		GL_DepthMask(false);
+		GL_BlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE);
+	}
+	else if(alpha)
+	{
+		GL_DepthMask(false);
 		GL_BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	}
+	else
+	{
+		GL_DepthMask(true);
+		GL_BlendFunc(GL_ONE, GL_ZERO);
+	}
 }
 
 void DrawQ_Pic(float x, float y, cachepic_t *pic, float width, float height, float red, float green, float blue, float alpha, int flags)
 {
-	float floats[20];
+	float floats[36];
 
-	_DrawQ_ProcessDrawFlag(flags);
-	GL_Color(red, green, blue, alpha);
+	_DrawQ_SetupAndProcessDrawFlag(flags, pic, alpha);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
 
-	R_Mesh_VertexPointer(floats, 0, 0);
-	R_Mesh_ColorPointer(NULL, 0, 0);
 	R_Mesh_ResetTextureState();
+	floats[12] = 0.0f;floats[13] = 0.0f;
+	floats[14] = 1.0f;floats[15] = 0.0f;
+	floats[16] = 1.0f;floats[17] = 1.0f;
+	floats[18] = 0.0f;floats[19] = 1.0f;
+	floats[20] = floats[24] = floats[28] = floats[32] = red;
+	floats[21] = floats[25] = floats[29] = floats[33] = green;
+	floats[22] = floats[26] = floats[30] = floats[34] = blue;
+	floats[23] = floats[27] = floats[31] = floats[35] = alpha;
 	if (pic)
 	{
 		if (width == 0)
@@ -949,14 +1068,8 @@ void DrawQ_Pic(float x, float y, cachepic_t *pic, float width, float height, flo
 		if (height == 0)
 			height = pic->height;
 		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1);
-		R_Mesh_TexCoordPointer(0, 2, floats + 12, 0, 0);
 
-#if 1
-		floats[12] = 0.0f;floats[13] = 0.0f;
-		floats[14] = 1.0f;floats[15] = 0.0f;
-		floats[16] = 1.0f;floats[17] = 1.0f;
-		floats[18] = 0.0f;floats[19] = 1.0f;
-#else
+#if 0
       // AK07: lets be texel correct on the corners
       {
          float horz_offset = 0.5f / pic->width;
@@ -978,12 +1091,13 @@ void DrawQ_Pic(float x, float y, cachepic_t *pic, float width, float height, flo
 	floats[3] = floats[6] = x + width;
 	floats[7] = floats[10] = y + height;
 
-	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, polygonelement3s, 0, 0);
+	R_Mesh_PrepareVertices_Generic_Arrays(4, floats, floats + 20, floats + 12);
+	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 }
 
 void DrawQ_RotPic(float x, float y, cachepic_t *pic, float width, float height, float org_x, float org_y, float angle, float red, float green, float blue, float alpha, int flags)
 {
-	float floats[20];
+	float floats[36];
 	float af = DEG2RAD(-angle); // forward
 	float ar = DEG2RAD(-angle + 90); // right
 	float sinaf = sin(af);
@@ -991,11 +1105,10 @@ void DrawQ_RotPic(float x, float y, cachepic_t *pic, float width, float height, 
 	float sinar = sin(ar);
 	float cosar = cos(ar);
 
-	_DrawQ_ProcessDrawFlag(flags);
-	GL_Color(red, green, blue, alpha);
+	_DrawQ_SetupAndProcessDrawFlag(flags, pic, alpha);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
 
-	R_Mesh_VertexPointer(floats, 0, 0);
-	R_Mesh_ColorPointer(NULL, 0, 0);
 	R_Mesh_ResetTextureState();
 	if (pic)
 	{
@@ -1004,12 +1117,6 @@ void DrawQ_RotPic(float x, float y, cachepic_t *pic, float width, float height, 
 		if (height == 0)
 			height = pic->height;
 		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1);
-		R_Mesh_TexCoordPointer(0, 2, floats + 12, 0, 0);
-
-		floats[12] = 0.0f;floats[13] = 0.0f;
-		floats[14] = 1.0f;floats[15] = 0.0f;
-		floats[16] = 1.0f;floats[17] = 1.0f;
-		floats[18] = 0.0f;floats[19] = 1.0f;
 	}
 	else
 		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
@@ -1032,18 +1139,27 @@ void DrawQ_RotPic(float x, float y, cachepic_t *pic, float width, float height, 
 	floats[9]  = x - cosaf*org_x + cosar*(height-org_y);
 	floats[10] = y - sinaf*org_x + sinar*(height-org_y);
 
-	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, polygonelement3s, 0, 0);
+	floats[12] = 0.0f;floats[13] = 0.0f;
+	floats[14] = 1.0f;floats[15] = 0.0f;
+	floats[16] = 1.0f;floats[17] = 1.0f;
+	floats[18] = 0.0f;floats[19] = 1.0f;
+	floats[20] = floats[24] = floats[28] = floats[32] = red;
+	floats[21] = floats[25] = floats[29] = floats[33] = green;
+	floats[22] = floats[26] = floats[30] = floats[34] = blue;
+	floats[23] = floats[27] = floats[31] = floats[35] = alpha;
+
+	R_Mesh_PrepareVertices_Generic_Arrays(4, floats, floats + 20, floats + 12);
+	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 }
 
 void DrawQ_Fill(float x, float y, float width, float height, float red, float green, float blue, float alpha, int flags)
 {
-	float floats[12];
+	float floats[36];
 
-	_DrawQ_ProcessDrawFlag(flags);
-	GL_Color(red, green, blue, alpha);
+	_DrawQ_SetupAndProcessDrawFlag(flags, NULL, alpha);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
 
-	R_Mesh_VertexPointer(floats, 0, 0);
-	R_Mesh_ColorPointer(NULL, 0, 0);
 	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 
@@ -1052,8 +1168,17 @@ void DrawQ_Fill(float x, float y, float width, float height, float red, float gr
 	floats[1] = floats[4] = y;
 	floats[3] = floats[6] = x + width;
 	floats[7] = floats[10] = y + height;
+	floats[12] = 0.0f;floats[13] = 0.0f;
+	floats[14] = 1.0f;floats[15] = 0.0f;
+	floats[16] = 1.0f;floats[17] = 1.0f;
+	floats[18] = 0.0f;floats[19] = 1.0f;
+	floats[20] = floats[24] = floats[28] = floats[32] = red;
+	floats[21] = floats[25] = floats[29] = floats[33] = green;
+	floats[22] = floats[26] = floats[30] = floats[34] = blue;
+	floats[23] = floats[27] = floats[31] = floats[35] = alpha;
 
-	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, polygonelement3s, 0, 0);
+	R_Mesh_PrepareVertices_Generic_Arrays(4, floats, floats + 20, floats + 12);
+	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 }
 
 /// color tag printing
@@ -1137,8 +1262,8 @@ float DrawQ_TextWidth_UntilWidth_TrackColors_Scale(const char *text, size_t *max
 		snap = false;
 	}
 	// do this in the end
-	w *= fnt->scale;
-	h *= fnt->scale;
+	w *= fnt->settings.scale;
+	h *= fnt->settings.scale;
 
 	// find the most fitting size:
 	if (ft2 != NULL)
@@ -1333,9 +1458,9 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 		snap = false;
 	}
 
-	starty -= (fnt->scale - 1) * h * 0.5; // center
-	w *= fnt->scale;
-	h *= fnt->scale;
+	starty -= (fnt->settings.scale - 1) * h * 0.5 - fnt->settings.voffset*h; // center & offset
+	w *= fnt->settings.scale;
+	h *= fnt->settings.scale;
 
 	if (ft2 != NULL)
 	{
@@ -1356,14 +1481,13 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 	if (maxlen < 1)
 		maxlen = 1<<30;
 
-	_DrawQ_ProcessDrawFlag(flags);
+	_DrawQ_SetupAndProcessDrawFlag(flags, NULL, 0);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return startx + DrawQ_TextWidth_UntilWidth_TrackColors_Scale(text, &maxlen, w, h, sw, sh, NULL, ignorecolorcodes, fnt, 1000000000);
 
-	R_Mesh_ColorPointer(color4f, 0, 0);
 	R_Mesh_ResetTextureState();
 	if (!fontmap)
 		R_Mesh_TexBind(0, fnt->tex);
-	R_Mesh_TexCoordPointer(0, 2, texcoord2f, 0, 0);
-	R_Mesh_VertexPointer(vertex3f, 0, 0);
 	R_SetupShader_Generic(fnt->tex, NULL, GL_MODULATE, 1);
 
 	ac = color4f;
@@ -1493,7 +1617,8 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 						if (batchcount)
 						{
 							// switching from freetype to non-freetype rendering
-							R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, quadelement3s, 0, 0);
+							R_Mesh_PrepareVertices_Generic_Arrays(batchcount * 4, vertex3f, color4f, texcoord2f);
+							R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, NULL, 0, quadelement3s, NULL, 0);
 							batchcount = 0;
 							ac = color4f;
 							at = texcoord2f;
@@ -1530,7 +1655,8 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 				batchcount++;
 				if (batchcount >= QUADELEMENTS_MAXQUADS)
 				{
-					R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, quadelement3s, 0, 0);
+					R_Mesh_PrepareVertices_Generic_Arrays(batchcount * 4, vertex3f, color4f, texcoord2f);
+					R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, NULL, 0, quadelement3s, NULL, 0);
 					batchcount = 0;
 					ac = color4f;
 					at = texcoord2f;
@@ -1544,7 +1670,8 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 					if (batchcount)
 					{
 						// we need a different character map, render what we currently have:
-						R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, quadelement3s, 0, 0);
+						R_Mesh_PrepareVertices_Generic_Arrays(batchcount * 4, vertex3f, color4f, texcoord2f);
+						R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, NULL, 0, quadelement3s, NULL, 0);
 						batchcount = 0;
 						ac = color4f;
 						at = texcoord2f;
@@ -1603,7 +1730,8 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 				batchcount++;
 				if (batchcount >= QUADELEMENTS_MAXQUADS)
 				{
-					R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, quadelement3s, 0, 0);
+					R_Mesh_PrepareVertices_Generic_Arrays(batchcount * 4, vertex3f, color4f, texcoord2f);
+					R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, NULL, 0, quadelement3s, NULL, 0);
 					batchcount = 0;
 					ac = color4f;
 					at = texcoord2f;
@@ -1621,7 +1749,10 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 		}
 	}
 	if (batchcount > 0)
-		R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, quadelement3s, 0, 0);
+	{
+		R_Mesh_PrepareVertices_Generic_Arrays(batchcount * 4, vertex3f, color4f, texcoord2f);
+		R_Mesh_Draw(0, batchcount * 4, 0, batchcount * 2, quadelement3i, NULL, 0, quadelement3s, NULL, 0);
+	}
 
 	if (outcolor)
 		*outcolor = colorindex;
@@ -1694,10 +1825,10 @@ void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height
 {
 	float floats[36];
 
-	_DrawQ_ProcessDrawFlag(flags);
+	_DrawQ_SetupAndProcessDrawFlag(flags, pic, a1*a2*a3*a4);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
 
-	R_Mesh_VertexPointer(floats, 0, 0);
-	R_Mesh_ColorPointer(floats + 20, 0, 0);
 	R_Mesh_ResetTextureState();
 	if (pic)
 	{
@@ -1706,11 +1837,6 @@ void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height
 		if (height == 0)
 			height = pic->height;
 		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1);
-		R_Mesh_TexCoordPointer(0, 2, floats + 12, 0, 0);
-		floats[12] = s1;floats[13] = t1;
-		floats[14] = s2;floats[15] = t2;
-		floats[16] = s4;floats[17] = t4;
-		floats[18] = s3;floats[19] = t3;
 	}
 	else
 		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
@@ -1720,63 +1846,109 @@ void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height
 	floats[1] = floats[4] = y;
 	floats[3] = floats[6] = x + width;
 	floats[7] = floats[10] = y + height;
+	floats[12] = s1;floats[13] = t1;
+	floats[14] = s2;floats[15] = t2;
+	floats[16] = s4;floats[17] = t4;
+	floats[18] = s3;floats[19] = t3;
 	floats[20] = r1;floats[21] = g1;floats[22] = b1;floats[23] = a1;
 	floats[24] = r2;floats[25] = g2;floats[26] = b2;floats[27] = a2;
 	floats[28] = r4;floats[29] = g4;floats[30] = b4;floats[31] = a4;
 	floats[32] = r3;floats[33] = g3;floats[34] = b3;floats[35] = a3;
 
-	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, polygonelement3s, 0, 0);
+	R_Mesh_PrepareVertices_Generic_Arrays(4, floats, floats + 20, floats + 12);
+	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 }
 
-void DrawQ_Mesh (drawqueuemesh_t *mesh, int flags)
+void DrawQ_Mesh (drawqueuemesh_t *mesh, int flags, qboolean hasalpha)
 {
-	_DrawQ_ProcessDrawFlag(flags);
+	_DrawQ_Setup();
+	CHECKGLERROR
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
+	DrawQ_ProcessDrawFlag(flags, hasalpha);
 
-	R_Mesh_VertexPointer(mesh->data_vertex3f, 0, 0);
-	R_Mesh_ColorPointer(mesh->data_color4f, 0, 0);
 	R_Mesh_ResetTextureState();
-	R_Mesh_TexCoordPointer(0, 2, mesh->data_texcoord2f, 0, 0);
 	R_SetupShader_Generic(mesh->texture, NULL, GL_MODULATE, 1);
 
-	R_Mesh_Draw(0, mesh->num_vertices, 0, mesh->num_triangles, mesh->data_element3i, mesh->data_element3s, 0, 0);
+	R_Mesh_PrepareVertices_Generic_Arrays(mesh->num_vertices, mesh->data_vertex3f, mesh->data_color4f, mesh->data_texcoord2f);
+	R_Mesh_Draw(0, mesh->num_vertices, 0, mesh->num_triangles, mesh->data_element3i, NULL, 0, mesh->data_element3s, NULL, 0);
 }
 
 void DrawQ_LineLoop (drawqueuemesh_t *mesh, int flags)
 {
 	int num;
 
-	_DrawQ_ProcessDrawFlag(flags);
+	_DrawQ_SetupAndProcessDrawFlag(flags, NULL, 1);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
 
 	GL_Color(1,1,1,1);
-	CHECKGLERROR
-	qglBegin(GL_LINE_LOOP);
-	for (num = 0;num < mesh->num_vertices;num++)
+	switch(vid.renderpath)
 	{
-		if (mesh->data_color4f)
-			GL_Color(mesh->data_color4f[num*4+0], mesh->data_color4f[num*4+1], mesh->data_color4f[num*4+2], mesh->data_color4f[num*4+3]);
-		qglVertex2f(mesh->data_vertex3f[num*3+0], mesh->data_vertex3f[num*3+1]);
+	case RENDERPATH_GL11:
+	case RENDERPATH_GL13:
+	case RENDERPATH_GL20:
+	case RENDERPATH_CGGL:
+		CHECKGLERROR
+		qglBegin(GL_LINE_LOOP);
+		for (num = 0;num < mesh->num_vertices;num++)
+		{
+			if (mesh->data_color4f)
+				GL_Color(mesh->data_color4f[num*4+0], mesh->data_color4f[num*4+1], mesh->data_color4f[num*4+2], mesh->data_color4f[num*4+3]);
+			qglVertex2f(mesh->data_vertex3f[num*3+0], mesh->data_vertex3f[num*3+1]);
+		}
+		qglEnd();
+		CHECKGLERROR
+		break;
+	case RENDERPATH_D3D9:
+		//Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	case RENDERPATH_D3D10:
+		Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	case RENDERPATH_D3D11:
+		Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
 	}
-	qglEnd();
-	CHECKGLERROR
 }
 
 //[515]: this is old, delete
 void DrawQ_Line (float width, float x1, float y1, float x2, float y2, float r, float g, float b, float alpha, int flags)
 {
-	_DrawQ_ProcessDrawFlag(flags);
+	_DrawQ_SetupAndProcessDrawFlag(flags, NULL, alpha);
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
 
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 
-	CHECKGLERROR
-	//qglLineWidth(width);CHECKGLERROR
+	switch(vid.renderpath)
+	{
+	case RENDERPATH_GL11:
+	case RENDERPATH_GL13:
+	case RENDERPATH_GL20:
+	case RENDERPATH_CGGL:
+		CHECKGLERROR
 
-	GL_Color(r,g,b,alpha);
-	CHECKGLERROR
-	qglBegin(GL_LINES);
-	qglVertex2f(x1, y1);
-	qglVertex2f(x2, y2);
-	qglEnd();
-	CHECKGLERROR
+		//qglLineWidth(width);CHECKGLERROR
+
+		GL_Color(r,g,b,alpha);
+		CHECKGLERROR
+		qglBegin(GL_LINES);
+		qglVertex2f(x1, y1);
+		qglVertex2f(x2, y2);
+		qglEnd();
+		CHECKGLERROR
+		break;
+	case RENDERPATH_D3D9:
+		//Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	case RENDERPATH_D3D10:
+		Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	case RENDERPATH_D3D11:
+		Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	}
 }
 
 void DrawQ_SetClipArea(float x, float y, float width, float height)
@@ -1788,8 +1960,8 @@ void DrawQ_SetClipArea(float x, float y, float width, float height)
 	// OGL uses top to bottom
 	ix = (int)(0.5 + x * ((float)vid.width / vid_conwidth.integer));
 	iy = (int)(0.5 + y * ((float) vid.height / vid_conheight.integer));
-	iw = (int)(width * ((float)vid.width / vid_conwidth.integer));
-	ih = (int)(height * ((float)vid.height / vid_conheight.integer));
+	iw = (int)(0.5 + (x+width) * ((float)vid.width / vid_conwidth.integer)) - ix;
+	ih = (int)(0.5 + (y+height) * ((float) vid.height / vid_conheight.integer)) - iy;
 	GL_Scissor(ix, vid.height - iy - ih, iw, ih);
 
 	GL_ScissorTest(true);
@@ -1803,7 +1975,13 @@ void DrawQ_ResetClipArea(void)
 
 void DrawQ_Finish(void)
 {
-	r_refdef.draw2dstage = false;
+	r_refdef.draw2dstage = 0;
+}
+
+void DrawQ_RecalcView(void)
+{
+	if(r_refdef.draw2dstage)
+		r_refdef.draw2dstage = -1; // next draw call will set viewport etc. again
 }
 
 static float blendvertex3f[9] = {-5000, -5000, 10, 10000, -5000, 10, -5000, 10000, 10};
@@ -1814,6 +1992,9 @@ void R_DrawGamma(void)
 	{
 	case RENDERPATH_GL20:
 	case RENDERPATH_CGGL:
+	case RENDERPATH_D3D9:
+	case RENDERPATH_D3D10:
+	case RENDERPATH_D3D11:
 		if (vid_usinghwgamma || v_glslgamma.integer)
 			return;
 		break;
@@ -1824,8 +2005,6 @@ void R_DrawGamma(void)
 		break;
 	}
 	// all the blends ignore depth
-	R_Mesh_VertexPointer(blendvertex3f, 0, 0);
-	R_Mesh_ColorPointer(NULL, 0, 0);
 	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 	GL_DepthMask(true);
@@ -1845,8 +2024,9 @@ void R_DrawGamma(void)
 		GL_BlendFunc(GL_DST_COLOR, GL_ONE);
 		while (c[0] >= 1.01f || c[1] >= 1.01f || c[2] >= 1.01f)
 		{
-			GL_Color(bound(0, c[0] - 1, 1), bound(0, c[1] - 1, 1), bound(0, c[2] - 1, 1), 1);
-			R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, polygonelement3s, 0, 0);
+			GL_Color(c[0] - 1, c[1] - 1, c[2] - 1, 1);
+			R_Mesh_PrepareVertices_Generic_Arrays(3, blendvertex3f, NULL, NULL);
+			R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 			VectorScale(c, 0.5, c);
 		}
 	}
@@ -1861,8 +2041,9 @@ void R_DrawGamma(void)
 	if (c[0] >= 0.01f || c[1] >= 0.01f || c[2] >= 0.01f)
 	{
 		GL_BlendFunc(GL_ONE, GL_ONE);
-		GL_Color(c[0], c[1], c[2], 1);
-		R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, polygonelement3s, 0, 0);
+		GL_Color(c[0] - 1, c[1] - 1, c[2] - 1, 1);
+		R_Mesh_PrepareVertices_Generic_Arrays(3, blendvertex3f, NULL, NULL);
+		R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 	}
 }
 

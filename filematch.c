@@ -1,4 +1,10 @@
 
+#ifdef WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#endif
+
 #include "quakedef.h"
 
 // LordHavoc: some portable directory listing code I wrote for lmp2pcx, now used in darkplaces to load id1/*.pak and such...
@@ -8,6 +14,8 @@ int matchpattern(const char *in, const char *pattern, int caseinsensitive)
 	return matchpattern_with_separator(in, pattern, caseinsensitive, "/\\:", false);
 }
 
+// wildcard_least_one: if true * matches 1 or more characters
+//                     if false * matches 0 or more characters
 int matchpattern_with_separator(const char *in, const char *pattern, int caseinsensitive, const char *separators, qboolean wildcard_least_one)
 {
 	int c1, c2;
@@ -25,10 +33,11 @@ int matchpattern_with_separator(const char *in, const char *pattern, int caseins
 			break;
 		case '*': // match anything until following string
 			if(wildcard_least_one)
+			{
 				if (*in == 0 || strchr(separators, *in))
 					return 0; // no match
-			if (!*in)
-				return 1; // match
+				in++;
+			}
 			pattern++;
 			while (*in)
 			{
@@ -138,7 +147,6 @@ static void adddirentry(stringlist_t *list, const char *path, const char *name)
 	}
 }
 #ifdef WIN32
-#include <windows.h>
 void listdirectory(stringlist_t *list, const char *basepath, const char *path)
 {
 	int i;
@@ -164,7 +172,6 @@ void listdirectory(stringlist_t *list, const char *basepath, const char *path)
 				*c += 'a' - 'A';
 }
 #else
-#include <dirent.h>
 void listdirectory(stringlist_t *list, const char *basepath, const char *path)
 {
 	char fullpath[MAX_OSPATH];

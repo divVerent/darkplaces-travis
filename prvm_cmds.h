@@ -359,12 +359,19 @@ void VM_drawsetcliparea(void);
 void VM_drawresetcliparea(void);
 void VM_getimagesize(void);
 
+void VM_findfont(void);
+void VM_loadfont(void);
+
 void VM_makevectors (void);
 void VM_vectorvectors (void);
 
 void VM_keynumtostring (void);
+void VM_getkeybind (void);
 void VM_findkeysforcommand (void);
 void VM_stringtokeynum (void);
+void VM_setkeybind (void);
+void VM_getbindmaps (void);
+void VM_setbindmaps (void);
 
 void VM_cin_open( void );
 void VM_cin_close( void );
@@ -447,6 +454,10 @@ void VM_cvar_description(void);
 
 void VM_CL_getextresponse (void);
 void VM_SV_getextresponse (void);
+
+// Common functions between menu.dat and clsprogs
+void VM_CL_isdemo (void);
+void VM_CL_videoplaying (void);
 
 void VM_isfunction(void);
 void VM_callfunction(void);

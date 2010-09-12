@@ -464,7 +464,11 @@ static void Cmd_Exec_f (void)
 
 	filename = Cmd_Argv(1);
 	if (!strcmp(filename, "config.cfg"))
+	{
 		filename = CONFIGFILENAME;
+		if (COM_CheckParm("-noconfig"))
+			return; // don't execute config.cfg
+	}
 
 	f = (char *)FS_LoadFile (filename, tempmempool, false, NULL);
 	if (!f)
@@ -853,6 +857,7 @@ static const char *Cmd_GetCvarValue(const char *var, size_t varlen, cmdalias_t *
 	static char varval[MAX_INPUTLINE];
 	const char *varstr;
 	char *varfunc;
+static char asis[] = "asis"; // just to suppress const char warnings
 
 	if(varlen >= MAX_INPUTLINE)
 		varlen = MAX_INPUTLINE - 1;
@@ -883,7 +888,7 @@ static const char *Cmd_GetCvarValue(const char *var, size_t varlen, cmdalias_t *
 		varstr = Cmd_GetDirectCvarValue(varname, alias, &is_multiple);
 		if(is_multiple)
 			if(!varfunc)
-				varfunc = "asis";
+				varfunc = asis;
 	}
 
 	if(!varstr)
@@ -1107,15 +1112,11 @@ static void Cmd_Apropos_f(void)
 	cvar_t *cvar;
 	cmdalias_t *alias;
 	const char *partial;
-	size_t len;
 	int count;
 	qboolean ispattern;
 
 	if (Cmd_Argc() > 1)
-	{
 		partial = Cmd_Args();
-		len = strlen(partial);
-	}
 	else
 	{
 		Con_Printf("usage: apropos <string>\n");
@@ -1124,10 +1125,7 @@ static void Cmd_Apropos_f(void)
 
 	ispattern = partial && (strchr(partial, '*') || strchr(partial, '?'));
 	if(!ispattern)
-	{
 		partial = va("*%s*", partial);
-		len += 2;
-	}
 
 	count = 0;
 	for (cvar = cvar_vars; cvar; cvar = cvar->next)
@@ -1148,10 +1146,11 @@ static void Cmd_Apropos_f(void)
 	}
 	for (alias = cmd_alias; alias; alias = alias->next)
 	{
+		// procede here a bit differently as an alias value always got a final \n
 		if (!matchpattern_with_separator(alias->name, partial, true, "", false))
-		if (!matchpattern_with_separator(alias->value, partial, true, "", false))
+		if (!matchpattern_with_separator(alias->value, partial, true, "\n", false)) // when \n is as separator wildcards don't match it
 			continue;
-		Con_Printf("alias ^5%s^7: %s", alias->name, alias->value);
+		Con_Printf("alias ^5%s^7: %s", alias->name, alias->value); // do not print an extra \n
 		count++;
 	}
 	Con_Printf("%i result%s\n\n", count, (count > 1) ? "s" : "");
@@ -1185,6 +1184,7 @@ void Cmd_Init_Commands (void)
 	Cmd_AddCommand ("wait", Cmd_Wait_f, "make script execution wait for next rendered frame");
 	Cmd_AddCommand ("set", Cvar_Set_f, "create or change the value of a console variable");
 	Cmd_AddCommand ("seta", Cvar_SetA_f, "create or change the value of a console variable that will be saved to config.cfg");
+	Cmd_AddCommand ("unset", Cvar_Del_f, "delete a cvar (does not work for static ones like _cl_name, or read-only ones)");
 #ifdef FILLALLCVARSWITHRUBBISH
 	Cmd_AddCommand ("fillallcvarswithrubbish", Cvar_FillAll_f, "fill all cvars with a specified number of characters to provoke buffer overruns");
 #endif /* FILLALLCVARSWITHRUBBISH */

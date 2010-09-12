@@ -44,6 +44,7 @@ typedef struct prvm_stack_s
 {
 	int				s;
 	mfunction_t		*f;
+	double			tprofile_acc;
 	double			profile_acc;
 	double			builtinsprofile_acc;
 } prvm_stack_t;
@@ -187,9 +188,9 @@ typedef struct prvm_prog_fieldoffsets_s
 	int dimension_hit; // ssqc / csqc
 	int dimension_solid; // ssqc / csqc
 	int disableclientprediction; // ssqc
+	int discardabledemo; // ssqc
 	int dphitcontentsmask; // ssqc / csqc
 	int drawonlytoclient; // ssqc
-	int effects; // ssqc / csqc
 	int exteriormodeltoclient; // ssqc
 	int fatness; // ssqc / csqc
 	int forceshader; // csqc
@@ -268,6 +269,11 @@ typedef struct prvm_prog_fieldoffsets_s
 	int movedir; // ssqc / csqc (physics)
 
 	int camera_transform; // csqc (warpzones)
+
+	int userwavefunc_param0; // csqc (userwavefunc)
+	int userwavefunc_param1; // csqc (userwavefunc)
+	int userwavefunc_param2; // csqc (userwavefunc)
+	int userwavefunc_param3; // csqc (userwavefunc)
 }
 prvm_prog_fieldoffsets_t;
 
@@ -317,6 +323,11 @@ typedef struct prvm_prog_globaloffsets_s
 	int gettaginfo_right; // ssqc / csqc
 	int gettaginfo_up; // ssqc / csqc
 	int transparent_offset; // csqc
+
+	int particles_alphamin; // csqc
+	int particles_alphamax; // csqc
+	int particles_colormin; // csqc
+	int particles_colormax; // csqc
 }
 prvm_prog_globaloffsets_t;
 
@@ -474,12 +485,12 @@ typedef struct prvm_prog_s
 	qboolean			allowworldwrites;
 
 	// name of the prog, e.g. "Server", "Client" or "Menu" (used for text output)
-	char				*name; // [INIT]
+	const char			*name; // [INIT]
 
 	// flag - used to store general flags like PRVM_GE_SELF, etc.
 	int				flag;
 
-	char				*extensionstring; // [INIT]
+	const char			*extensionstring; // [INIT]
 
 	qboolean			loadintoworld; // [INIT]
 
@@ -544,8 +555,8 @@ extern const int vm_sv_numbuiltins;
 extern const int vm_cl_numbuiltins;
 extern const int vm_m_numbuiltins;
 
-extern char * vm_sv_extensions; // client also uses this
-extern char * vm_m_extensions;
+extern const char * vm_sv_extensions; // client also uses this
+extern const char * vm_m_extensions;
 
 void VM_SV_Cmd_Init(void);
 void VM_SV_Cmd_Reset(void);
@@ -580,7 +591,7 @@ void *_PRVM_Alloc (size_t buffersize, const char *filename, int fileline);
 void _PRVM_Free (void *buffer, const char *filename, int fileline);
 void _PRVM_FreeAll (const char *filename, int fileline);
 
-void PRVM_Profile (int maxfunctions, int mininstructions, int sortby);
+void PRVM_Profile (int maxfunctions, double mintime, int sortby);
 void PRVM_Profile_f (void);
 void PRVM_ChildProfile_f (void);
 void PRVM_CallProfile_f (void);
@@ -619,7 +630,7 @@ void PRVM_ED_ParseGlobals (const char *data);
 
 void PRVM_ED_LoadFromFile (const char *data);
 
-unsigned int PRVM_EDICT_NUM_ERROR(unsigned int n, char *filename, int fileline);
+unsigned int PRVM_EDICT_NUM_ERROR(unsigned int n, const char *filename, int fileline);
 #define	PRVM_EDICT(n) (((unsigned)(n) < (unsigned int)prog->max_edicts) ? (unsigned int)(n) : PRVM_EDICT_NUM_ERROR((unsigned int)(n), __FILE__, __LINE__))
 #define	PRVM_EDICT_NUM(n) (prog->edicts + PRVM_EDICT(n))
 
@@ -702,7 +713,7 @@ Load a program with LoadProgs
 */
 void PRVM_InitProg(int prognr);
 // LoadProgs expects to be called right after InitProg
-void PRVM_LoadProgs (const char *filename, int numrequiredfunc, char **required_func, int numrequiredfields, prvm_required_field_t *required_field, int numrequiredglobals, char **required_global);
+void PRVM_LoadProgs (const char *filename, int numrequiredfunc, const char **required_func, int numrequiredfields, prvm_required_field_t *required_field, int numrequiredglobals, char **required_global);
 void PRVM_ResetProg(void);
 
 qboolean PRVM_ProgLoaded(int prognr);

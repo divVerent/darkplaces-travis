@@ -39,7 +39,6 @@ static void				(*qpng_read_info)			(void*, void*);
 static void				(*qpng_set_compression_level)	(void*, int);
 static void				(*qpng_set_filter)			(void*, int, int);
 static void				(*qpng_set_expand)			(void*);
-static void				(*qpng_set_gray_1_2_4_to_8)	(void*);
 static void				(*qpng_set_palette_to_rgb)	(void*);
 static void				(*qpng_set_tRNS_to_alpha)	(void*);
 static void				(*qpng_set_gray_to_rgb)		(void*);
@@ -60,7 +59,7 @@ static unsigned int		(*qpng_get_rowbytes)		(void*, void*);
 static unsigned char	(*qpng_get_channels)		(void*, void*);
 static unsigned char	(*qpng_get_bit_depth)		(void*, void*);
 static unsigned int		(*qpng_get_IHDR)			(void*, void*, unsigned long*, unsigned long*, int *, int *, int *, int *, int *);
-static char*			(*qpng_get_libpng_ver)		(void*);
+static unsigned int			(*qpng_access_version_number)		(void); // FIXME is this return type right? It is a png_uint_32 in libpng
 static void				(*qpng_write_info)			(void*, void*);
 static void				(*qpng_write_row)			(void*, unsigned char*);
 static void				(*qpng_write_end)			(void*, void*);
@@ -76,7 +75,6 @@ static dllfunction_t pngfuncs[] =
 	{"png_set_compression_level",	(void **) &qpng_set_compression_level},
 	{"png_set_filter",			(void **) &qpng_set_filter},
 	{"png_set_expand",			(void **) &qpng_set_expand},
-	{"png_set_gray_1_2_4_to_8",	(void **) &qpng_set_gray_1_2_4_to_8},
 	{"png_set_palette_to_rgb",	(void **) &qpng_set_palette_to_rgb},
 	{"png_set_tRNS_to_alpha",	(void **) &qpng_set_tRNS_to_alpha},
 	{"png_set_gray_to_rgb",		(void **) &qpng_set_gray_to_rgb},
@@ -97,7 +95,7 @@ static dllfunction_t pngfuncs[] =
 	{"png_get_channels",		(void **) &qpng_get_channels},
 	{"png_get_bit_depth",		(void **) &qpng_get_bit_depth},
 	{"png_get_IHDR",			(void **) &qpng_get_IHDR},
-	{"png_get_libpng_ver",		(void **) &qpng_get_libpng_ver},
+	{"png_access_version_number",		(void **) &qpng_access_version_number},
 	{"png_write_info",			(void **) &qpng_write_info},
 	{"png_write_row",			(void **) &qpng_write_row},
 	{"png_write_end",			(void **) &qpng_write_end},
@@ -128,10 +126,14 @@ qboolean PNG_OpenLibrary (void)
 	const char* dllnames [] =
 	{
 #if WIN32
+		"libpng14-14.dll",
+		"libpng14.dll",
 		"libpng12.dll",
 #elif defined(MACOSX)
+		"libpng14.14.dylib",
 		"libpng12.0.dylib",
 #else
+		"libpng14.so.14", // WTF libtool guidelines anyone?
 		"libpng12.so.0",
 		"libpng.so", // FreeBSD
 #endif
@@ -167,7 +169,8 @@ void PNG_CloseLibrary (void)
 =================================================================
 */
 
-#define PNG_LIBPNG_VER_STRING "1.2.4"
+#define PNG_LIBPNG_VER_STRING_12 "1.2.4"
+#define PNG_LIBPNG_VER_STRING_14 "1.4.0"
 
 #define PNG_COLOR_MASK_PALETTE    1
 #define PNG_COLOR_MASK_COLOR      2
@@ -253,7 +256,7 @@ void PNG_warning_fn(void *png, const char *message)
 extern int	image_width;
 extern int	image_height;
 
-unsigned char *PNG_LoadImage_BGRA (const unsigned char *raw, int filesize)
+unsigned char *PNG_LoadImage_BGRA (const unsigned char *raw, int filesize, int *miplevel)
 {
 	unsigned int c;
 	unsigned int	y;
@@ -269,7 +272,10 @@ unsigned char *PNG_LoadImage_BGRA (const unsigned char *raw, int filesize)
 
 	if(qpng_sig_cmp(raw, 0, filesize))
 		return NULL;
-	png = (void *)qpng_create_read_struct(PNG_LIBPNG_VER_STRING, 0, PNG_error_fn, PNG_warning_fn);
+	png = (void *)qpng_create_read_struct(
+		(qpng_access_version_number() / 100 == 102) ? PNG_LIBPNG_VER_STRING_12 : PNG_LIBPNG_VER_STRING_14, // nasty hack to support both libpng12 and libpng14
+		0, PNG_error_fn, PNG_warning_fn
+	);
 	if(!png)
 		return NULL;
 
@@ -280,7 +286,9 @@ unsigned char *PNG_LoadImage_BGRA (const unsigned char *raw, int filesize)
 	// NOTE: this relies on jmp_buf being the first thing in the png structure
 	// created by libpng! (this is correct for libpng 1.2.x)
 #ifdef __cplusplus
-#if defined(MACOSX) || defined(WIN32)
+#ifdef WIN64
+	if (setjmp((_JBTYPE *)png))
+#elif defined(MACOSX) || defined(WIN32)
 	if (setjmp((int *)png))
 #else
 	if (setjmp((__jmp_buf_tag *)png))
@@ -339,12 +347,7 @@ unsigned char *PNG_LoadImage_BGRA (const unsigned char *raw, int filesize)
 	if (my_png.ColorType == PNG_COLOR_TYPE_PALETTE)
 		qpng_set_palette_to_rgb(png);
 	if (my_png.ColorType == PNG_COLOR_TYPE_GRAY || my_png.ColorType == PNG_COLOR_TYPE_GRAY_ALPHA)
-	{
 		qpng_set_gray_to_rgb(png);
-		if (my_png.BitDepth < 8)
-			qpng_set_gray_1_2_4_to_8(png);
-	}
-
 	if (qpng_get_valid(png, pnginfo, PNG_INFO_tRNS))
 		qpng_set_tRNS_to_alpha(png);
 	if (my_png.BitDepth == 8 && !(my_png.ColorType  & PNG_COLOR_MASK_ALPHA))
@@ -443,7 +446,7 @@ PNG_SaveImage_preflipped
 Save a preflipped PNG image to a file
 ====================
 */
-qboolean PNG_SaveImage_preflipped (const char *filename, int width, int height, unsigned char *data)
+qboolean PNG_SaveImage_preflipped (const char *filename, int width, int height, qboolean has_alpha, unsigned char *data)
 {
 	unsigned int offset, linesize;
 	qfile_t* file = NULL;
@@ -458,7 +461,10 @@ qboolean PNG_SaveImage_preflipped (const char *filename, int width, int height, 
 		return false;
 	}
 
-	png = (void *)qpng_create_write_struct(PNG_LIBPNG_VER_STRING, 0, PNG_error_fn, PNG_warning_fn);
+	png = (void *)qpng_create_write_struct( 
+		(qpng_access_version_number() / 100 == 102) ? PNG_LIBPNG_VER_STRING_12 : PNG_LIBPNG_VER_STRING_14, // nasty hack to support both libpng12 and libpng14
+		0, PNG_error_fn, PNG_warning_fn
+	);
 	if(!png)
 		return false;
 	pnginfo = (void *)qpng_create_info_struct(png);
@@ -475,7 +481,9 @@ qboolean PNG_SaveImage_preflipped (const char *filename, int width, int height, 
 	// NOTE: this relies on jmp_buf being the first thing in the png structure
 	// created by libpng! (this is correct for libpng 1.2.x)
 #ifdef __cplusplus
-#if defined(MACOSX) || defined(WIN32)
+#ifdef WIN64
+	if (setjmp((_JBTYPE *)png))
+#elif defined(MACOSX) || defined(WIN32)
 	if (setjmp((int *)png))
 #else
 	if (setjmp((__jmp_buf_tag *)png))
@@ -497,8 +505,7 @@ qboolean PNG_SaveImage_preflipped (const char *filename, int width, int height, 
 
 	//qpng_set_compression_level(png, Z_BEST_COMPRESSION);
 	qpng_set_compression_level(png, Z_BEST_SPEED);
-	qpng_set_IHDR(png, pnginfo, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_ADAM7, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-	//qpng_set_IHDR(png, pnginfo, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+	qpng_set_IHDR(png, pnginfo, width, height, 8, has_alpha ? PNG_COLOR_TYPE_RGB_ALPHA : PNG_COLOR_TYPE_RGB, PNG_INTERLACE_ADAM7, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
 	qpng_set_filter(png, 0, PNG_NO_FILTERS);
 	qpng_write_info(png, pnginfo);
 	qpng_set_packing(png);
@@ -506,7 +513,7 @@ qboolean PNG_SaveImage_preflipped (const char *filename, int width, int height, 
 
 	passes = qpng_set_interlace_handling(png);
 
-	linesize = width * 3;
+	linesize = width * (has_alpha ? 4 : 3);
 	offset = linesize * (height - 1);
 	for(i = 0; i < passes; ++i)
 		for(j = 0; j < height; ++j)

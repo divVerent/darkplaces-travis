@@ -109,13 +109,13 @@ int R_LoadSkyBox(void)
 		success = 0;
 		for (i=0; i<6; i++)
 		{
-			if (dpsnprintf(name, sizeof(name), "%s_%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer)))
+			if (dpsnprintf(name, sizeof(name), "%s_%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer != 0, NULL)))
 			{
-				if (dpsnprintf(name, sizeof(name), "%s%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer)))
+				if (dpsnprintf(name, sizeof(name), "%s%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer != 0, NULL)))
 				{
-					if (dpsnprintf(name, sizeof(name), "env/%s%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer)))
+					if (dpsnprintf(name, sizeof(name), "env/%s%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer != 0, NULL)))
 					{
-						if (dpsnprintf(name, sizeof(name), "gfx/env/%s%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer)))
+						if (dpsnprintf(name, sizeof(name), "gfx/env/%s%s", skyname, suffix[j][i].suffix) < 0 || !(image_buffer = loadimagepixelsbgra(name, false, false, r_texture_convertsRGB_skybox.integer != 0, NULL)))
 							continue;
 					}
 				}
@@ -454,6 +454,6 @@ void R_Sky_Init(void)
 	Cvar_RegisterVariable (&r_skyscroll2);
 	memset(&skyboxskinframe, 0, sizeof(skyboxskinframe));
 	skyname[0] = 0;
-	R_RegisterModule("R_Sky", r_sky_start, r_sky_shutdown, r_sky_newmap);
+	R_RegisterModule("R_Sky", r_sky_start, r_sky_shutdown, r_sky_newmap, NULL, NULL);
 }
 

@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #ifdef WIN32
 #include <windows.h>
+#include <winbase.h>
 #else
 #include <unistd.h>
 #endif
@@ -81,6 +82,8 @@ static memclump_t *clumpchain = NULL;
 
 cvar_t developer_memory = {0, "developer_memory", "0", "prints debugging information about memory allocations"};
 cvar_t developer_memorydebug = {0, "developer_memorydebug", "0", "enables memory corruption checks (very slow)"};
+cvar_t sys_memsize_physical = {CVAR_READONLY, "sys_memsize_physical", "", "physical memory size in MB (or empty if unknown)"};
+cvar_t sys_memsize_virtual = {CVAR_READONLY, "sys_memsize_virtual", "", "virtual memory size in MB (or empty if unknown)"};
 
 static mempool_t *poolchain = NULL;
 
@@ -329,7 +332,7 @@ void *_Mem_Alloc(mempool_t *pool, void *olddata, size_t size, size_t alignment, 
 		Sys_Error("Mem_Alloc: pool == NULL (alloc at %s:%i)", filename, fileline);
 	if (developer_memory.integer)
 		Con_DPrintf("Mem_Alloc: pool %s, file %s:%i, size %i bytes\n", pool->name, filename, fileline, (int)size);
-	//if (developer.integer && developer_memorydebug.integer)
+	//if (developer.integer > 0 && developer_memorydebug.integer)
 	//	_Mem_CheckSentinelsGlobal(filename, fileline);
 	pool->totalsize += size;
 	realsize = alignment + sizeof(memheader_t) + size + sizeof(sentinel2);
@@ -392,9 +395,9 @@ static void _Mem_FreeBlock(memheader_t *mem, const char *filename, int fileline)
 	sentinel1 = MEMHEADER_SENTINEL_FOR_ADDRESS(&mem->sentinel);
 	sentinel2 = MEMHEADER_SENTINEL_FOR_ADDRESS((unsigned char *) mem + sizeof(memheader_t) + mem->size);
 	if (mem->sentinel != sentinel1)
-		Sys_Error("Mem_Free: trashed header sentinel 1 (alloc at %s:%i, free at %s:%i)", mem->filename, mem->fileline, filename, fileline);
+		Sys_Error("Mem_Free: trashed head sentinel (alloc at %s:%i, free at %s:%i)", mem->filename, mem->fileline, filename, fileline);
 	if (memcmp((unsigned char *) mem + sizeof(memheader_t) + mem->size, &sentinel2, sizeof(sentinel2)))
-		Sys_Error("Mem_Free: trashed header sentinel 2 (alloc at %s:%i, free at %s:%i)", mem->filename, mem->fileline, filename, fileline);
+		Sys_Error("Mem_Free: trashed tail sentinel (alloc at %s:%i, free at %s:%i)", mem->filename, mem->fileline, filename, fileline);
 
 	pool = mem->pool;
 	if (developer_memory.integer)
@@ -516,9 +519,9 @@ void _Mem_EmptyPool(mempool_t *pool, const char *filename, int fileline)
 	if (pool == NULL)
 		Sys_Error("Mem_EmptyPool: pool == NULL (emptypool at %s:%i)", filename, fileline);
 	if (pool->sentinel1 != MEMHEADER_SENTINEL_FOR_ADDRESS(&pool->sentinel1))
-		Sys_Error("Mem_EmptyPool: trashed pool sentinel 2 (allocpool at %s:%i, emptypool at %s:%i)", pool->filename, pool->fileline, filename, fileline);
-	if (pool->sentinel2 != MEMHEADER_SENTINEL_FOR_ADDRESS(&pool->sentinel2))
 		Sys_Error("Mem_EmptyPool: trashed pool sentinel 1 (allocpool at %s:%i, emptypool at %s:%i)", pool->filename, pool->fileline, filename, fileline);
+	if (pool->sentinel2 != MEMHEADER_SENTINEL_FOR_ADDRESS(&pool->sentinel2))
+		Sys_Error("Mem_EmptyPool: trashed pool sentinel 2 (allocpool at %s:%i, emptypool at %s:%i)", pool->filename, pool->fileline, filename, fileline);
 
 	// free memory owned by the pool
 	while (pool->chain)
@@ -544,9 +547,9 @@ void _Mem_CheckSentinels(void *data, const char *filename, int fileline)
 	sentinel1 = MEMHEADER_SENTINEL_FOR_ADDRESS(&mem->sentinel);
 	sentinel2 = MEMHEADER_SENTINEL_FOR_ADDRESS((unsigned char *) mem + sizeof(memheader_t) + mem->size);
 	if (mem->sentinel != sentinel1)
-		Sys_Error("Mem_Free: trashed header sentinel 1 (alloc at %s:%i, sentinel check at %s:%i)", mem->filename, mem->fileline, filename, fileline);
+		Sys_Error("Mem_Free: trashed head sentinel (alloc at %s:%i, sentinel check at %s:%i)", mem->filename, mem->fileline, filename, fileline);
 	if (memcmp((unsigned char *) mem + sizeof(memheader_t) + mem->size, &sentinel2, sizeof(sentinel2)))
-		Sys_Error("Mem_Free: trashed header sentinel 2 (alloc at %s:%i, sentinel check at %s:%i)", mem->filename, mem->fileline, filename, fileline);
+		Sys_Error("Mem_Free: trashed tail sentinel (alloc at %s:%i, sentinel check at %s:%i)", mem->filename, mem->fileline, filename, fileline);
 }
 
 #if MEMCLUMPING
@@ -857,7 +860,7 @@ void Memory_Init (void)
 {
 	static union {unsigned short s;unsigned char b[2];} u;
 	u.s = 0x100;
-	mem_bigendian = u.b[0];
+	mem_bigendian = u.b[0] != 0;
 
 	sentinel_seed = rand();
 	poolchain = NULL;
@@ -877,5 +880,68 @@ void Memory_Init_Commands (void)
 	Cmd_AddCommand ("memlist", MemList_f, "prints memory pool information (or if used as memlist 5 lists individual allocations of 5K or larger, 0 lists all allocations)");
 	Cvar_RegisterVariable (&developer_memory);
 	Cvar_RegisterVariable (&developer_memorydebug);
+	Cvar_RegisterVariable (&sys_memsize_physical);
+	Cvar_RegisterVariable (&sys_memsize_virtual);
+
+#if defined(WIN32)
+#ifdef _WIN64
+	{
+		MEMORYSTATUSEX status;
+		// first guess
+		Cvar_SetValueQuick(&sys_memsize_virtual, 8388608);
+		// then improve
+		status.dwLength = sizeof(status);
+		if(GlobalMemoryStatusEx(&status))
+		{
+			Cvar_SetValueQuick(&sys_memsize_physical, status.ullTotalPhys / 1048576.0);
+			Cvar_SetValueQuick(&sys_memsize_virtual, min(sys_memsize_virtual.value, status.ullTotalVirtual / 1048576.0));
+		}
+	}
+#else
+	{
+		MEMORYSTATUS status;
+		// first guess
+		Cvar_SetValueQuick(&sys_memsize_virtual, 2048);
+		// then improve
+		status.dwLength = sizeof(status);
+		GlobalMemoryStatus(&status);
+		Cvar_SetValueQuick(&sys_memsize_physical, status.dwTotalPhys / 1048576.0);
+		Cvar_SetValueQuick(&sys_memsize_virtual, min(sys_memsize_virtual.value, status.dwTotalVirtual / 1048576.0));
+	}
+#endif
+#else
+	{
+		// first guess
+		Cvar_SetValueQuick(&sys_memsize_virtual, (sizeof(void*) == 4) ? 2048 : 268435456);
+		// then improve
+		{
+			// Linux, and BSD with linprocfs mounted
+			FILE *f = fopen("/proc/meminfo", "r");
+			if(f)
+			{
+				static char buf[1024];
+				while(fgets(buf, sizeof(buf), f))
+				{
+					const char *p = buf;
+					if(!COM_ParseToken_Console(&p))
+						continue;
+					if(!strcmp(com_token, "MemTotal:"))
+					{
+						if(!COM_ParseToken_Console(&p))
+							continue;
+						Cvar_SetValueQuick(&sys_memsize_physical, atof(com_token) / 1024.0);
+					}
+					if(!strcmp(com_token, "SwapTotal:"))
+					{
+						if(!COM_ParseToken_Console(&p))
+							continue;
+						Cvar_SetValueQuick(&sys_memsize_virtual, min(sys_memsize_virtual.value , atof(com_token) / 1024.0 + sys_memsize_physical.value));
+					}
+				}
+				fclose(f);
+			}
+		}
+	}
+#endif
 }
 

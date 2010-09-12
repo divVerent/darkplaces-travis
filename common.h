@@ -134,7 +134,7 @@ typedef enum protocolversion_e
 	PROTOCOL_QUAKEWORLD, ///< quakeworld protocol
 	PROTOCOL_NEHAHRABJP, ///< same as QUAKEDP but with 16bit modelindex
 	PROTOCOL_NEHAHRABJP2, ///< same as NEHAHRABJP but with 16bit soundindex
-	PROTOCOL_NEHAHRABJP3, ///< same as NEHAHRABJP2 but with some changes
+	PROTOCOL_NEHAHRABJP3 ///< same as NEHAHRABJP2 but with some changes
 }
 protocolversion_t;
 
@@ -272,6 +272,8 @@ typedef enum gamemode_e
 	GAME_PROPHECY,
 	GAME_BLOODOMNICIDE,
 	GAME_STEELSTORM, // added by motorsep
+	GAME_STRAPBOMB, // added by motorsep for Urre
+	GAME_XONOTIC,
 	GAME_COUNT
 }
 gamemode_t;
@@ -346,6 +348,9 @@ size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif  // #ifndef HAVE_STRLCPY
 
 void FindFraction(double val, int *num, int *denom, int denomMax);
+
+// decodes XPM file to XPM array (as if #include'd)
+char **XPM_DecodeString(const char *in);
 
 #endif
 

@@ -29,7 +29,6 @@ void Sbar_SortFrags (void);
 void CL_FindNonSolidLocation(const vec3_t in, vec3_t out, vec_t radius);
 void CSQC_RelinkAllEntities (int drawmask);
 void CSQC_RelinkCSQCEntities (void);
-const char *Key_GetBind (int key);
 
 // #1 void(vector ang) makevectors
 static void VM_CL_makevectors (void)
@@ -724,7 +723,7 @@ void VM_CL_R_ClearScene (void)
 	r_refdef.view.isoverlay = false;
 	// FIXME: restore cl.csqc_origin
 	// FIXME: restore cl.csqc_angles
-	cl.csqc_vidvars.drawworld = true;
+	cl.csqc_vidvars.drawworld = r_drawworld.integer != 0;
 	cl.csqc_vidvars.drawenginesbar = false;
 	cl.csqc_vidvars.drawcrosshair = false;
 }
@@ -774,39 +773,142 @@ void VM_CL_R_AddEntity (void)
 }
 
 //#303 float(float property, ...) setproperty (EXT_CSQC)
+//#303 float(float property) getproperty
+//#303 vector(float property) getpropertyvec
+// VorteX: make this function be able to return previously set property if new value is not given
 void VM_CL_R_SetView (void)
 {
 	int		c;
 	float	*f;
 	float	k;
 
-	VM_SAFEPARMCOUNTRANGE(2, 3, VM_CL_R_SetView);
+	VM_SAFEPARMCOUNTRANGE(1, 3, VM_CL_R_SetView);
 
 	c = (int)PRVM_G_FLOAT(OFS_PARM0);
+
+	// return value?
+	if (prog->argc < 2)
+	{
+		switch(c)
+		{
+		case VF_MIN:
+			VectorSet(PRVM_G_VECTOR(OFS_RETURN), r_refdef.view.x, r_refdef.view.y, 0);
+			break;
+		case VF_MIN_X:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.x;
+			break;
+		case VF_MIN_Y:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.y;
+			break;
+		case VF_SIZE:
+			VectorSet(PRVM_G_VECTOR(OFS_RETURN), r_refdef.view.width, r_refdef.view.height, 0);
+			break;
+		case VF_SIZE_X:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.width;
+			break;
+		case VF_SIZE_Y:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.height;
+			break;
+		case VF_VIEWPORT:
+			VM_Warning("VM_CL_R_GetView : VF_VIEWPORT can't be retrieved, use VF_MIN/VF_SIZE instead\n");
+			break;
+		case VF_FOV:
+			VectorSet(PRVM_G_VECTOR(OFS_RETURN), r_refdef.view.ortho_x, r_refdef.view.ortho_y, 0);
+			break;
+		case VF_FOVX:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.ortho_x;
+			break;
+		case VF_FOVY:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.ortho_y;
+			break;
+		case VF_ORIGIN:
+			VectorCopy(cl.csqc_origin, PRVM_G_VECTOR(OFS_RETURN));
+			break;
+		case VF_ORIGIN_X:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_origin[0];
+			break;
+		case VF_ORIGIN_Y:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_origin[1];
+			break;
+		case VF_ORIGIN_Z:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_origin[2];
+			break;
+		case VF_ANGLES:
+			VectorCopy(cl.csqc_angles, PRVM_G_VECTOR(OFS_RETURN));
+			break;
+		case VF_ANGLES_X:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_angles[0];
+			break;
+		case VF_ANGLES_Y:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_angles[1];
+			break;
+		case VF_ANGLES_Z:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_angles[2];
+			break;
+		case VF_DRAWWORLD:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_vidvars.drawworld;
+			break;
+		case VF_DRAWENGINESBAR:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_vidvars.drawenginesbar;
+			break;
+		case VF_DRAWCROSSHAIR:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.csqc_vidvars.drawcrosshair;
+			break;
+		case VF_CL_VIEWANGLES:
+			VectorCopy(cl.viewangles, PRVM_G_VECTOR(OFS_RETURN));;
+			break;
+		case VF_CL_VIEWANGLES_X:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.viewangles[0];
+			break;
+		case VF_CL_VIEWANGLES_Y:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.viewangles[1];
+			break;
+		case VF_CL_VIEWANGLES_Z:
+			PRVM_G_FLOAT(OFS_RETURN) = cl.viewangles[2];
+			break;
+		case VF_PERSPECTIVE:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.useperspective;
+			break;
+		case VF_CLEARSCREEN:
+			PRVM_G_FLOAT(OFS_RETURN) = r_refdef.view.isoverlay;
+			break;
+		default:
+			PRVM_G_FLOAT(OFS_RETURN) = 0;
+			VM_Warning("VM_CL_R_GetView : unknown parm %i\n", c);
+			return;
+		}
+		return;
+	}
+
 	f = PRVM_G_VECTOR(OFS_PARM1);
 	k = PRVM_G_FLOAT(OFS_PARM1);
-
 	switch(c)
 	{
 	case VF_MIN:
 		r_refdef.view.x = (int)(f[0]);
 		r_refdef.view.y = (int)(f[1]);
+		DrawQ_RecalcView();
 		break;
 	case VF_MIN_X:
 		r_refdef.view.x = (int)(k);
+		DrawQ_RecalcView();
 		break;
 	case VF_MIN_Y:
 		r_refdef.view.y = (int)(k);
+		DrawQ_RecalcView();
 		break;
 	case VF_SIZE:
 		r_refdef.view.width = (int)(f[0]);
 		r_refdef.view.height = (int)(f[1]);
+		DrawQ_RecalcView();
 		break;
 	case VF_SIZE_X:
 		r_refdef.view.width = (int)(k);
+		DrawQ_RecalcView();
 		break;
 	case VF_SIZE_Y:
 		r_refdef.view.height = (int)(k);
+		DrawQ_RecalcView();
 		break;
 	case VF_VIEWPORT:
 		r_refdef.view.x = (int)(f[0]);
@@ -814,6 +916,7 @@ void VM_CL_R_SetView (void)
 		f = PRVM_G_VECTOR(OFS_PARM2);
 		r_refdef.view.width = (int)(f[0]);
 		r_refdef.view.height = (int)(f[1]);
+		DrawQ_RecalcView();
 		break;
 	case VF_FOV:
 		r_refdef.view.frustum_x = tan(f[0] * M_PI / 360.0);r_refdef.view.ortho_x = f[0];
@@ -858,7 +961,7 @@ void VM_CL_R_SetView (void)
 		CSQC_R_RecalcView();
 		break;
 	case VF_DRAWWORLD:
-		cl.csqc_vidvars.drawworld = k != 0;
+		cl.csqc_vidvars.drawworld = ((k != 0) && r_drawworld.integer);
 		break;
 	case VF_DRAWENGINESBAR:
 		cl.csqc_vidvars.drawenginesbar = k != 0;
@@ -955,12 +1058,12 @@ static void VM_CL_unproject (void)
 
 	VM_SAFEPARMCOUNT(1, VM_CL_unproject);
 	f = PRVM_G_VECTOR(OFS_PARM0);
-	if(v_flipped.integer)
-		f[0] = (2 * r_refdef.view.x + r_refdef.view.width) * (vid_conwidth.integer / (float) vid.width) - f[0];
 	VectorSet(temp,
 		f[2],
-		(-1.0 + 2.0 * (f[0] / (vid_conwidth.integer / (float) vid.width) - r_refdef.view.x) / r_refdef.view.width) * f[2] * -r_refdef.view.frustum_x,
-		(-1.0 + 2.0 * (f[1] / (vid_conheight.integer / (float) vid.height) - r_refdef.view.y) / r_refdef.view.height) * f[2] * -r_refdef.view.frustum_y);
+		(-1.0 + 2.0 * (f[0] / vid_conwidth.integer)) * f[2] * -r_refdef.view.frustum_x,
+		(-1.0 + 2.0 * (f[1] / vid_conheight.integer)) * f[2] * -r_refdef.view.frustum_y);
+	if(v_flipped.integer)
+		temp[1] = -temp[1];
 	Matrix4x4_Transform(&r_refdef.view.matrix, temp, PRVM_G_VECTOR(OFS_RETURN));
 }
 
@@ -978,9 +1081,12 @@ static void VM_CL_project (void)
 	if(v_flipped.integer)
 		v[1] = -v[1];
 	VectorSet(PRVM_G_VECTOR(OFS_RETURN),
-		(vid_conwidth.integer / (float) vid.width) * (r_refdef.view.x + r_refdef.view.width*0.5*(1.0+v[1]/v[0]/-r_refdef.view.frustum_x)),
-		(vid_conheight.integer / (float) vid.height) * (r_refdef.view.y + r_refdef.view.height*0.5*(1.0+v[2]/v[0]/-r_refdef.view.frustum_y)),
+		vid_conwidth.integer * (0.5*(1.0+v[1]/v[0]/-r_refdef.view.frustum_x)),
+		vid_conheight.integer * (0.5*(1.0+v[2]/v[0]/-r_refdef.view.frustum_y)),
 		v[0]);
+	// explanation:
+	// after transforming, relative position to viewport (0..1) = 0.5 * (1 + v[2]/v[0]/-frustum_{x \or y})
+	// as 2D drawing honors the viewport too, to get the same pixel, we simply multiply this by conwidth/height
 }
 
 //#330 float(float stnum) getstatf (EXT_CSQC)
@@ -1129,22 +1235,67 @@ static void VM_CL_trailparticles (void)
 
 	if (i < 0)
 		return;
-	CL_ParticleEffect(i, VectorDistance(start, end), start, end, t->fields.client->velocity, t->fields.client->velocity, NULL, prog->argc >= 5 ? (int)PRVM_G_FLOAT(OFS_PARM4) : 0);
+	CL_ParticleEffect(i, 1, start, end, t->fields.client->velocity, t->fields.client->velocity, NULL, prog->argc >= 5 ? (int)PRVM_G_FLOAT(OFS_PARM4) : 0);
 }
 
 //#337 void(float effectnum, vector origin, vector dir, float count[, float color]) pointparticles (EXT_CSQC)
 static void VM_CL_pointparticles (void)
 {
-	int			i, n;
+	int			i;
+	float n;
 	float		*f, *v;
 	VM_SAFEPARMCOUNTRANGE(4, 5, VM_CL_pointparticles);
 	i = (int)PRVM_G_FLOAT(OFS_PARM0);
 	f = PRVM_G_VECTOR(OFS_PARM1);
 	v = PRVM_G_VECTOR(OFS_PARM2);
-	n = (int)PRVM_G_FLOAT(OFS_PARM3);
+	n = PRVM_G_FLOAT(OFS_PARM3);
 	if (i < 0)
 		return;
 	CL_ParticleEffect(i, n, f, f, v, v, NULL, prog->argc >= 5 ? (int)PRVM_G_FLOAT(OFS_PARM4) : 0);
+}
+
+//#502 void(float effectnum, entity own, vector origin_from, vector origin_to, vector dir_from, vector dir_to, float count, float extflags) boxparticles (DP_CSQC_BOXPARTICLES)
+static void VM_CL_boxparticles (void)
+{
+	int effectnum;
+	prvm_edict_t *own;
+	float *origin_from, *origin_to, *dir_from, *dir_to;
+	float count;
+	int flags;
+	float tintmins[4], tintmaxs[4];
+	prvm_eval_t *val;
+	VM_SAFEPARMCOUNTRANGE(7, 8, VM_CL_boxparticles);
+
+	effectnum = (int)PRVM_G_FLOAT(OFS_PARM0);
+	own = PRVM_G_EDICT(OFS_PARM1); // TODO find use for this
+	origin_from = PRVM_G_VECTOR(OFS_PARM2);
+	origin_to = PRVM_G_VECTOR(OFS_PARM3);
+	dir_from = PRVM_G_VECTOR(OFS_PARM4);
+	dir_to = PRVM_G_VECTOR(OFS_PARM5);
+	count = PRVM_G_FLOAT(OFS_PARM6);
+	if(prog->argc >= 8)
+		flags = PRVM_G_FLOAT(OFS_PARM7);
+	else
+		flags = 0;
+	Vector4Set(tintmins, 1, 1, 1, 1);
+	Vector4Set(tintmaxs, 1, 1, 1, 1);
+	if(flags & 1) // read alpha
+	{
+		if((val = PRVM_GLOBALFIELDVALUE(prog->globaloffsets.particles_alphamin)))
+			tintmins[3] = val->_float;
+		if((val = PRVM_GLOBALFIELDVALUE(prog->globaloffsets.particles_alphamax)))
+			tintmaxs[3] = val->_float;
+	}
+	if(flags & 2) // read color
+	{
+		if((val = PRVM_GLOBALFIELDVALUE(prog->globaloffsets.particles_colormin)))
+			VectorCopy(val->vector, tintmins);
+		if((val = PRVM_GLOBALFIELDVALUE(prog->globaloffsets.particles_colormax)))
+			VectorCopy(val->vector, tintmaxs);
+	}
+	if (effectnum < 0)
+		return;
+	CL_ParticleTrail(effectnum, count, origin_from, origin_to, dir_from, dir_to, NULL, 0, true, true, tintmins, tintmaxs);
 }
 
 //#531 void(float pause) setpause
@@ -1155,13 +1306,6 @@ static void VM_CL_setpause(void)
 		cl.csqc_paused = true;
 	else
 		cl.csqc_paused = false;
-}
-
-//#342 string(float keynum) getkeybind (EXT_CSQC)
-static void VM_CL_getkeybind (void)
-{
-	VM_SAFEPARMCOUNT(1, VM_CL_getkeybind);
-	PRVM_G_INT(OFS_RETURN) = PRVM_SetTempString(Key_GetBind((int)PRVM_G_FLOAT(OFS_PARM0)));
 }
 
 //#343 void(float usecursor) setcursormode (EXT_CSQC)
@@ -1282,13 +1426,6 @@ static void VM_CL_getplayerkey (void)
 	if(!t[0])
 		return;
 	PRVM_G_INT(OFS_RETURN) = PRVM_SetTempString(t);
-}
-
-//#349 float() isdemo (EXT_CSQC)
-static void VM_CL_isdemo (void)
-{
-	VM_SAFEPARMCOUNT(0, VM_CL_isdemo);
-	PRVM_G_FLOAT(OFS_RETURN) = cls.demoplayback;
 }
 
 //#351 void(vector origin, vector forward, vector right, vector up) SetListener (EXT_CSQC)
@@ -1413,7 +1550,7 @@ static void VM_CL_ReadPicture (void)
 			// use the attached jpeg as texture
 			buf = (unsigned char *) Mem_Alloc(tempmempool, size);
 			MSG_ReadBytes(size, buf);
-			data = JPEG_LoadImage_BGRA(buf, size);
+			data = JPEG_LoadImage_BGRA(buf, size, NULL);
 			Mem_Free(buf);
 			Draw_NewPic(name, image_width, image_height, false, data);
 			Mem_Free(data);
@@ -2485,8 +2622,8 @@ void VM_CL_ParticleThemeToGlobals(vmparticletheme_t *theme)
 void VM_CL_ParticleThemeFromGlobals(vmparticletheme_t *theme)
 {
 	theme->typeindex = (unsigned short)*vmpartspawner.particle_type;
-	theme->blendmode = (pblend_t)*vmpartspawner.particle_blendmode;
-	theme->orientation = (porientation_t)*vmpartspawner.particle_orientation;
+	theme->blendmode = (pblend_t)(int)*vmpartspawner.particle_blendmode;
+	theme->orientation = (porientation_t)(int)*vmpartspawner.particle_orientation;
 	theme->color1 = ((int)vmpartspawner.particle_color1[0] << 16) + ((int)vmpartspawner.particle_color1[1] << 8) + ((int)vmpartspawner.particle_color1[2]);
 	theme->color2 = ((int)vmpartspawner.particle_color2[0] << 16) + ((int)vmpartspawner.particle_color2[1] << 8) + ((int)vmpartspawner.particle_color2[2]);
 	theme->tex = (int)*vmpartspawner.particle_tex;
@@ -2658,7 +2795,7 @@ void VM_CL_SpawnParticle (void)
 	
 	if (prog->argc < 3) // global-set particle
 	{
-		part = CL_NewParticle(org, (unsigned short)*vmpartspawner.particle_type, ((int)(vmpartspawner.particle_color1[0]) << 16) + ((int)(vmpartspawner.particle_color1[1]) << 8) + ((int)(vmpartspawner.particle_color1[2])), ((int)vmpartspawner.particle_color2[0] << 16) + ((int)vmpartspawner.particle_color2[1] << 8) + ((int)vmpartspawner.particle_color2[2]), (int)*vmpartspawner.particle_tex, *vmpartspawner.particle_size, *vmpartspawner.particle_sizeincrease, *vmpartspawner.particle_alpha*256, *vmpartspawner.particle_alphafade*256, *vmpartspawner.particle_gravity, *vmpartspawner.particle_bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], *vmpartspawner.particle_airfriction, *vmpartspawner.particle_liquidfriction, *vmpartspawner.particle_originjitter, *vmpartspawner.particle_velocityjitter, (*vmpartspawner.particle_qualityreduction) ? true : false, *vmpartspawner.particle_time, *vmpartspawner.particle_stretch, (pblend_t)*vmpartspawner.particle_blendmode, (porientation_t)*vmpartspawner.particle_orientation, (int)(vmpartspawner.particle_staincolor1[0])*65536 + (int)(vmpartspawner.particle_staincolor1[1])*256 + (int)(vmpartspawner.particle_staincolor1[2]), (int)(vmpartspawner.particle_staincolor2[0])*65536 + (int)(vmpartspawner.particle_staincolor2[1])*256 + (int)(vmpartspawner.particle_staincolor2[2]), (int)*vmpartspawner.particle_staintex, *vmpartspawner.particle_stainalpha*256, *vmpartspawner.particle_stainsize, *vmpartspawner.particle_angle, *vmpartspawner.particle_spin);
+		part = CL_NewParticle(org, (unsigned short)*vmpartspawner.particle_type, ((int)(vmpartspawner.particle_color1[0]) << 16) + ((int)(vmpartspawner.particle_color1[1]) << 8) + ((int)(vmpartspawner.particle_color1[2])), ((int)vmpartspawner.particle_color2[0] << 16) + ((int)vmpartspawner.particle_color2[1] << 8) + ((int)vmpartspawner.particle_color2[2]), (int)*vmpartspawner.particle_tex, *vmpartspawner.particle_size, *vmpartspawner.particle_sizeincrease, *vmpartspawner.particle_alpha*256, *vmpartspawner.particle_alphafade*256, *vmpartspawner.particle_gravity, *vmpartspawner.particle_bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], *vmpartspawner.particle_airfriction, *vmpartspawner.particle_liquidfriction, *vmpartspawner.particle_originjitter, *vmpartspawner.particle_velocityjitter, (*vmpartspawner.particle_qualityreduction) ? true : false, *vmpartspawner.particle_time, *vmpartspawner.particle_stretch, (pblend_t)(int)*vmpartspawner.particle_blendmode, (porientation_t)(int)*vmpartspawner.particle_orientation, (int)(vmpartspawner.particle_staincolor1[0])*65536 + (int)(vmpartspawner.particle_staincolor1[1])*256 + (int)(vmpartspawner.particle_staincolor1[2]), (int)(vmpartspawner.particle_staincolor2[0])*65536 + (int)(vmpartspawner.particle_staincolor2[1])*256 + (int)(vmpartspawner.particle_staincolor2[2]), (int)*vmpartspawner.particle_staintex, *vmpartspawner.particle_stainalpha*256, *vmpartspawner.particle_stainsize, *vmpartspawner.particle_angle, *vmpartspawner.particle_spin, NULL);
 		if (!part)
 		{
 			PRVM_G_FLOAT(OFS_RETURN) = 0; 
@@ -2679,7 +2816,7 @@ void VM_CL_SpawnParticle (void)
 			return;
 		}
 		theme = &vmpartspawner.themes[themenum];
-		part = CL_NewParticle(org, theme->typeindex, theme->color1, theme->color2, theme->tex, theme->size, theme->sizeincrease, theme->alpha, theme->alphafade, theme->gravity, theme->bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], theme->airfriction, theme->liquidfriction, theme->originjitter, theme->velocityjitter, theme->qualityreduction, theme->lifetime, theme->stretch, theme->blendmode, theme->orientation, theme->staincolor1, theme->staincolor2, theme->staintex, theme->stainalpha, theme->stainsize, theme->angle, theme->spin);
+		part = CL_NewParticle(org, theme->typeindex, theme->color1, theme->color2, theme->tex, theme->size, theme->sizeincrease, theme->alpha, theme->alphafade, theme->gravity, theme->bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], theme->airfriction, theme->liquidfriction, theme->originjitter, theme->velocityjitter, theme->qualityreduction, theme->lifetime, theme->stretch, theme->blendmode, theme->orientation, theme->staincolor1, theme->staincolor2, theme->staintex, theme->stainalpha, theme->stainsize, theme->angle, theme->spin, NULL);
 		if (!part)
 		{
 			PRVM_G_FLOAT(OFS_RETURN) = 0; 
@@ -2712,7 +2849,7 @@ void VM_CL_SpawnParticleDelayed (void)
 	org = PRVM_G_VECTOR(OFS_PARM0);
 	dir = PRVM_G_VECTOR(OFS_PARM1);
 	if (prog->argc < 5) // global-set particle
-		part = CL_NewParticle(org, (unsigned short)*vmpartspawner.particle_type, ((int)vmpartspawner.particle_color1[0] << 16) + ((int)vmpartspawner.particle_color1[1] << 8) + ((int)vmpartspawner.particle_color1[2]), ((int)vmpartspawner.particle_color2[0] << 16) + ((int)vmpartspawner.particle_color2[1] << 8) + ((int)vmpartspawner.particle_color2[2]), (int)*vmpartspawner.particle_tex, *vmpartspawner.particle_size, *vmpartspawner.particle_sizeincrease, *vmpartspawner.particle_alpha*256, *vmpartspawner.particle_alphafade*256, *vmpartspawner.particle_gravity, *vmpartspawner.particle_bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], *vmpartspawner.particle_airfriction, *vmpartspawner.particle_liquidfriction, *vmpartspawner.particle_originjitter, *vmpartspawner.particle_velocityjitter, (*vmpartspawner.particle_qualityreduction) ? true : false, *vmpartspawner.particle_time, *vmpartspawner.particle_stretch, (pblend_t)*vmpartspawner.particle_blendmode, (porientation_t)*vmpartspawner.particle_orientation, ((int)vmpartspawner.particle_staincolor1[0] << 16) + ((int)vmpartspawner.particle_staincolor1[1] << 8) + ((int)vmpartspawner.particle_staincolor1[2]), ((int)vmpartspawner.particle_staincolor2[0] << 16) + ((int)vmpartspawner.particle_staincolor2[1] << 8) + ((int)vmpartspawner.particle_staincolor2[2]), (int)*vmpartspawner.particle_staintex, *vmpartspawner.particle_stainalpha*256, *vmpartspawner.particle_stainsize, *vmpartspawner.particle_angle, *vmpartspawner.particle_spin);
+		part = CL_NewParticle(org, (unsigned short)*vmpartspawner.particle_type, ((int)vmpartspawner.particle_color1[0] << 16) + ((int)vmpartspawner.particle_color1[1] << 8) + ((int)vmpartspawner.particle_color1[2]), ((int)vmpartspawner.particle_color2[0] << 16) + ((int)vmpartspawner.particle_color2[1] << 8) + ((int)vmpartspawner.particle_color2[2]), (int)*vmpartspawner.particle_tex, *vmpartspawner.particle_size, *vmpartspawner.particle_sizeincrease, *vmpartspawner.particle_alpha*256, *vmpartspawner.particle_alphafade*256, *vmpartspawner.particle_gravity, *vmpartspawner.particle_bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], *vmpartspawner.particle_airfriction, *vmpartspawner.particle_liquidfriction, *vmpartspawner.particle_originjitter, *vmpartspawner.particle_velocityjitter, (*vmpartspawner.particle_qualityreduction) ? true : false, *vmpartspawner.particle_time, *vmpartspawner.particle_stretch, (pblend_t)(int)*vmpartspawner.particle_blendmode, (porientation_t)(int)*vmpartspawner.particle_orientation, ((int)vmpartspawner.particle_staincolor1[0] << 16) + ((int)vmpartspawner.particle_staincolor1[1] << 8) + ((int)vmpartspawner.particle_staincolor1[2]), ((int)vmpartspawner.particle_staincolor2[0] << 16) + ((int)vmpartspawner.particle_staincolor2[1] << 8) + ((int)vmpartspawner.particle_staincolor2[2]), (int)*vmpartspawner.particle_staintex, *vmpartspawner.particle_stainalpha*256, *vmpartspawner.particle_stainsize, *vmpartspawner.particle_angle, *vmpartspawner.particle_spin, NULL);
 	else // themed particle
 	{
 		themenum = (int)PRVM_G_FLOAT(OFS_PARM4);
@@ -2723,7 +2860,7 @@ void VM_CL_SpawnParticleDelayed (void)
 			return;
 		}
 		theme = &vmpartspawner.themes[themenum];
-		part = CL_NewParticle(org, theme->typeindex, theme->color1, theme->color2, theme->tex, theme->size, theme->sizeincrease, theme->alpha, theme->alphafade, theme->gravity, theme->bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], theme->airfriction, theme->liquidfriction, theme->originjitter, theme->velocityjitter, theme->qualityreduction, theme->lifetime, theme->stretch, theme->blendmode, theme->orientation, theme->staincolor1, theme->staincolor2, theme->staintex, theme->stainalpha, theme->stainsize, theme->angle, theme->spin);
+		part = CL_NewParticle(org, theme->typeindex, theme->color1, theme->color2, theme->tex, theme->size, theme->sizeincrease, theme->alpha, theme->alphafade, theme->gravity, theme->bounce, org[0], org[1], org[2], dir[0], dir[1], dir[2], theme->airfriction, theme->liquidfriction, theme->originjitter, theme->velocityjitter, theme->qualityreduction, theme->lifetime, theme->stretch, theme->blendmode, theme->orientation, theme->staincolor1, theme->staincolor2, theme->staintex, theme->stainalpha, theme->stainsize, theme->angle, theme->spin, NULL);
 	}
 	if (!part) 
 	{ 
@@ -2827,6 +2964,7 @@ typedef struct vmpolygons_triangle_s
 {
 	rtexture_t		*texture;
 	int				drawflag;
+	qboolean hasalpha;
 	unsigned short	elements[3];
 }vmpolygons_triangle_t;
 
@@ -2854,6 +2992,7 @@ typedef struct vmpolygons_s
 	float			begin_vertex[VMPOLYGONS_MAXPOINTS][3];
 	float			begin_color[VMPOLYGONS_MAXPOINTS][4];
 	float			begin_texcoord[VMPOLYGONS_MAXPOINTS][2];
+	qboolean		begin_texture_hasalpha;
 } vmpolygons_t;
 
 // FIXME: make VM_CL_R_Polygon functions use Debug_Polygon functions?
@@ -2936,27 +3075,14 @@ static void VM_DrawPolygonCallback (const entity_render_t *ent, const rtlight_t 
 	R_Mesh_ResetTextureState();
 	R_EntityMatrix(&identitymatrix);
 	GL_CullFace(GL_NONE);
-	R_Mesh_VertexPointer(polys->data_vertex3f, 0, 0);
-	R_Mesh_ColorPointer(polys->data_color4f, 0, 0);
-	R_Mesh_TexCoordPointer(0, 2, polys->data_texcoord2f, 0, 0);
+	R_Mesh_PrepareVertices_Generic_Arrays(polys->num_vertices, polys->data_vertex3f, polys->data_color4f, polys->data_texcoord2f);
 
 	for (surfacelistindex = 0;surfacelistindex < numsurfaces;)
 	{
 		int numtriangles = 0;
 		rtexture_t *tex = polys->data_triangles[surfacelist[surfacelistindex]].texture;
 		int drawflag = polys->data_triangles[surfacelist[surfacelistindex]].drawflag;
-		// this can't call _DrawQ_ProcessDrawFlag, but should be in sync with it
-		// FIXME factor this out
-		if(drawflag == DRAWFLAG_ADDITIVE)
-			GL_BlendFunc(GL_SRC_ALPHA, GL_ONE);
-		else if(drawflag == DRAWFLAG_MODULATE)
-			GL_BlendFunc(GL_DST_COLOR, GL_ZERO);
-		else if(drawflag == DRAWFLAG_2XMODULATE)
-			GL_BlendFunc(GL_DST_COLOR,GL_SRC_COLOR);
-		else if(drawflag == DRAWFLAG_SCREEN)
-			GL_BlendFunc(GL_ONE_MINUS_DST_COLOR,GL_ONE);
-		else
-			GL_BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		DrawQ_ProcessDrawFlag(drawflag, polys->data_triangles[surfacelist[surfacelistindex]].hasalpha);
 		R_SetupShader_Generic(tex, NULL, GL_MODULATE, 1);
 		numtriangles = 0;
 		for (;surfacelistindex < numsurfaces;surfacelistindex++)
@@ -2966,12 +3092,21 @@ static void VM_DrawPolygonCallback (const entity_render_t *ent, const rtlight_t 
 			VectorCopy(polys->data_triangles[surfacelist[surfacelistindex]].elements, polys->data_sortedelement3s + 3*numtriangles);
 			numtriangles++;
 		}
-		R_Mesh_Draw(0, polys->num_vertices, 0, numtriangles, NULL, polys->data_sortedelement3s, 0, 0);
+		R_Mesh_Draw(0, polys->num_vertices, 0, numtriangles, NULL, NULL, 0, polys->data_sortedelement3s, NULL, 0);
 	}
 }
 
 void VMPolygons_Store(vmpolygons_t *polys)
 {
+	qboolean hasalpha;
+	int i;
+
+	// detect if we have alpha
+	hasalpha = polys->begin_texture_hasalpha;
+	for(i = 0; !hasalpha && (i < polys->begin_vertices); ++i)
+		if(polys->begin_color[i][3] < 1)
+			hasalpha = true;
+
 	if (r_refdef.draw2dstage)
 	{
 		// draw the polygon as 2D immediately
@@ -2984,7 +3119,7 @@ void VMPolygons_Store(vmpolygons_t *polys)
 		mesh.data_vertex3f = polys->begin_vertex[0];
 		mesh.data_color4f = polys->begin_color[0];
 		mesh.data_texcoord2f = polys->begin_texcoord[0];
-		DrawQ_Mesh(&mesh, polys->begin_drawflag);
+		DrawQ_Mesh(&mesh, polys->begin_drawflag, hasalpha);
 	}
 	else
 	{
@@ -3011,6 +3146,7 @@ void VMPolygons_Store(vmpolygons_t *polys)
 				polys->data_triangles[polys->num_triangles].elements[0] = polys->num_vertices;
 				polys->data_triangles[polys->num_triangles].elements[1] = polys->num_vertices + i+1;
 				polys->data_triangles[polys->num_triangles].elements[2] = polys->num_vertices + i+2;
+				polys->data_triangles[polys->num_triangles].hasalpha = hasalpha;
 				polys->num_triangles++;
 			}
 			polys->num_vertices += polys->begin_vertices;
@@ -3094,6 +3230,7 @@ void VM_CL_R_PolygonBegin (void)
 	}
 
 	polys->begin_texture = (sf && sf->base) ? sf->base : r_texture_white;
+	polys->begin_texture_hasalpha = (sf && sf->base) ? sf->hasalpha : false;
 	polys->begin_drawflag = (int)PRVM_G_FLOAT(OFS_PARM1) & DRAWFLAG_MASK;
 	polys->begin_vertices = 0;
 	polys->begin_active = true;
@@ -3159,7 +3296,7 @@ void Debug_PolygonBegin(const char *picname, int drawflag)
 		Con_Printf("Debug_PolygonBegin: called twice without Debug_PolygonEnd after first\n");
 		return;
 	}
-	debugPolys.begin_texture = picname[0] ? Draw_CachePic (picname)->tex : r_texture_white;
+	debugPolys.begin_texture = picname[0] ? Draw_CachePic_Flags (picname, CACHEPICFLAG_NOTPERSISTENT)->tex : r_texture_white;
 	debugPolys.begin_drawflag = drawflag;
 	debugPolys.begin_vertices = 0;
 	debugPolys.begin_active = true;
@@ -3552,7 +3689,7 @@ static void VM_CL_skel_create(void)
 			break;
 	if (i == MAX_EDICTS)
 		return;
-	prog->skeletons[i] = skeleton = Mem_Alloc(cls.levelmempool, sizeof(skeleton_t) + model->num_bones * sizeof(matrix4x4_t));
+	prog->skeletons[i] = skeleton = (skeleton_t *)Mem_Alloc(cls.levelmempool, sizeof(skeleton_t) + model->num_bones * sizeof(matrix4x4_t));
 	PRVM_G_FLOAT(OFS_RETURN) = i + 1;
 	skeleton->model = model;
 	skeleton->relativetransforms = (matrix4x4_t *)(skeleton+1);
@@ -3653,7 +3790,7 @@ static void VM_CL_skel_find_bone(void)
 	PRVM_G_FLOAT(OFS_RETURN) = 0;
 	if (skeletonindex < 0 || skeletonindex >= MAX_EDICTS || !(skeleton = prog->skeletons[skeletonindex]))
 		return;
-	PRVM_G_FLOAT(OFS_RETURN) = Mod_Alias_GetTagIndexForName(skeleton->model, 0, tagname) + 1;
+	PRVM_G_FLOAT(OFS_RETURN) = Mod_Alias_GetTagIndexForName(skeleton->model, 0, tagname);
 }
 
 // #269 vector(float skel, float bonenum) skel_get_bonerel = #269; // (FTE_CSQC_SKELETONOBJECTS) get matrix of bone in skeleton relative to its parent - sets v_forward, v_right, v_up, returns origin (relative to parent bone)
@@ -4200,7 +4337,7 @@ VM_centerprint,					// #338 void(string s, ...) centerprint (EXT_CSQC)
 VM_print,						// #339 void(string s, ...) print (EXT_CSQC, DP_SV_PRINT)
 VM_keynumtostring,				// #340 string(float keynum) keynumtostring (EXT_CSQC)
 VM_stringtokeynum,				// #341 float(string keyname) stringtokeynum (EXT_CSQC)
-VM_CL_getkeybind,				// #342 string(float keynum) getkeybind (EXT_CSQC)
+VM_getkeybind,					// #342 string(float keynum[, float bindmap]) getkeybind (EXT_CSQC)
 VM_CL_setcursormode,			// #343 void(float usecursor) setcursormode (EXT_CSQC)
 VM_CL_getmousepos,				// #344 vector() getmousepos (EXT_CSQC)
 VM_CL_getinputstate,			// #345 float(float framenum) getinputstate (EXT_CSQC)
@@ -4213,9 +4350,9 @@ VM_CL_setlistener,				// #351 void(vector origin, vector forward, vector right, 
 VM_CL_registercmd,				// #352 void(string cmdname) registercommand (EXT_CSQC)
 VM_wasfreed,					// #353 float(entity ent) wasfreed (EXT_CSQC) (should be availabe on server too)
 VM_CL_serverkey,				// #354 string(string key) serverkey (EXT_CSQC)
-NULL,							// #355
-NULL,							// #356
-NULL,							// #357
+VM_CL_videoplaying,				// #355
+VM_findfont,					// #356 float(string fontname) loadfont (DP_GFX_FONTS)
+VM_loadfont,					// #357 float(string fontname, string fontmaps, string sizes, float slot) loadfont (DP_GFX_FONTS)
 NULL,							// #358
 NULL,							// #359
 VM_CL_ReadByte,					// #360 float() readbyte (EXT_CSQC)
@@ -4361,7 +4498,7 @@ VM_entityfieldtype,				// #498 float(float fieldnum) entityfieldtype = #498; (DP
 VM_getentityfieldstring,		// #499 string(float fieldnum, entity ent) getentityfieldstring = #499; (DP_QC_ENTITYDATA)
 VM_putentityfieldstring,		// #500 float(float fieldnum, entity ent, string s) putentityfieldstring = #500; (DP_QC_ENTITYDATA)
 VM_CL_ReadPicture,				// #501 string() ReadPicture = #501;
-NULL,							// #502
+VM_CL_boxparticles,				// #502 void(float effectnum, entity own, vector origin_from, vector origin_to, vector dir_from, vector dir_to, float count) boxparticles (DP_CSQC_BOXPARTICLES)
 VM_whichpack,					// #503 string(string) whichpack = #503;
 VM_CL_GetEntity,				// #504 float(float entitynum, float fldnum) getentity = #504; vector(float entitynum, float fldnum) getentityvec = #504;
 NULL,							// #505
@@ -4380,7 +4517,7 @@ VM_buf_cvarlist,						// #517 void(float buf, string prefix, string antiprefix) 
 VM_cvar_description,					// #518 float(string name) cvar_description = #518; (DP_QC_CVAR_DESCRIPTION)
 VM_gettime,						// #519 float(float timer) gettime = #519; (DP_QC_GETTIME)
 VM_keynumtostring,				// #520 string keynumtostring(float keynum)
-VM_findkeysforcommand,			// #521 string findkeysforcommand(string command)
+VM_findkeysforcommand,			// #521 string findkeysforcommand(string command[, float bindmap])
 VM_CL_InitParticleSpawner,		// #522 void(float max_themes) initparticlespawner (DP_CSQC_SPAWNPARTICLE)
 VM_CL_ResetParticle,			// #523 void() resetparticle (DP_CSQC_SPAWNPARTICLE)
 VM_CL_ParticleTheme,			// #524 void(float theme) particletheme (DP_CSQC_SPAWNPARTICLE)
@@ -4469,7 +4606,7 @@ VM_writetofile,					// #606
 VM_isfunction,					// #607
 NULL,							// #608
 NULL,							// #609
-NULL,							// #610
+VM_findkeysforcommand,			// #610 string findkeysforcommand(string command[, float bindmap])
 NULL,							// #611
 NULL,							// #612
 VM_parseentitydata,				// #613
@@ -4489,7 +4626,10 @@ NULL,							// #626
 VM_sprintf,                     // #627 string sprintf(string format, ...)
 VM_getsurfacenumtriangles,		// #628 float(entity e, float s) getsurfacenumpoints (DP_QC_GETSURFACETRIANGLE)
 VM_getsurfacetriangle,			// #629 vector(entity e, float s, float n) getsurfacepoint (DP_QC_GETSURFACETRIANGLE)
-NULL,							// #630
+VM_setkeybind,						// #630 float(float key, string bind[, float bindmap]) setkeybind
+VM_getbindmaps,						// #631 vector(void) getbindmap
+VM_setbindmaps,						// #632 float(vector bm) setbindmap
+NULL,							// #633
 };
 
 const int vm_cl_numbuiltins = sizeof(vm_cl_builtins) / sizeof(prvm_builtin_t);

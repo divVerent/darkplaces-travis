@@ -22,8 +22,6 @@
 		Boston, MA  02111-1307, USA
 */
 
-#include "quakedef.h"
-
 #include <limits.h>
 #include <fcntl.h>
 
@@ -36,6 +34,8 @@
 # include <sys/stat.h>
 # include <unistd.h>
 #endif
+
+#include "quakedef.h"
 
 #include "fs.h"
 #include "wad.h"
@@ -188,6 +188,8 @@ typedef struct
 #define QFILE_FLAG_DEFLATED (1 << 1)
 /// file is actually already loaded data
 #define QFILE_FLAG_DATA (1 << 2)
+/// real file will be removed on close
+#define QFILE_FLAG_REMOVE (1 << 3)
 
 #define FILE_BUFF_SIZE 2048
 typedef struct
@@ -215,6 +217,8 @@ struct qfile_s
 	ztoolkit_t*		ztk;	///< For zipped files.
 
 	const unsigned char *data;	///< For data files.
+
+	const char *filename; ///< Kept around for QFILE_FLAG_REMOVE, unused otherwise
 };
 
 
@@ -1279,7 +1283,7 @@ static void FS_AddSelfPack(void)
 	if(fs_selfpack)
 	{
 		searchpath_t *search;
-		search = Mem_Alloc(fs_mempool, sizeof(searchpath_t));
+		search = (searchpath_t *)Mem_Alloc(fs_mempool, sizeof(searchpath_t));
 		search->next = fs_searchpaths;
 		search->pack = fs_selfpack;
 		fs_searchpaths = search;
@@ -1350,18 +1354,31 @@ void FS_Rescan (void)
 		unlink (va("%s/qconsole.log", fs_gamedir));
 
 	// look for the pop.lmp file and set registered to true if it is found
-	if ((gamemode == GAME_NORMAL || gamemode == GAME_HIPNOTIC || gamemode == GAME_ROGUE) && !FS_FileExists("gfx/pop.lmp"))
+	if (FS_FileExists("gfx/pop.lmp"))
+		Cvar_Set ("registered", "1");
+	switch(gamemode)
 	{
-		if (fs_modified)
-			Con_Print("Playing shareware version, with modification.\nwarning: most mods require full quake data.\n");
+	case GAME_NORMAL:
+	case GAME_HIPNOTIC:
+	case GAME_ROGUE:
+		if (!registered.integer)
+		{
+			if (fs_modified)
+				Con_Print("Playing shareware version, with modification.\nwarning: most mods require full quake data.\n");
+			else
+				Con_Print("Playing shareware version.\n");
+		}
+		else
+			Con_Print("Playing registered version.\n");
+		break;
+	case GAME_STEELSTORM:
+		if (registered.integer)
+			Con_Print("Playing registered version.\n");
 		else
 			Con_Print("Playing shareware version.\n");
-	}
-	else
-	{
-		Cvar_Set ("registered", "1");
-		if (gamemode == GAME_NORMAL || gamemode == GAME_HIPNOTIC || gamemode == GAME_ROGUE)
-			Con_Print("Playing registered version.\n");
+		break;
+	default:
+		break;
 	}
 
 	// unload all wads so that future queries will return the new data
@@ -1924,6 +1941,8 @@ static qfile_t* FS_SysOpen (const char* filepath, const char* mode, qboolean non
 		return NULL;
 	}
 
+	file->filename = Mem_strdup(fs_mempool, filepath);
+
 	file->real_length = lseek (file->handle, 0, SEEK_END);
 
 	// For files opened in append mode, we start at the end of the file
@@ -2389,6 +2408,14 @@ int FS_Close (qfile_t* file)
 	if (close (file->handle))
 		return EOF;
 
+	if (file->filename)
+	{
+		if (file->flags & QFILE_FLAG_REMOVE)
+			remove(file->filename);
+
+		Mem_Free((void *) file->filename);
+	}
+
 	if (file->ztk)
 	{
 		qz_inflateEnd (&file->ztk->zstream);
@@ -2399,6 +2426,10 @@ int FS_Close (qfile_t* file)
 	return 0;
 }
 
+void FS_RemoveOnClose(qfile_t* file)
+{
+	file->flags |= QFILE_FLAG_REMOVE;
+}
 
 /*
 ====================
@@ -2902,9 +2933,11 @@ FS_WriteFile
 The filename will be prefixed by the current game directory
 ============
 */
-qboolean FS_WriteFile (const char *filename, void *data, fs_offset_t len)
+qboolean FS_WriteFileInBlocks (const char *filename, const void *const *data, const fs_offset_t *len, size_t count)
 {
 	qfile_t *file;
+	size_t i;
+	fs_offset_t lentotal;
 
 	file = FS_OpenRealFile(filename, "wb", false);
 	if (!file)
@@ -2913,10 +2946,19 @@ qboolean FS_WriteFile (const char *filename, void *data, fs_offset_t len)
 		return false;
 	}
 
-	Con_DPrintf("FS_WriteFile: %s (%u bytes)\n", filename, (unsigned int)len);
-	FS_Write (file, data, len);
+	lentotal = 0;
+	for(i = 0; i < count; ++i)
+		lentotal += len[i];
+	Con_DPrintf("FS_WriteFile: %s (%u bytes)\n", filename, (unsigned int)lentotal);
+	for(i = 0; i < count; ++i)
+		FS_Write (file, data[i], len[i]);
 	FS_Close (file);
 	return true;
+}
+
+qboolean FS_WriteFile (const char *filename, const void *data, fs_offset_t len)
+{
+	return FS_WriteFileInBlocks(filename, &data, &len, 1);
 }
 
 

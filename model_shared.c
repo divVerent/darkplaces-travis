@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "polygon.h"
 
 cvar_t r_mipskins = {CVAR_SAVE, "r_mipskins", "0", "mipmaps model skins so they render faster in the distance and do not display noise artifacts, can cause discoloration of skins if they contain undesirable border colors"};
+cvar_t r_mipnormalmaps = {CVAR_SAVE, "r_mipnormalmaps", "1", "mipmaps normalmaps (turning it off looks sharper but may have aliasing)"};
 cvar_t mod_generatelightmaps_unitspersample = {CVAR_SAVE, "mod_generatelightmaps_unitspersample", "8", "lightmap resolution"};
 cvar_t mod_generatelightmaps_borderpixels = {CVAR_SAVE, "mod_generatelightmaps_borderpixels", "2", "extra space around polygons to prevent sampling artifacts"};
 cvar_t mod_generatelightmaps_texturesize = {CVAR_SAVE, "mod_generatelightmaps_texturesize", "1024", "size of lightmap textures"};
@@ -160,6 +161,7 @@ void Mod_Init (void)
 	Mod_SpriteInit();
 
 	Cvar_RegisterVariable(&r_mipskins);
+	Cvar_RegisterVariable(&r_mipnormalmaps);
 	Cvar_RegisterVariable(&mod_generatelightmaps_unitspersample);
 	Cvar_RegisterVariable(&mod_generatelightmaps_borderpixels);
 	Cvar_RegisterVariable(&mod_generatelightmaps_texturesize);
@@ -179,7 +181,7 @@ void Mod_Init (void)
 
 void Mod_RenderInit(void)
 {
-	R_RegisterModule("Models", mod_start, mod_shutdown, mod_newmap);
+	R_RegisterModule("Models", mod_start, mod_shutdown, mod_newmap, NULL, NULL);
 }
 
 void Mod_UnloadModel (dp_model_t *mod)
@@ -194,12 +196,24 @@ void Mod_UnloadModel (dp_model_t *mod)
 	strlcpy(name, mod->name, sizeof(name));
 	parentmodel = mod->brush.parentmodel;
 	used = mod->used;
-	if (mod->surfmesh.ebo3i)
-		R_Mesh_DestroyBufferObject(mod->surfmesh.ebo3i);
-	if (mod->surfmesh.ebo3s)
-		R_Mesh_DestroyBufferObject(mod->surfmesh.ebo3s);
-	if (mod->surfmesh.vbo)
-		R_Mesh_DestroyBufferObject(mod->surfmesh.vbo);
+	if (mod->mempool)
+	{
+		if (mod->surfmesh.vertexpositionbuffer)
+			R_Mesh_DestroyMeshBuffer(mod->surfmesh.vertexpositionbuffer);
+		mod->surfmesh.vertexpositionbuffer = NULL;
+		if (mod->surfmesh.vertexmeshbuffer)
+			R_Mesh_DestroyMeshBuffer(mod->surfmesh.vertexmeshbuffer);
+		mod->surfmesh.vertexmeshbuffer = NULL;
+		if (mod->surfmesh.data_element3i_indexbuffer)
+			R_Mesh_DestroyMeshBuffer(mod->surfmesh.data_element3i_indexbuffer);
+		mod->surfmesh.data_element3i_indexbuffer = NULL;
+		if (mod->surfmesh.data_element3s_indexbuffer)
+			R_Mesh_DestroyMeshBuffer(mod->surfmesh.data_element3s_indexbuffer);
+		mod->surfmesh.data_element3s_indexbuffer = NULL;
+		if (mod->surfmesh.vbo_vertexbuffer)
+			R_Mesh_DestroyMeshBuffer(mod->surfmesh.vbo_vertexbuffer);
+		mod->surfmesh.vbo_vertexbuffer = NULL;
+	}
 	// free textures/memory attached to the model
 	R_FreeTexturePool(&mod->texturepool);
 	Mem_FreePool(&mod->mempool);
@@ -349,7 +363,7 @@ dp_model_t *Mod_LoadModel(dp_model_t *mod, qboolean crash, qboolean checkdisk)
 	int num;
 	unsigned int crc;
 	void *buf;
-	fs_offset_t filesize;
+	fs_offset_t filesize = 0;
 
 	mod->used = true;
 
@@ -687,7 +701,7 @@ void Mod_BuildTriangleNeighbors(int *neighbors, const int *elements, int numtria
 	edgehashentry_t *edgehashentries, *hash;
 	if (!numtriangles)
 		return;
-	edgehash = Mem_Alloc(tempmempool, TRIANGLEEDGEHASH * sizeof(*edgehash));
+	edgehash = (edgehashentry_t **)Mem_Alloc(tempmempool, TRIANGLEEDGEHASH * sizeof(*edgehash));
 	// if there are too many triangles for the stack array, allocate larger buffer
 	edgehashentries = (edgehashentry_t *)Mem_Alloc(tempmempool, numtriangles * 3 * sizeof(edgehashentry_t));
 	// find neighboring triangles
@@ -1173,28 +1187,62 @@ shadowmesh_t *Mod_ShadowMesh_Begin(mempool_t *mempool, int maxverts, int maxtria
 	return Mod_ShadowMesh_Alloc(mempool, maxverts, maxtriangles, map_diffuse, map_specular, map_normal, light, neighbors, expandable);
 }
 
-static void Mod_ShadowMesh_CreateVBOs(shadowmesh_t *mesh)
+static void Mod_ShadowMesh_CreateVBOs(shadowmesh_t *mesh, mempool_t *mempool)
 {
-	if (!vid.support.arb_vertex_buffer_object)
-		return;
-	if (mesh->vbo)
+	if (!mesh->numverts)
 		return;
 
-	// element buffer is easy because it's just one array
-	if (mesh->numtriangles)
+	// build r_vertexmesh_t array
+	// (compressed interleaved array for faster rendering)
+	if (!mesh->vertexmesh && mesh->texcoord2f)
 	{
-		if (mesh->element3s)
-			mesh->ebo3s = R_Mesh_CreateStaticBufferObject(GL_ELEMENT_ARRAY_BUFFER_ARB, mesh->element3s, mesh->numtriangles * sizeof(unsigned short[3]), "shadowmesh");
-		else
-			mesh->ebo3i = R_Mesh_CreateStaticBufferObject(GL_ELEMENT_ARRAY_BUFFER_ARB, mesh->element3i, mesh->numtriangles * sizeof(unsigned int[3]), "shadowmesh");
+		int vertexindex;
+		int numvertices = mesh->numverts;
+		r_vertexmesh_t *vertexmesh;
+		mesh->vertexmesh = vertexmesh = (r_vertexmesh_t*)Mem_Alloc(mempool, numvertices * sizeof(*mesh->vertexmesh));
+		for (vertexindex = 0;vertexindex < numvertices;vertexindex++, vertexmesh++)
+		{
+			VectorCopy(mesh->vertex3f + 3*vertexindex, vertexmesh->vertex3f);
+			VectorScale(mesh->svector3f + 3*vertexindex, 1.0f, vertexmesh->svector3f);
+			VectorScale(mesh->tvector3f + 3*vertexindex, 1.0f, vertexmesh->tvector3f);
+			VectorScale(mesh->normal3f + 3*vertexindex, 1.0f, vertexmesh->normal3f);
+			Vector2Copy(mesh->texcoord2f + 2*vertexindex, vertexmesh->texcoordtexture2f);
+		}
 	}
+
+	// build r_vertexposition_t array
+	if (!mesh->vertexposition)
+	{
+		int vertexindex;
+		int numvertices = mesh->numverts;
+		r_vertexposition_t *vertexposition;
+		mesh->vertexposition = vertexposition = (r_vertexposition_t*)Mem_Alloc(loadmodel->mempool, numvertices * sizeof(*mesh->vertexposition));
+		for (vertexindex = 0;vertexindex < numvertices;vertexindex++, vertexposition++)
+			VectorCopy(mesh->vertex3f + 3*vertexindex, vertexposition->vertex3f);
+	}
+
+	// upload r_vertexmesh_t array as a buffer
+	if (mesh->vertexmesh && !mesh->vertexmeshbuffer)
+		mesh->vertexmeshbuffer = R_Mesh_CreateMeshBuffer(mesh->vertexmesh, mesh->numverts * sizeof(*mesh->vertexmesh), loadmodel->name, false, false, false);
+
+	// upload r_vertexposition_t array as a buffer
+	if (mesh->vertexposition && !mesh->vertexpositionbuffer)
+		mesh->vertexpositionbuffer = R_Mesh_CreateMeshBuffer(mesh->vertexposition, mesh->numverts * sizeof(*mesh->vertexposition), loadmodel->name, false, false, false);
+
+	// upload short indices as a buffer
+	if (mesh->element3s && !mesh->element3s_indexbuffer)
+		mesh->element3s_indexbuffer = R_Mesh_CreateMeshBuffer(mesh->element3s, mesh->numtriangles * sizeof(short[3]), loadmodel->name, true, false, true);
+
+	// upload int indices as a buffer
+	if (mesh->element3i && !mesh->element3i_indexbuffer && !mesh->element3s)
+		mesh->element3i_indexbuffer = R_Mesh_CreateMeshBuffer(mesh->element3i, mesh->numtriangles * sizeof(int[3]), loadmodel->name, true, false, false);
 
 	// vertex buffer is several arrays and we put them in the same buffer
 	//
 	// is this wise?  the texcoordtexture2f array is used with dynamic
 	// vertex/svector/tvector/normal when rendering animated models, on the
 	// other hand animated models don't use a lot of vertices anyway...
-	if (mesh->numverts)
+	if (!mesh->vbo_vertexbuffer)
 	{
 		size_t size;
 		unsigned char *mem;
@@ -1210,7 +1258,7 @@ static void Mod_ShadowMesh_CreateVBOs(shadowmesh_t *mesh)
 		if (mesh->tvector3f         ) memcpy(mem + mesh->vbooffset_tvector3f         , mesh->tvector3f         , mesh->numverts * sizeof(float[3]));
 		if (mesh->normal3f          ) memcpy(mem + mesh->vbooffset_normal3f          , mesh->normal3f          , mesh->numverts * sizeof(float[3]));
 		if (mesh->texcoord2f        ) memcpy(mem + mesh->vbooffset_texcoord2f        , mesh->texcoord2f        , mesh->numverts * sizeof(float[2]));
-		mesh->vbo = R_Mesh_CreateStaticBufferObject(GL_ARRAY_BUFFER_ARB, mem, size, "shadowmesh");
+		mesh->vbo_vertexbuffer = R_Mesh_CreateMeshBuffer(mem, size, "shadowmesh", false, false, false);
 		Mem_Free(mem);
 	}
 }
@@ -1234,7 +1282,7 @@ shadowmesh_t *Mod_ShadowMesh_Finish(mempool_t *mempool, shadowmesh_t *firstmesh,
 					newmesh->element3s[i] = newmesh->element3i[i];
 			}
 			if (createvbo)
-				Mod_ShadowMesh_CreateVBOs(newmesh);
+				Mod_ShadowMesh_CreateVBOs(newmesh, mempool);
 		}
 		Mem_Free(mesh);
 	}
@@ -1299,12 +1347,16 @@ void Mod_ShadowMesh_Free(shadowmesh_t *mesh)
 	shadowmesh_t *nextmesh;
 	for (;mesh;mesh = nextmesh)
 	{
-		if (mesh->ebo3i)
-			R_Mesh_DestroyBufferObject(mesh->ebo3i);
-		if (mesh->ebo3s)
-			R_Mesh_DestroyBufferObject(mesh->ebo3s);
-		if (mesh->vbo)
-			R_Mesh_DestroyBufferObject(mesh->vbo);
+		if (mesh->vertexpositionbuffer)
+			R_Mesh_DestroyMeshBuffer(mesh->vertexpositionbuffer);
+		if (mesh->vertexmeshbuffer)
+			R_Mesh_DestroyMeshBuffer(mesh->vertexmeshbuffer);
+		if (mesh->element3i_indexbuffer)
+			R_Mesh_DestroyMeshBuffer(mesh->element3i_indexbuffer);
+		if (mesh->element3s_indexbuffer)
+			R_Mesh_DestroyMeshBuffer(mesh->element3s_indexbuffer);
+		if (mesh->vbo_vertexbuffer)
+			R_Mesh_DestroyMeshBuffer(mesh->vbo_vertexbuffer);
 		nextmesh = mesh->next;
 		Mem_Free(mesh);
 	}
@@ -1482,16 +1534,26 @@ void Mod_Terrain_UpdateSurfacesForViewOrigin(dp_model_t *model)
 }
 #endif
 
-q3wavefunc_t Mod_LoadQ3Shaders_EnumerateWaveFunc(const char *s)
+int Mod_LoadQ3Shaders_EnumerateWaveFunc(const char *s)
 {
-	if (!strcasecmp(s, "sin"))             return Q3WAVEFUNC_SIN;
-	if (!strcasecmp(s, "square"))          return Q3WAVEFUNC_SQUARE;
-	if (!strcasecmp(s, "triangle"))        return Q3WAVEFUNC_TRIANGLE;
-	if (!strcasecmp(s, "sawtooth"))        return Q3WAVEFUNC_SAWTOOTH;
-	if (!strcasecmp(s, "inversesawtooth")) return Q3WAVEFUNC_INVERSESAWTOOTH;
-	if (!strcasecmp(s, "noise"))           return Q3WAVEFUNC_NOISE;
+	int offset = 0;
+	if (!strncasecmp(s, "user", 4)) // parse stuff like "user1sin", always user<n>func
+	{
+		offset = bound(0, s[4] - '0', 9);
+		offset = (offset + 1) << Q3WAVEFUNC_USER_SHIFT;
+		s += 4;
+		if(*s)
+			++s;
+	}
+	if (!strcasecmp(s, "sin"))             return offset | Q3WAVEFUNC_SIN;
+	if (!strcasecmp(s, "square"))          return offset | Q3WAVEFUNC_SQUARE;
+	if (!strcasecmp(s, "triangle"))        return offset | Q3WAVEFUNC_TRIANGLE;
+	if (!strcasecmp(s, "sawtooth"))        return offset | Q3WAVEFUNC_SAWTOOTH;
+	if (!strcasecmp(s, "inversesawtooth")) return offset | Q3WAVEFUNC_INVERSESAWTOOTH;
+	if (!strcasecmp(s, "noise"))           return offset | Q3WAVEFUNC_NOISE;
+	if (!strcasecmp(s, "none"))            return offset | Q3WAVEFUNC_NONE;
 	Con_DPrintf("Mod_LoadQ3Shaders: unknown wavefunc %s\n", s);
-	return Q3WAVEFUNC_NONE;
+	return offset | Q3WAVEFUNC_NONE;
 }
 
 void Mod_FreeQ3Shaders(void)
@@ -1540,7 +1602,6 @@ static void Q3Shader_AddToHash (q3shaderinfo_t* shader)
 	memcpy (&entry->shader, shader, sizeof (q3shaderinfo_t));
 }
 
-extern cvar_t r_picmipworld;
 extern cvar_t mod_q3shader_default_offsetmapping;
 void Mod_LoadQ3Shaders(void)
 {
@@ -1553,6 +1614,9 @@ void Mod_LoadQ3Shaders(void)
 	q3shaderinfo_layer_t *layer;
 	int numparameters;
 	char parameter[TEXTURE_MAXFRAMES + 4][Q3PATHLENGTH];
+	char *custsurfaceparmnames[256]; // VorteX: q3map2 has 64 but well, someone will need more
+	unsigned long custsurfaceparms[256]; 
+	int numcustsurfaceparms;
 
 	Mod_FreeQ3Shaders();
 
@@ -1564,6 +1628,49 @@ void Mod_LoadQ3Shaders(void)
 	Mem_ExpandableArray_NewArray (&q3shader_data->char_ptrs,
 		q3shaders_mem, sizeof (char**), 256);
 
+	// parse custinfoparms.txt
+	numcustsurfaceparms = 0;
+	if ((text = f = (char *)FS_LoadFile("scripts/custinfoparms.txt", tempmempool, false, NULL)) != NULL)
+	{
+		if (!COM_ParseToken_QuakeC(&text, false) || strcasecmp(com_token, "{"))
+			Con_DPrintf("scripts/custinfoparms.txt: contentflags section parsing error - expected \"{\", found \"%s\"\n", com_token);
+		else
+		{
+			while (COM_ParseToken_QuakeC(&text, false))
+				if (!strcasecmp(com_token, "}"))
+					break;
+			// custom surfaceflags section
+			if (!COM_ParseToken_QuakeC(&text, false) || strcasecmp(com_token, "{"))
+				Con_DPrintf("scripts/custinfoparms.txt: surfaceflags section parsing error - expected \"{\", found \"%s\"\n", com_token);
+			else
+			{
+				while(COM_ParseToken_QuakeC(&text, false))
+				{
+					if (!strcasecmp(com_token, "}"))
+						break;	
+					// register surfaceflag
+					if (numcustsurfaceparms >= 256)
+					{
+						Con_Printf("scripts/custinfoparms.txt: surfaceflags section parsing error - max 256 surfaceflags exceeded\n");
+						break;
+					}
+					// name
+					j = strlen(com_token)+1;
+					custsurfaceparmnames[numcustsurfaceparms] = (char *)Mem_Alloc(tempmempool, j);
+					strlcpy(custsurfaceparmnames[numcustsurfaceparms], com_token, j+1);
+					// value
+					if (COM_ParseToken_QuakeC(&text, false))
+						custsurfaceparms[numcustsurfaceparms] = strtol(com_token, NULL, 0);
+					else
+						custsurfaceparms[numcustsurfaceparms] = 0;
+					numcustsurfaceparms++;
+				}
+			}
+		}
+		Mem_Free(f);
+	}
+
+	// parse shaders
 	search = FS_Search("scripts/*.shader", true, false);
 	if (!search)
 		return;
@@ -1939,7 +2046,20 @@ void Mod_LoadQ3Shaders(void)
 					else if (!strcasecmp(parameter[1], "antiportal"))
 						shader.surfaceparms |= Q3SURFACEPARM_ANTIPORTAL;
 					else
-						Con_DPrintf("%s parsing warning: unknown surfaceparm \"%s\"\n", search->filenames[fileindex], parameter[1]);
+					{
+						// try custom surfaceparms
+						for (j = 0; j < numcustsurfaceparms; j++)
+						{
+							if (!strcasecmp(custsurfaceparmnames[j], parameter[1]))
+							{
+								shader.surfaceparms |= custsurfaceparms[j];
+								break;
+							}
+						}
+						// failed all
+						if (j == numcustsurfaceparms)
+							Con_DPrintf("%s parsing warning: unknown surfaceparm \"%s\"\n", search->filenames[fileindex], parameter[1]);
+					}
 				}
 				else if (!strcasecmp(parameter[0], "dpshadow"))
 					shader.dpshadow = true;
@@ -2093,6 +2213,9 @@ void Mod_LoadQ3Shaders(void)
 		Mem_Free(f);
 	}
 	FS_FreeSearch(search);
+	// free custinfoparm values
+	for (j = 0; j < numcustsurfaceparms; j++)
+		Mem_Free(custsurfaceparmnames[j]);
 }
 
 q3shaderinfo_t *Mod_LookupQ3Shader(const char *name)
@@ -2115,7 +2238,7 @@ q3shaderinfo_t *Mod_LookupQ3Shader(const char *name)
 qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qboolean warnmissing, qboolean fallback, int defaulttexflags)
 {
 	int j;
-	int texflagsmask;
+	int texflagsmask, texflagsor;
 	qboolean success = true;
 	q3shaderinfo_t *shader;
 	if (!name)
@@ -2128,6 +2251,11 @@ qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qbool
 		texflagsmask &= ~TEXF_PICMIP;
 	if(!(defaulttexflags & TEXF_COMPRESS))
 		texflagsmask &= ~TEXF_COMPRESS;
+	texflagsor = 0;
+	if(defaulttexflags & TEXF_ISWORLD)
+		texflagsor |= TEXF_ISWORLD;
+	if(defaulttexflags & TEXF_ISSPRITE)
+		texflagsor |= TEXF_ISSPRITE;
 	// unless later loaded from the shader
 	texture->offsetmapping = (mod_q3shader_default_offsetmapping.value) ? OFFSETMAPPING_DEFAULT : OFFSETMAPPING_OFF;
 	texture->offsetscale = 1;
@@ -2144,7 +2272,7 @@ qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qbool
 		texture->surfaceparms = shader->surfaceparms;
 
 		// allow disabling of picmip or compression by defaulttexflags
-		texture->textureflags = shader->textureflags & texflagsmask;
+		texture->textureflags = (shader->textureflags & texflagsmask) | texflagsor;
 
 		if (shader->surfaceparms & Q3SURFACEPARM_SKY)
 		{
@@ -2232,7 +2360,7 @@ nothing                GL_ZERO GL_ONE
 				{
 					texture->skinframes[j] = NULL;
 				}
-				else if (!(texture->skinframes[j] = R_SkinFrame_LoadExternal(primarylayer->texturename[j], primarylayer->texflags & texflagsmask, false)))
+				else if (!(texture->skinframes[j] = R_SkinFrame_LoadExternal(primarylayer->texturename[j], (primarylayer->texflags & texflagsmask) | texflagsor, false)))
 				{
 					Con_Printf("^1%s:^7 could not load texture ^3\"%s\"^7 (frame %i) for shader ^2\"%s\"\n", loadmodel->name, primarylayer->texturename[j], j, texture->name);
 					texture->skinframes[j] = R_SkinFrame_LoadMissing();
@@ -2253,7 +2381,7 @@ nothing                GL_ZERO GL_ONE
 				{
 					texture->skinframes[j] = NULL;
 				}
-				else if (!(texture->backgroundskinframes[j] = R_SkinFrame_LoadExternal(backgroundlayer->texturename[j], backgroundlayer->texflags & texflagsmask, false)))
+				else if (!(texture->backgroundskinframes[j] = R_SkinFrame_LoadExternal(backgroundlayer->texturename[j], (backgroundlayer->texflags & texflagsmask) | texflagsor, false)))
 				{
 					Con_Printf("^1%s:^7 could not load texture ^3\"%s\"^7 (background frame %i) for shader ^2\"%s\"\n", loadmodel->name, backgroundlayer->texturename[j], j, texture->name);
 					texture->backgroundskinframes[j] = R_SkinFrame_LoadMissing();
@@ -2610,6 +2738,9 @@ void Mod_MakeSortedSurfaces(dp_model_t *mod)
 
 void Mod_BuildVBOs(void)
 {
+	if (!loadmodel->surfmesh.num_vertices)
+		return;
+
 	if (gl_paranoid.integer && loadmodel->surfmesh.data_element3s && loadmodel->surfmesh.data_element3i)
 	{
 		int i;
@@ -2623,27 +2754,62 @@ void Mod_BuildVBOs(void)
 		}
 	}
 
-	if (!vid.support.arb_vertex_buffer_object)
-		return;
-	// only build a vbo if one has not already been created (this is important for brush models which load specially)
-	if (loadmodel->surfmesh.vbo)
-		return;
-
-	// element buffer is easy because it's just one array
-	if (loadmodel->surfmesh.num_triangles)
+	// build r_vertexmesh_t array
+	// (compressed interleaved array for faster rendering)
+	if (!loadmodel->surfmesh.vertexmesh)
 	{
-		if (loadmodel->surfmesh.data_element3s)
-			loadmodel->surfmesh.ebo3s = R_Mesh_CreateStaticBufferObject(GL_ELEMENT_ARRAY_BUFFER_ARB, loadmodel->surfmesh.data_element3s, loadmodel->surfmesh.num_triangles * sizeof(unsigned short[3]), loadmodel->name);
-		else
-			loadmodel->surfmesh.ebo3i = R_Mesh_CreateStaticBufferObject(GL_ELEMENT_ARRAY_BUFFER_ARB, loadmodel->surfmesh.data_element3i, loadmodel->surfmesh.num_triangles * sizeof(unsigned int[3]), loadmodel->name);
+		int vertexindex;
+		int numvertices = loadmodel->surfmesh.num_vertices;
+		r_vertexmesh_t *vertexmesh;
+		loadmodel->surfmesh.vertexmesh = vertexmesh = (r_vertexmesh_t*)Mem_Alloc(loadmodel->mempool, numvertices * sizeof(*loadmodel->surfmesh.vertexmesh));
+		for (vertexindex = 0;vertexindex < numvertices;vertexindex++, vertexmesh++)
+		{
+			VectorCopy(loadmodel->surfmesh.data_vertex3f + 3*vertexindex, vertexmesh->vertex3f);
+			VectorScale(loadmodel->surfmesh.data_svector3f + 3*vertexindex, 1.0f, vertexmesh->svector3f);
+			VectorScale(loadmodel->surfmesh.data_tvector3f + 3*vertexindex, 1.0f, vertexmesh->tvector3f);
+			VectorScale(loadmodel->surfmesh.data_normal3f + 3*vertexindex, 1.0f, vertexmesh->normal3f);
+			if (loadmodel->surfmesh.data_lightmapcolor4f)
+				Vector4Scale(loadmodel->surfmesh.data_lightmapcolor4f + 4*vertexindex, 255.0f, vertexmesh->color4ub);
+			Vector2Copy(loadmodel->surfmesh.data_texcoordtexture2f + 2*vertexindex, vertexmesh->texcoordtexture2f);
+			if (loadmodel->surfmesh.data_texcoordlightmap2f)
+				Vector2Scale(loadmodel->surfmesh.data_texcoordlightmap2f + 2*vertexindex, 1.0f, vertexmesh->texcoordlightmap2f);
+		}
 	}
 
+	// build r_vertexposition_t array
+	if (!loadmodel->surfmesh.vertexposition)
+	{
+		int vertexindex;
+		int numvertices = loadmodel->surfmesh.num_vertices;
+		r_vertexposition_t *vertexposition;
+		loadmodel->surfmesh.vertexposition = vertexposition = (r_vertexposition_t*)Mem_Alloc(loadmodel->mempool, numvertices * sizeof(*loadmodel->surfmesh.vertexposition));
+		for (vertexindex = 0;vertexindex < numvertices;vertexindex++, vertexposition++)
+			VectorCopy(loadmodel->surfmesh.data_vertex3f + 3*vertexindex, vertexposition->vertex3f);
+	}
+
+	// upload r_vertexmesh_t array as a buffer
+	if (loadmodel->surfmesh.vertexmesh && !loadmodel->surfmesh.vertexmeshbuffer)
+		loadmodel->surfmesh.vertexmeshbuffer = R_Mesh_CreateMeshBuffer(loadmodel->surfmesh.vertexmesh, loadmodel->surfmesh.num_vertices * sizeof(*loadmodel->surfmesh.vertexmesh), loadmodel->name, false, false, false);
+
+	// upload r_vertexposition_t array as a buffer
+	if (loadmodel->surfmesh.vertexposition && !loadmodel->surfmesh.vertexpositionbuffer)
+		loadmodel->surfmesh.vertexpositionbuffer = R_Mesh_CreateMeshBuffer(loadmodel->surfmesh.vertexposition, loadmodel->surfmesh.num_vertices * sizeof(*loadmodel->surfmesh.vertexposition), loadmodel->name, false, false, false);
+
+	// upload short indices as a buffer
+	if (loadmodel->surfmesh.data_element3s && !loadmodel->surfmesh.data_element3s_indexbuffer)
+		loadmodel->surfmesh.data_element3s_indexbuffer = R_Mesh_CreateMeshBuffer(loadmodel->surfmesh.data_element3s, loadmodel->surfmesh.num_triangles * sizeof(short[3]), loadmodel->name, true, false, true);
+
+	// upload int indices as a buffer
+	if (loadmodel->surfmesh.data_element3i && !loadmodel->surfmesh.data_element3i_indexbuffer && !loadmodel->surfmesh.data_element3s)
+		loadmodel->surfmesh.data_element3i_indexbuffer = R_Mesh_CreateMeshBuffer(loadmodel->surfmesh.data_element3i, loadmodel->surfmesh.num_triangles * sizeof(int[3]), loadmodel->name, true, false, false);
+
+	// only build a vbo if one has not already been created (this is important for brush models which load specially)
 	// vertex buffer is several arrays and we put them in the same buffer
 	//
 	// is this wise?  the texcoordtexture2f array is used with dynamic
 	// vertex/svector/tvector/normal when rendering animated models, on the
 	// other hand animated models don't use a lot of vertices anyway...
-	if (loadmodel->surfmesh.num_vertices)
+	if (!loadmodel->surfmesh.vbo_vertexbuffer)
 	{
 		size_t size;
 		unsigned char *mem;
@@ -2663,14 +2829,14 @@ void Mod_BuildVBOs(void)
 		if (loadmodel->surfmesh.data_texcoordtexture2f ) memcpy(mem + loadmodel->surfmesh.vbooffset_texcoordtexture2f , loadmodel->surfmesh.data_texcoordtexture2f , loadmodel->surfmesh.num_vertices * sizeof(float[2]));
 		if (loadmodel->surfmesh.data_texcoordlightmap2f) memcpy(mem + loadmodel->surfmesh.vbooffset_texcoordlightmap2f, loadmodel->surfmesh.data_texcoordlightmap2f, loadmodel->surfmesh.num_vertices * sizeof(float[2]));
 		if (loadmodel->surfmesh.data_lightmapcolor4f   ) memcpy(mem + loadmodel->surfmesh.vbooffset_lightmapcolor4f   , loadmodel->surfmesh.data_lightmapcolor4f   , loadmodel->surfmesh.num_vertices * sizeof(float[4]));
-		loadmodel->surfmesh.vbo = R_Mesh_CreateStaticBufferObject(GL_ARRAY_BUFFER_ARB, mem, size, loadmodel->name);
+		loadmodel->surfmesh.vbo_vertexbuffer = R_Mesh_CreateMeshBuffer(mem, size, loadmodel->name, false, false, false);
 		Mem_Free(mem);
 	}
 }
 
 static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const char *mtlfilename, const char *originalfilename)
 {
-	int vertexindex, surfaceindex, triangleindex, textureindex, countvertices = 0, countsurfaces = 0, countfaces = 0, counttextures = 0;
+	int submodelindex, vertexindex, surfaceindex, triangleindex, textureindex, countvertices = 0, countsurfaces = 0, countfaces = 0, counttextures = 0;
 	int a, b, c;
 	const char *texname;
 	const int *e;
@@ -2682,6 +2848,7 @@ static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const cha
 	const msurface_t *surface;
 	const int maxtextures = 256;
 	char *texturenames = (char *) Z_Malloc(maxtextures * MAX_QPATH);
+	dp_model_t *submodel;
 
 	// construct the mtllib file
 	l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "# mtllib for %s exported by darkplaces engine\n", originalfilename);
@@ -2717,12 +2884,13 @@ static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const cha
 
 	// write the mtllib file
 	FS_WriteFile(mtlfilename, outbuffer, outbufferpos);
-	outbufferpos = 0;
 
 	// construct the obj file
+	outbufferpos = 0;
 	l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "# model exported from %s by darkplaces engine\n# %i vertices, %i faces, %i surfaces\nmtllib %s\n", originalfilename, countvertices, countfaces, countsurfaces, mtlfilename);
 	if (l > 0)
 		outbufferpos += l;
+
 	for (vertexindex = 0, v = model->surfmesh.data_vertex3f, vn = model->surfmesh.data_normal3f, vt = model->surfmesh.data_texcoordtexture2f;vertexindex < model->surfmesh.num_vertices;vertexindex++, v += 3, vn += 3, vt += 2)
 	{
 		if (outbufferpos >= outbuffermax >> 1)
@@ -2733,31 +2901,40 @@ static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const cha
 			memcpy(outbuffer, oldbuffer, outbufferpos);
 			Z_Free(oldbuffer);
 		}
-		l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "v %f %f %f\nvn %f %f %f\nvt %f %f\n", v[0], v[2], -v[1], vn[0], vn[2], -vn[1], vt[0], 1-vt[1]);
+		l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "v %f %f %f\nvn %f %f %f\nvt %f %f\n", v[0], v[2], v[1], vn[0], vn[2], vn[1], vt[0], 1-vt[1]);
 		if (l > 0)
 			outbufferpos += l;
 	}
-	for (surfaceindex = 0, surface = model->data_surfaces;surfaceindex < model->num_surfaces;surfaceindex++, surface++)
+
+	for (submodelindex = 0;submodelindex < max(1, model->brush.numsubmodels);submodelindex++)
 	{
-		l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "usemtl %s\n", (surface->texture && surface->texture->name[0]) ? surface->texture->name : "default");
+		l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "o %i\n", submodelindex);
 		if (l > 0)
 			outbufferpos += l;
-		for (triangleindex = 0, e = model->surfmesh.data_element3i + surface->num_firsttriangle * 3;triangleindex < surface->num_triangles;triangleindex++, e += 3)
+		submodel = model->brush.numsubmodels ? model->brush.submodels[submodelindex] : model;
+		for (surfaceindex = 0;surfaceindex < submodel->nummodelsurfaces;surfaceindex++)
 		{
-			if (outbufferpos >= outbuffermax >> 1)
-			{
-				outbuffermax *= 2;
-				oldbuffer = outbuffer;
-				outbuffer = (char *) Z_Malloc(outbuffermax);
-				memcpy(outbuffer, oldbuffer, outbufferpos);
-				Z_Free(oldbuffer);
-			}
-			a = e[0]+1;
-			b = e[2]+1;
-			c = e[1]+1;
-			l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "f %i/%i/%i %i/%i/%i %i/%i/%i\n", a,a,a,b,b,b,c,c,c);
+			surface = model->data_surfaces + submodel->sortedmodelsurfaces[surfaceindex];
+			l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "usemtl %s\n", (surface->texture && surface->texture->name[0]) ? surface->texture->name : "default");
 			if (l > 0)
 				outbufferpos += l;
+			for (triangleindex = 0, e = model->surfmesh.data_element3i + surface->num_firsttriangle * 3;triangleindex < surface->num_triangles;triangleindex++, e += 3)
+			{
+				if (outbufferpos >= outbuffermax >> 1)
+				{
+					outbuffermax *= 2;
+					oldbuffer = outbuffer;
+					outbuffer = (char *) Z_Malloc(outbuffermax);
+					memcpy(outbuffer, oldbuffer, outbufferpos);
+					Z_Free(oldbuffer);
+				}
+				a = e[0]+1;
+				b = e[1]+1;
+				c = e[2]+1;
+				l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "f %i/%i/%i %i/%i/%i %i/%i/%i\n", a,a,a,b,b,b,c,c,c);
+				if (l > 0)
+					outbufferpos += l;
+			}
 		}
 	}
 
@@ -3073,7 +3250,7 @@ void Mod_AllocLightmap_Init(mod_alloclightmap_state_t *state, int width, int hei
 	state->width = width;
 	state->height = height;
 	state->currentY = 0;
-	state->rows = Mem_Alloc(loadmodel->mempool, state->height * sizeof(*state->rows));
+	state->rows = (mod_alloclightmap_row_t *)Mem_Alloc(loadmodel->mempool, state->height * sizeof(*state->rows));
 	for (y = 0;y < state->height;y++)
 	{
 		state->rows[y].currentX = 0;
@@ -3305,28 +3482,28 @@ static void Mod_GenerateLightmaps_CreateLights_ComputeSVBSP(dp_model_t *model, l
 	VectorSet(mins, lightinfo->origin[0] - lightinfo->radius, lightinfo->origin[1] - lightinfo->radius, lightinfo->origin[2] - lightinfo->radius);
 	VectorSet(maxs, lightinfo->origin[0] + lightinfo->radius, lightinfo->origin[1] + lightinfo->radius, lightinfo->origin[2] + lightinfo->radius);
 	VectorCopy(lightinfo->origin, origin);
-	nodes = Mem_Alloc(tempmempool, maxnodes * sizeof(*nodes));
+	nodes = (svbsp_node_t *)Mem_Alloc(tempmempool, maxnodes * sizeof(*nodes));
 	for (;;)
 	{
 		SVBSP_Init(&svbsp, origin, maxnodes, nodes);
 		Mod_GenerateLightmaps_CreateLights_ComputeSVBSP_InsertSurfaces(model, &svbsp, mins, maxs);
 		if (svbsp.ranoutofnodes)
 		{
-			maxnodes *= 2;
-			if (maxnodes >= 1<<22)
+			maxnodes *= 16;
+			if (maxnodes > 1<<22)
 			{
 				Mem_Free(nodes);
 				return;
 			}
 			Mem_Free(nodes);
-			nodes = Mem_Alloc(tempmempool, maxnodes * sizeof(*nodes));
+			nodes = (svbsp_node_t *)Mem_Alloc(tempmempool, maxnodes * sizeof(*nodes));
 		}
 		else
 			break;
 	}
 	if (svbsp.numnodes > 0)
 	{
-		svbsp.nodes = Mem_Alloc(tempmempool, svbsp.numnodes * sizeof(*nodes));
+		svbsp.nodes = (svbsp_node_t *)Mem_Alloc(tempmempool, svbsp.numnodes * sizeof(*nodes));
 		memcpy(svbsp.nodes, nodes, svbsp.numnodes * sizeof(*nodes));
 		lightinfo->svbsp = svbsp;
 	}
@@ -3352,7 +3529,7 @@ static void Mod_GenerateLightmaps_CreateLights(dp_model_t *model)
 	}
 	if (mod_generatelightmaps_numlights > 0)
 	{
-		mod_generatelightmaps_lightinfo = Mem_Alloc(tempmempool, mod_generatelightmaps_numlights * sizeof(*mod_generatelightmaps_lightinfo));
+		mod_generatelightmaps_lightinfo = (lightmaplight_t *)Mem_Alloc(tempmempool, mod_generatelightmaps_numlights * sizeof(*mod_generatelightmaps_lightinfo));
 		lightinfo = mod_generatelightmaps_lightinfo;
 		for (index = 0;;index++)
 		{
@@ -3619,15 +3796,27 @@ static void Mod_GenerateLightmaps_UnweldTriangles(dp_model_t *model)
 	if (model->surfmesh.num_vertices > 65536)
 		model->surfmesh.data_element3s = NULL;
 
-	if (model->surfmesh.vbo)
-		R_Mesh_DestroyBufferObject(model->surfmesh.vbo);
-	model->surfmesh.vbo = 0;
-	if (model->surfmesh.ebo3i)
-		R_Mesh_DestroyBufferObject(model->surfmesh.ebo3i);
-	model->surfmesh.ebo3i = 0;
-	if (model->surfmesh.ebo3s)
-		R_Mesh_DestroyBufferObject(model->surfmesh.ebo3s);
-	model->surfmesh.ebo3s = 0;
+	if (model->surfmesh.vertexposition)
+		Mem_Free(model->surfmesh.vertexposition);
+	model->surfmesh.vertexposition = NULL;
+	if (model->surfmesh.vertexmesh)
+		Mem_Free(model->surfmesh.vertexmesh);
+	model->surfmesh.vertexmesh = NULL;
+	if (model->surfmesh.vertexpositionbuffer)
+		R_Mesh_DestroyMeshBuffer(model->surfmesh.vertexpositionbuffer);
+	model->surfmesh.vertexpositionbuffer = NULL;
+	if (model->surfmesh.vertexmeshbuffer)
+		R_Mesh_DestroyMeshBuffer(model->surfmesh.vertexmeshbuffer);
+	model->surfmesh.vertexmeshbuffer = NULL;
+	if (model->surfmesh.data_element3i_indexbuffer)
+		R_Mesh_DestroyMeshBuffer(model->surfmesh.data_element3i_indexbuffer);
+	model->surfmesh.data_element3i_indexbuffer = NULL;
+	if (model->surfmesh.data_element3s_indexbuffer)
+		R_Mesh_DestroyMeshBuffer(model->surfmesh.data_element3s_indexbuffer);
+	model->surfmesh.data_element3s_indexbuffer = NULL;
+	if (model->surfmesh.vbo_vertexbuffer)
+		R_Mesh_DestroyMeshBuffer(model->surfmesh.vbo_vertexbuffer);
+	model->surfmesh.vbo_vertexbuffer = 0;
 
 	// convert all triangles to unique vertex data
 	outvertexindex = 0;
@@ -3691,7 +3880,7 @@ static void Mod_GenerateLightmaps_CreateTriangleInformation(dp_model_t *model)
 	const int *e;
 	lightmaptriangle_t *triangle;
 	// generate lightmap triangle structs
-	mod_generatelightmaps_lightmaptriangles = Mem_Alloc(model->mempool, model->surfmesh.num_triangles * sizeof(lightmaptriangle_t));
+	mod_generatelightmaps_lightmaptriangles = (lightmaptriangle_t *)Mem_Alloc(model->mempool, model->surfmesh.num_triangles * sizeof(lightmaptriangle_t));
 	for (surfaceindex = 0;surfaceindex < model->num_surfaces;surfaceindex++)
 	{
 		surface = model->data_surfaces + surfaceindex;
@@ -3846,10 +4035,10 @@ static void Mod_GenerateLightmaps_CreateLightmaps(dp_model_t *model)
 	model->brushq3.deluxemapping_modelspace = true;
 	model->brushq3.deluxemapping = true;
 	model->brushq3.num_mergedlightmaps = lightmapnumber;
-	model->brushq3.data_lightmaps = Mem_Alloc(model->mempool, model->brushq3.num_mergedlightmaps * sizeof(rtexture_t *));
-	model->brushq3.data_deluxemaps = Mem_Alloc(model->mempool, model->brushq3.num_mergedlightmaps * sizeof(rtexture_t *));
-	lightmappixels = Mem_Alloc(tempmempool, model->brushq3.num_mergedlightmaps * lm_texturesize * lm_texturesize * 4);
-	deluxemappixels = Mem_Alloc(tempmempool, model->brushq3.num_mergedlightmaps * lm_texturesize * lm_texturesize * 4);
+	model->brushq3.data_lightmaps = (rtexture_t **)Mem_Alloc(model->mempool, model->brushq3.num_mergedlightmaps * sizeof(rtexture_t *));
+	model->brushq3.data_deluxemaps = (rtexture_t **)Mem_Alloc(model->mempool, model->brushq3.num_mergedlightmaps * sizeof(rtexture_t *));
+	lightmappixels = (unsigned char *)Mem_Alloc(tempmempool, model->brushq3.num_mergedlightmaps * lm_texturesize * lm_texturesize * 4);
+	deluxemappixels = (unsigned char *)Mem_Alloc(tempmempool, model->brushq3.num_mergedlightmaps * lm_texturesize * lm_texturesize * 4);
 	for (surfaceindex = 0;surfaceindex < model->num_surfaces;surfaceindex++)
 	{
 		surface = model->data_surfaces + surfaceindex;
@@ -3950,8 +4139,8 @@ static void Mod_GenerateLightmaps_CreateLightmaps(dp_model_t *model)
 
 	for (lightmapindex = 0;lightmapindex < model->brushq3.num_mergedlightmaps;lightmapindex++)
 	{
-		model->brushq3.data_lightmaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va("lightmap%i", lightmapindex), lm_texturesize, lm_texturesize, lightmappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, NULL);
-		model->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va("deluxemap%i", lightmapindex), lm_texturesize, lm_texturesize, deluxemappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, NULL);
+		model->brushq3.data_lightmaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va("lightmap%i", lightmapindex), lm_texturesize, lm_texturesize, lightmappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, -1, NULL);
+		model->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va("deluxemap%i", lightmapindex), lm_texturesize, lm_texturesize, deluxemappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, -1, NULL);
 	}
 
 	if (lightmappixels)

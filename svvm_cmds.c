@@ -8,7 +8,7 @@
 
 
 
-char *vm_sv_extensions =
+const char *vm_sv_extensions =
 "BX_WAL_SUPPORT "
 "DP_BUTTONCHAT "
 "DP_BUTTONUSE "
@@ -19,9 +19,11 @@ char *vm_sv_extensions =
 "DP_CON_SET "
 "DP_CON_SETA "
 "DP_CON_STARTMAP "
+"DP_CSQC_BINDMAPS "
 "DP_CSQC_ENTITYNOCULL "
 "DP_CSQC_ENTITYTRANSPARENTSORTING_OFFSET "
 "DP_CSQC_MULTIFRAME_INTERPOLATION "
+"DP_CSQC_BOXPARTICLES "
 "DP_CSQC_SPAWNPARTICLE "
 "DP_CSQC_QUERYRENDERENTITY "
 "DP_CSQC_SETPAUSE "
@@ -56,6 +58,10 @@ char *vm_sv_extensions =
 "DP_GFX_QUAKE3MODELTAGS "
 "DP_GFX_SKINFILES "
 "DP_GFX_SKYBOX "
+"DP_GFX_FONTS "
+"DP_GFX_FONTS_FREETYPE "
+"DP_UTF8 "
+"DP_FONT_VARIABLEWIDTH "
 "DP_HALFLIFE_MAP "
 "DP_HALFLIFE_MAP_CVAR "
 "DP_HALFLIFE_SPRITE "
@@ -134,6 +140,8 @@ char *vm_sv_extensions =
 "DP_SND_SETPARAMS "
 "DP_SND_STEREOWAV "
 "DP_SND_GETSOUNDTIME "
+"DP_VIDEO_DPV "
+"DP_VIDEO_SUBTITLES "
 "DP_SOLIDCORPSE "
 "DP_SPRITE32 "
 "DP_SV_BOTCLIENT "
@@ -143,6 +151,7 @@ char *vm_sv_extensions =
 "DP_SV_CLIENTNAME "
 "DP_SV_CMD "
 "DP_SV_CUSTOMIZEENTITYFORCLIENT "
+"DP_SV_DISCARDABLEDEMO "
 "DP_SV_DRAWONLYTOCLIENT "
 "DP_SV_DROPCLIENT "
 "DP_SV_EFFECT "
@@ -2829,7 +2838,7 @@ static void VM_SV_skel_create(void)
 			break;
 	if (i == MAX_EDICTS)
 		return;
-	prog->skeletons[i] = skeleton = Mem_Alloc(cls.levelmempool, sizeof(skeleton_t) + model->num_bones * sizeof(matrix4x4_t));
+	prog->skeletons[i] = skeleton = (skeleton_t *)Mem_Alloc(cls.levelmempool, sizeof(skeleton_t) + model->num_bones * sizeof(matrix4x4_t));
 	PRVM_G_FLOAT(OFS_RETURN) = i + 1;
 	skeleton->model = model;
 	skeleton->relativetransforms = (matrix4x4_t *)(skeleton+1);

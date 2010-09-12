@@ -57,6 +57,7 @@ cvar_t freelook = {CVAR_SAVE, "freelook", "1","mouse controls pitch instead of f
 
 cvar_t cl_autodemo = {CVAR_SAVE, "cl_autodemo", "0", "records every game played, using the date/time and map name to name the demo file" };
 cvar_t cl_autodemo_nameformat = {CVAR_SAVE, "cl_autodemo_nameformat", "autodemos/%Y-%m-%d_%H-%M", "The format of the cl_autodemo filename, followed by the map name (the date is encoded using strftime escapes)" };
+cvar_t cl_autodemo_delete = {0, "cl_autodemo_delete", "0", "Delete demos after recording.  This is a bitmask, bit 1 gives the default, bit 0 the value for the current demo.  Thus, the values are: 0 = disabled; 1 = delete current demo only; 2 = delete all demos except the current demo; 3 = delete all demos from now on" };
 
 cvar_t r_draweffects = {0, "r_draweffects", "1","renders temporary sprite effects"};
 
@@ -121,7 +122,7 @@ void CL_ClearState(void)
 	cl.sensitivityscale = 1.0f;
 
 	// enable rendering of the world and such
-	cl.csqc_vidvars.drawworld = true;
+	cl.csqc_vidvars.drawworld = r_drawworld.integer != 0;
 	cl.csqc_vidvars.drawenginesbar = true;
 	cl.csqc_vidvars.drawcrosshair = true;
 
@@ -170,7 +171,7 @@ void CL_ClearState(void)
 		cl.entities[i].state_current = defaultstate;
 	}
 
-	if (gamemode == GAME_NEXUIZ)
+	if (gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 	{
 		VectorSet(cl.playerstandmins, -16, -16, -24);
 		VectorSet(cl.playerstandmaxs, 16, 16, 45);
@@ -406,7 +407,7 @@ CL_EstablishConnection
 Host should be either "local" or a net address
 =====================
 */
-void CL_EstablishConnection(const char *host)
+void CL_EstablishConnection(const char *host, int firstarg)
 {
 	if (cls.state == ca_dedicated)
 		return;
@@ -433,7 +434,24 @@ void CL_EstablishConnection(const char *host)
 		cls.connect_trying = true;
 		cls.connect_remainingtries = 3;
 		cls.connect_nextsendtime = 0;
+
+		// only NOW, set connect_userinfo
+		if(firstarg >= 0)
+		{
+			int i;
+			*cls.connect_userinfo = 0;
+			for(i = firstarg; i+2 <= Cmd_Argc(); i += 2)
+				InfoString_SetValue(cls.connect_userinfo, sizeof(cls.connect_userinfo), Cmd_Argv(i), Cmd_Argv(i+1));
+		}
+		else if(firstarg < -1)
+		{
+			// -1: keep as is (reconnect)
+			// -2: clear
+			*cls.connect_userinfo = 0;
+		}
+
 		M_Update_Return_Reason("Trying to connect...");
+
 		// run several network frames to jump into the game quickly
 		//if (sv.active)
 		//{
@@ -1176,15 +1194,15 @@ void CL_UpdateNetworkEntityTrail(entity_t *e)
 	{
 		if (e->render.effects & EF_BRIGHTFIELD)
 		{
-			if (gamemode == GAME_NEXUIZ)
+			if (gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 				trailtype = EFFECT_TR_NEXUIZPLASMA;
 			else
 				CL_EntityParticles(e);
 		}
 		if (e->render.effects & EF_FLAME)
-			CL_ParticleTrail(EFFECT_EF_FLAME, bound(0, cl.time - cl.oldtime, 0.1), origin, origin, vec3_origin, vec3_origin, NULL, 0, false, true);
+			CL_ParticleTrail(EFFECT_EF_FLAME, bound(0, cl.time - cl.oldtime, 0.1), origin, origin, vec3_origin, vec3_origin, NULL, 0, false, true, NULL, NULL);
 		if (e->render.effects & EF_STARDUST)
-			CL_ParticleTrail(EFFECT_EF_STARDUST, bound(0, cl.time - cl.oldtime, 0.1), origin, origin, vec3_origin, vec3_origin, NULL, 0, false, true);
+			CL_ParticleTrail(EFFECT_EF_STARDUST, bound(0, cl.time - cl.oldtime, 0.1), origin, origin, vec3_origin, vec3_origin, NULL, 0, false, true, NULL, NULL);
 	}
 	if (e->render.internaleffects & (INTEF_FLAG1QW | INTEF_FLAG2QW))
 	{
@@ -1228,7 +1246,7 @@ void CL_UpdateNetworkEntityTrail(entity_t *e)
 		if (len > 0)
 			len = 1.0f / len;
 		VectorScale(vel, len, vel);
-		CL_ParticleTrail(trailtype, 1, e->persistent.trail_origin, origin, vel, vel, e, e->state_current.glowcolor, false, true);
+		CL_ParticleTrail(trailtype, 1, e->persistent.trail_origin, origin, vel, vel, e, e->state_current.glowcolor, false, true, NULL, NULL);
 	}
 	// now that the entity has survived one trail update it is allowed to
 	// leave a real trail on later frames
@@ -1395,7 +1413,7 @@ void CL_LinkNetworkEntity(entity_t *e)
 	{
 		if (e->render.effects & EF_BRIGHTFIELD)
 		{
-			if (gamemode == GAME_NEXUIZ)
+			if (gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 				trailtype = EFFECT_TR_NEXUIZPLASMA;
 		}
 		if (e->render.effects & EF_DIMLIGHT)
@@ -1428,9 +1446,9 @@ void CL_LinkNetworkEntity(entity_t *e)
 			dlightcolor[2] += 1.50f;
 		}
 		if (e->render.effects & EF_FLAME)
-			CL_ParticleTrail(EFFECT_EF_FLAME, 0, origin, origin, vec3_origin, vec3_origin, NULL, 0, true, false);
+			CL_ParticleTrail(EFFECT_EF_FLAME, 1, origin, origin, vec3_origin, vec3_origin, NULL, 0, true, false, NULL, NULL);
 		if (e->render.effects & EF_STARDUST)
-			CL_ParticleTrail(EFFECT_EF_STARDUST, 0, origin, origin, vec3_origin, vec3_origin, NULL, 0, true, false);
+			CL_ParticleTrail(EFFECT_EF_STARDUST, 1, origin, origin, vec3_origin, vec3_origin, NULL, 0, true, false, NULL, NULL);
 	}
 	// muzzleflash fades over time, and is offset a bit
 	if (e->persistent.muzzleflash > 0 && r_refdef.scene.numlights < MAX_DLIGHTS)
@@ -1510,7 +1528,7 @@ void CL_LinkNetworkEntity(entity_t *e)
 	if (e->render.flags & RENDER_GLOWTRAIL)
 		trailtype = EFFECT_TR_GLOWTRAIL;
 	if (trailtype)
-		CL_ParticleTrail(trailtype, 0, origin, origin, vec3_origin, vec3_origin, NULL, e->state_current.glowcolor, true, false);
+		CL_ParticleTrail(trailtype, 1, origin, origin, vec3_origin, vec3_origin, NULL, e->state_current.glowcolor, true, false, NULL, NULL);
 
 	// don't show entities with no modelindex (note: this still shows
 	// entities which have a modelindex that resolved to a NULL model)
@@ -2123,8 +2141,7 @@ void CL_Locs_Save_f(void)
 		Con_Printf("No level loaded!\n");
 		return;
 	}
-	FS_StripExtension(cl.worldmodel->name, locfilename, sizeof(locfilename));
-	strlcat(locfilename, ".loc", sizeof(locfilename));
+	dpsnprintf(locfilename, sizeof(locfilename), "%s.loc", cl.worldnamenoextension);
 
 	outfile = FS_OpenRealFile(locfilename, "w", false);
 	if (!outfile)
@@ -2201,14 +2218,12 @@ void CL_Locs_Reload_f(void)
 	CL_Locs_Clear_f();
 
 	// try maps/something.loc first (LordHavoc: where I think they should be)
-	FS_StripExtension(cl.worldmodel->name, locfilename, sizeof(locfilename));
-	strlcat(locfilename, ".loc", sizeof(locfilename));
+	dpsnprintf(locfilename, sizeof(locfilename), "%s.loc", cl.worldnamenoextension);
 	filedata = (char *)FS_LoadFile(locfilename, cls.levelmempool, false, &filesize);
 	if (!filedata)
 	{
 		// try proquake name as well (LordHavoc: I hate path mangling)
-		FS_StripExtension(va("locs/%s", FS_FileWithoutPath(cl.worldmodel->name)), locfilename, sizeof(locfilename));
-		strlcat(locfilename, ".loc", sizeof(locfilename));
+		dpsnprintf(locfilename, sizeof(locfilename), "locs/%s.loc", cl.worldbasename);
 		filedata = (char *)FS_LoadFile(locfilename, cls.levelmempool, false, &filesize);
 		if (!filedata)
 			return;
@@ -2398,6 +2413,7 @@ void CL_Init (void)
 
 	Cvar_RegisterVariable (&cl_autodemo);
 	Cvar_RegisterVariable (&cl_autodemo_nameformat);
+	Cvar_RegisterVariable (&cl_autodemo_delete);
 
 	Cmd_AddCommand ("fog", CL_Fog_f, "set global fog parameters (density red green blue [alpha [mindist [maxdist [top [fadedepth]]]]])");
 	Cmd_AddCommand ("fog_heighttexture", CL_Fog_HeightTexture_f, "set global fog parameters (density red green blue alpha mindist maxdist top depth textures/mapname/fogheight.tga)");

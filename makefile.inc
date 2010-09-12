@@ -36,11 +36,14 @@ CFLAGS_CG= `[ -n "$(DP_CG_LIBDIR)" ] && echo \ -DSUPPORTCG`
 
 SDL_CONFIG?=sdl-config
 SDLCONFIG_UNIXCFLAGS?=`$(SDL_CONFIG) --cflags`
+SDLCONFIG_UNIXCFLAGS_X11?=
 SDLCONFIG_UNIXLIBS?=`$(SDL_CONFIG) --libs`
+SDLCONFIG_UNIXLIBS_X11?=-lX11
 SDLCONFIG_UNIXSTATICLIBS?=`$(SDL_CONFIG) --static-libs`
-SDLCONFIG_MACOSXCFLAGS=-I/Library/Frameworks/SDL.framework/Headers
-SDLCONFIG_MACOSXLIBS=-framework SDL -framework Cocoa $(SDLCONFIG_MACOSXCFLAGS)
-SDLCONFIG_MACOSXSTATICLIBS=-framework SDL -framework Cocoa $(SDLCONFIG_MACOSXCFLAGS)
+SDLCONFIG_UNIXSTATICLIBS_X11?=-lX11
+SDLCONFIG_MACOSXCFLAGS=-I/Library/Frameworks/SDL.framework/Headers -I$(HOME)/Library/Frameworks/SDL.framework/Headers
+SDLCONFIG_MACOSXLIBS=-F$(HOME)/Library/Frameworks/ -framework SDL -framework Cocoa $(SDLCONFIG_MACOSXCFLAGS)
+SDLCONFIG_MACOSXSTATICLIBS=-F$(HOME)/Library/Frameworks/ -framework SDL -framework Cocoa $(SDLCONFIG_MACOSXCFLAGS)
 STRIP?=strip
 
 
@@ -178,7 +181,7 @@ OBJ_SDL= builddate.c sys_sdl.o vid_sdl.o $(OBJ_SND_COMMON) snd_sdl.o cd_sdl.o $(
 
 
 # Compilation
-CFLAGS_COMMON=$(CFLAGS_MAKEDEP) $(CFLAGS_PRELOAD) $(CFLAGS_FS) $(CFLAGS_CG) -Wall -Wold-style-definition -Wstrict-prototypes -Wsign-compare -Wdeclaration-after-statement
+CFLAGS_COMMON=$(CFLAGS_MAKEDEP) $(CFLAGS_PRELOAD) $(CFLAGS_FS) $(CFLAGS_CG) $(CFLAGS_WARNINGS) $(CFLAGS_LIBJPEG) $(CFLAGS_D3D)
 CFLAGS_DEBUG=-ggdb
 CFLAGS_PROFILE=-g -pg -ggdb -fprofile-arcs
 CFLAGS_RELEASE=
@@ -206,10 +209,10 @@ LDFLAGS_RELEASE=$(OPTIM_RELEASE) -DSVNREVISION=`test -d .svn && svnversion || ec
 
 OBJ_GLX= builddate.c sys_linux.o vid_glx.o keysym2ucs.o $(OBJ_SOUND) $(OBJ_CD) $(OBJ_COMMON)
 
-LDFLAGS_UNIXCOMMON=-lm $(LIB_ODE) $(LIB_CG)
+LDFLAGS_UNIXCOMMON=-lm $(LIB_ODE) $(LIB_CG) $(LIB_JPEG)
 LDFLAGS_UNIXCL=-L$(UNIX_X11LIBPATH) -lX11 -lXpm -lXext -lXxf86dga -lXxf86vm $(LIB_SOUND)
 LDFLAGS_UNIXCL_PRELOAD=-lz -ljpeg -lpng -logg -ltheora -lvorbis -lvorbisenc -lvorbisfile -lcurl -lmodplug
-LDFLAGS_UNIXSV_PRELOAD=-lz -lcurl
+LDFLAGS_UNIXSV_PRELOAD=-lz -ljpeg -lpng -lcurl
 LDFLAGS_UNIXSDL_PRELOAD=-lz -ljpeg -lpng -logg -ltheora -lvorbis -lvorbisenc -lvorbisfile -lcurl -lmodplug
 CFLAGS_UNIX_PRELOAD=-DPREFER_PRELOAD
 
@@ -290,12 +293,10 @@ OBJ_WINCD=cd_win.o
 OBJ_WGL= builddate.c sys_win.o vid_wgl.o $(OBJ_SND_WIN) $(OBJ_WINCD) $(OBJ_COMMON)
 
 # Link
-# Note that Windows Vista users may need --large-address-aware because Vista seems to map over 500MB of application address space for its own purposes, which is a significant chunk taken out of the default 2GB address space, this option raises the limit to 4GB (or 3GB on Vista 32 and older versions of Windows).
-# if using mingw64 you need to use LDFLAGS_WINCOMMON= on the commandline to get rid of this, otherwise it produces a compile error
-LDFLAGS_WINCOMMON=-Wl,--large-address-aware
-LDFLAGS_WINCL=$(LDFLAGS_WINCOMMON) -mwindows -lwinmm -luser32 -lgdi32 -ldxguid -ldinput -lcomctl32 -lws2_32
-LDFLAGS_WINSV=$(LDFLAGS_WINCOMMON) -mconsole -lwinmm -lws2_32
-LDFLAGS_WINSDL=$(LDFLAGS_WINCOMMON) $(SDLCONFIG_LIBS) $(LIB_SND_MODPLUG) -lwinmm -lws2_32
+# see LDFLAGS_WINCOMMON in makefile
+LDFLAGS_WINCL=$(LDFLAGS_WINCOMMON) -mwindows -lwinmm -luser32 -lgdi32 -ldxguid -ldinput -lcomctl32 -lws2_32 $(LDFLAGS_D3D) $(LIB_JPEG)
+LDFLAGS_WINSV=$(LDFLAGS_WINCOMMON) -mconsole -lwinmm -lws2_32 $(LIB_JPEG)
+LDFLAGS_WINSDL=$(LDFLAGS_WINCOMMON) $(SDLCONFIG_LIBS) $(LIB_SND_MODPLUG) -lwinmm -lws2_32 $(LIB_JPEG)
 EXE_WINCL=darkplaces.exe
 EXE_WINSV=darkplaces-dedicated.exe
 EXE_WINSDL=darkplaces-sdl.exe

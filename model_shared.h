@@ -101,6 +101,47 @@ typedef struct blendweights_s
 }
 blendweights_t;
 
+typedef struct r_vertexposition_s
+{
+	// 12 bytes
+	float vertex3f[3];
+}
+r_vertexposition_t;
+
+typedef struct r_vertexgeneric_s
+{
+	// 24 bytes
+	float vertex3f[3];
+	unsigned char color4ub[4];
+	float texcoord2f[2];
+}
+r_vertexgeneric_t;
+
+typedef struct r_vertexmesh_s
+{
+	// 68 bytes
+	float vertex3f[3];
+	unsigned char color4ub[4];
+	float texcoordtexture2f[2];
+	float texcoordlightmap2f[2];
+	float svector3f[3];
+	float tvector3f[3];
+	float normal3f[3];
+}
+r_vertexmesh_t;
+
+typedef struct r_meshbuffer_s
+{
+	int bufferobject; // OpenGL
+	void *devicebuffer; // Direct3D
+	size_t size;
+	qboolean isindexbuffer;
+	qboolean isdynamic;
+	qboolean isindex16;
+	char name[MAX_QPATH];
+}
+r_meshbuffer_t;
+
 // used for mesh lists in q1bsp/q3bsp map models
 // (the surfaces reference portions of these meshes)
 typedef struct surfmesh_s
@@ -108,11 +149,12 @@ typedef struct surfmesh_s
 	// triangle data in system memory
 	int num_triangles; // number of triangles in the mesh
 	int *data_element3i; // int[tris*3] triangles of the mesh, 3 indices into vertex arrays for each
+	r_meshbuffer_t *data_element3i_indexbuffer;
+	size_t data_element3i_bufferoffset;
 	unsigned short *data_element3s; // unsigned short[tris*3] triangles of the mesh in unsigned short format (NULL if num_vertices > 65536)
+	r_meshbuffer_t *data_element3s_indexbuffer;
+	size_t data_element3s_bufferoffset;
 	int *data_neighbor3i; // int[tris*3] neighboring triangle on each edge (-1 if none)
-	// element buffer object (stores triangles in video memory)
-	int ebo3i; // unsigned int format (only allocated if num_vertices > 65536)
-	int ebo3s; // unsigned short format (only allocated if num_vertices <= 65536)
 	// vertex data in system memory
 	int num_vertices; // number of vertices in the mesh
 	float *data_vertex3f; // float[verts*3] vertex locations
@@ -124,7 +166,7 @@ typedef struct surfmesh_s
 	float *data_lightmapcolor4f;
 	int *data_lightmapoffsets; // index into surface's lightmap samples for vertex lighting
 	// vertex buffer object (stores geometry in video memory)
-	int vbo;
+	r_meshbuffer_t *vbo_vertexbuffer;
 	size_t vbooffset_vertex3f;
 	size_t vbooffset_svector3f;
 	size_t vbooffset_tvector3f;
@@ -146,6 +188,12 @@ typedef struct surfmesh_s
 	unsigned short *blends;
 	// set if there is some kind of animation on this model
 	qboolean isanimated;
+
+	// vertex and index buffers for rendering
+	r_vertexposition_t *vertexposition;
+	r_vertexmesh_t *vertexmesh;
+	r_meshbuffer_t *vertexpositionbuffer;
+	r_meshbuffer_t *vertexmeshbuffer;
 }
 surfmesh_t;
 
@@ -176,7 +224,11 @@ typedef struct shadowmesh_s
 	float *texcoord2f;
 	// used always
 	int *element3i;
+	r_meshbuffer_t *element3i_indexbuffer;
+	size_t element3i_bufferoffset;
 	unsigned short *element3s;
+	r_meshbuffer_t *element3s_indexbuffer;
+	size_t element3s_bufferoffset;
 	// used for shadow mapping cubemap side partitioning
 	int sideoffsets[6], sidetotals[6];
 	// used for shadow mesh (NULL on light mesh)
@@ -184,18 +236,18 @@ typedef struct shadowmesh_s
 	// these are NULL after Mod_ShadowMesh_Finish is performed, only used
 	// while building meshes
 	shadowmeshvertexhash_t **vertexhashtable, *vertexhashentries;
-	// element buffer object (stores triangles in video memory)
-	// (created by Mod_ShadowMesh_Finish if possible)
-	int ebo3i;
-	int ebo3s;
-	// vertex buffer object (stores vertices in video memory)
-	// (created by Mod_ShadowMesh_Finish if possible)
-	int vbo;
+	r_meshbuffer_t *vbo_vertexbuffer;
 	size_t vbooffset_vertex3f;
 	size_t vbooffset_svector3f;
 	size_t vbooffset_tvector3f;
 	size_t vbooffset_normal3f;
 	size_t vbooffset_texcoord2f;
+	// vertex/index buffers for rendering
+	// (created by Mod_ShadowMesh_Finish if possible)
+	r_vertexposition_t *vertexposition;
+	r_vertexmesh_t *vertexmesh; // usually NULL
+	r_meshbuffer_t *vertexpositionbuffer;
+	r_meshbuffer_t *vertexmeshbuffer; // usually NULL
 }
 shadowmesh_t;
 
@@ -232,7 +284,10 @@ typedef enum q3wavefunc_e
 	Q3WAVEFUNC_TRIANGLE,
 	Q3WAVEFUNC_COUNT
 }
-q3wavefunc_t;
+q3wavefunc_e;
+typedef int q3wavefunc_t;
+#define Q3WAVEFUNC_USER_COUNT 4
+#define Q3WAVEFUNC_USER_SHIFT 8 // use 8 bits for wave func type
 
 typedef enum q3deform_e
 {
@@ -433,7 +488,7 @@ typedef enum texturelayertype_e
 	TEXTURELAYERTYPE_INVALID,
 	TEXTURELAYERTYPE_LITTEXTURE,
 	TEXTURELAYERTYPE_TEXTURE,
-	TEXTURELAYERTYPE_FOG,
+	TEXTURELAYERTYPE_FOG
 }
 texturelayertype_t;
 
@@ -824,7 +879,9 @@ typedef struct model_brushq3_s
 	// lightmap textures
 	int num_originallightmaps;
 	int num_mergedlightmaps;
-	int num_lightmapmergepower;
+	int num_lightmapmergedwidthpower;
+	int num_lightmapmergedheightpower;
+	int num_lightmapmergedwidthheightdeluxepower;
 	int num_lightmapmerge;
 	rtexture_t **data_lightmaps;
 	rtexture_t **data_deluxemaps;
@@ -906,6 +963,7 @@ typedef struct model_s
 	int				nummodelbrushes;
 	// BIH (Bounding Interval Hierarchy) for this (sub)model
 	bih_t			collision_bih;
+	bih_t			render_bih; // if not set, use collision_bih instead for rendering purposes too
 	// for md3 models
 	int				num_tags;
 	int				num_tagframes;
@@ -1035,6 +1093,7 @@ q3shaderinfo_t *Mod_LookupQ3Shader(const char *name);
 qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qboolean warnmissing, qboolean fallback, int defaulttexflags);
 
 extern cvar_t r_mipskins;
+extern cvar_t r_mipnormalmaps;
 
 typedef struct skeleton_s
 {
@@ -1115,7 +1174,7 @@ void Mod_CollisionBIH_TraceLine(dp_model_t *model, const struct frameblend_s *fr
 void Mod_CollisionBIH_TraceBox(dp_model_t *model, const struct frameblend_s *frameblend, const skeleton_t *skeleton, struct trace_s *trace, const vec3_t start, const vec3_t boxmins, const vec3_t boxmaxs, const vec3_t end, int hitsupercontentsmask);
 void Mod_CollisionBIH_TracePoint_Mesh(dp_model_t *model, const struct frameblend_s *frameblend, const skeleton_t *skeleton, struct trace_s *trace, const vec3_t start, int hitsupercontentsmask);
 int Mod_CollisionBIH_PointSuperContents_Mesh(struct model_s *model, int frame, const vec3_t point);
-void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces);
+bih_t *Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces, bih_t *out);
 
 // alias models
 struct frameblend_s;

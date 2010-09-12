@@ -129,9 +129,9 @@ void Mod_Skeletal_AnimateVertices(const dp_model_t * RESTRICT model, const frame
 	if (maxbonepose < model->num_bones*2 + model->surfmesh.num_blends)
 	{
 		if (bonepose)
-			Mem_Free(bonepose);
+			Z_Free(bonepose);
 		maxbonepose = model->num_bones*2 + model->surfmesh.num_blends;
-		bonepose = (float (*)[12])Mem_Alloc(r_main_mempool, maxbonepose * sizeof(float[12]));
+		bonepose = (float (*)[12])Z_Malloc(maxbonepose * sizeof(float[12]));
 	}
 
 	boneposerelative = bonepose + model->num_bones;
@@ -955,6 +955,7 @@ static void Mod_BuildAliasSkinFromSkinFrame(texture_t *texture, skinframe_t *ski
 void Mod_BuildAliasSkinsFromSkinFiles(texture_t *skin, skinfile_t *skinfile, const char *meshname, const char *shadername)
 {
 	int i;
+	static char stripbuf[MAX_QPATH];
 	skinfileitem_t *skinfileitem;
 	if (skinfile)
 	{
@@ -968,7 +969,8 @@ void Mod_BuildAliasSkinsFromSkinFiles(texture_t *skin, skinfile_t *skinfile, con
 				// leave the skin unitialized (nodraw) if the replacement is "common/nodraw" or "textures/common/nodraw"
 				if (!strcmp(skinfileitem->name, meshname))
 				{
-					Mod_LoadTextureFromQ3Shader(skin, skinfileitem->replacement, true, true, (r_mipskins.integer ? TEXF_MIPMAP : 0) | TEXF_ALPHA | TEXF_PICMIP | TEXF_COMPRESS);
+					Image_StripImageExtension(skinfileitem->replacement, stripbuf, sizeof(stripbuf));
+					Mod_LoadTextureFromQ3Shader(skin, stripbuf, true, true, (r_mipskins.integer ? TEXF_MIPMAP : 0) | TEXF_ALPHA | TEXF_PICMIP | TEXF_COMPRESS);
 					break;
 				}
 			}
@@ -981,7 +983,10 @@ void Mod_BuildAliasSkinsFromSkinFiles(texture_t *skin, skinfile_t *skinfile, con
 		}
 	}
 	else
-		Mod_LoadTextureFromQ3Shader(skin, shadername, true, true, (r_mipskins.integer ? TEXF_MIPMAP : 0) | TEXF_ALPHA | TEXF_PICMIP | TEXF_COMPRESS);
+	{
+		Image_StripImageExtension(shadername, stripbuf, sizeof(stripbuf));
+		Mod_LoadTextureFromQ3Shader(skin, stripbuf, true, true, (r_mipskins.integer ? TEXF_MIPMAP : 0) | TEXF_ALPHA | TEXF_PICMIP | TEXF_COMPRESS);
+	}
 }
 
 #define BOUNDI(VALUE,MIN,MAX) if (VALUE < MIN || VALUE >= MAX) Host_Error("model %s has an invalid ##VALUE (%d exceeds %d - %d)", loadmodel->name, VALUE, MIN, MAX);
@@ -1323,7 +1328,7 @@ void Mod_IDP0_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;
@@ -1580,7 +1585,7 @@ void Mod_IDP2_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;
@@ -1760,7 +1765,7 @@ void Mod_IDP3_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;
@@ -2132,7 +2137,7 @@ void Mod_ZYMOTICMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;
@@ -2482,7 +2487,7 @@ void Mod_DARKPLACESMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;
@@ -3063,7 +3068,7 @@ void Mod_PSKMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;
@@ -3075,7 +3080,7 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 {
 	unsigned char *data;
 	const char *text;
-	unsigned char *pbase;
+	unsigned char *pbase, *pend;
 	iqmheader_t *header;
 	skinfile_t *skinfiles;
 	int i, j, k, meshvertices, meshtriangles;
@@ -3094,6 +3099,7 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	float *outvertex, *outnormal, *outtexcoord, *outsvector, *outtvector;
 
 	pbase = (unsigned char *)buffer;
+	pend = (unsigned char *)bufferend;
 	header = (iqmheader_t *)buffer;
 	if (memcmp(header->id, "INTERQUAKEMODEL", 16))
 		Host_Error ("Mod_INTERQUAKEMODEL_Load: %s is not an Inter-Quake Model", loadmodel->name);
@@ -3128,6 +3134,7 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	header->num_frames = LittleLong(header->num_frames);
 	header->num_framechannels = LittleLong(header->num_framechannels);
 	header->ofs_frames = LittleLong(header->ofs_frames);
+	header->ofs_bounds = LittleLong(header->ofs_bounds);
 	header->num_comment = LittleLong(header->num_comment);
 	header->ofs_comment = LittleLong(header->ofs_comment);
 	header->num_extensions = LittleLong(header->num_extensions);
@@ -3144,14 +3151,40 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 		return;
 	}
 
+	if (pbase + header->ofs_text + header->num_text > pend ||
+		pbase + header->ofs_meshes + header->num_meshes*sizeof(iqmmesh_t) > pend ||
+		pbase + header->ofs_vertexarrays + header->num_vertexarrays*sizeof(iqmvertexarray_t) > pend ||
+		pbase + header->ofs_triangles + header->num_triangles*sizeof(int[3]) > pend ||
+		(header->ofs_neighbors && pbase + header->ofs_neighbors + header->num_triangles*sizeof(int[3]) > pend) ||
+		pbase + header->ofs_joints + header->num_joints*sizeof(iqmjoint_t) > pend ||
+		pbase + header->ofs_poses + header->num_poses*sizeof(iqmpose_t) > pend ||
+		pbase + header->ofs_anims + header->num_anims*sizeof(iqmanim_t) > pend ||
+		pbase + header->ofs_frames + header->num_frames*header->num_framechannels*sizeof(unsigned short) > pend ||
+		(header->ofs_bounds && pbase + header->ofs_bounds + header->num_frames*sizeof(iqmbounds_t) > pend) ||
+		pbase + header->ofs_comment + header->num_comment > pend)
+	{
+		Con_Printf("%s has invalid size or offset information\n", loadmodel->name);
+		return;
+	}
+
 	va = (iqmvertexarray_t *)(pbase + header->ofs_vertexarrays);
 	for (i = 0;i < (int)header->num_vertexarrays;i++)
 	{
+		size_t vsize;
 		va[i].type = LittleLong(va[i].type);
 		va[i].flags = LittleLong(va[i].flags);
 		va[i].format = LittleLong(va[i].format);
 		va[i].size = LittleLong(va[i].size);
 		va[i].offset = LittleLong(va[i].offset);
+		vsize = header->num_vertexes*va[i].size;
+		switch (va[i].format)
+		{ 
+		case IQM_FLOAT: vsize *= sizeof(float); break;
+		case IQM_UBYTE: vsize *= sizeof(unsigned char); break;
+		default: continue;
+		}
+		if (pbase + va[i].offset + vsize > pend)
+		  continue;
 		switch (va[i].type)
 		{
 		case IQM_POSITION:
@@ -3529,7 +3562,7 @@ void Mod_INTERQUAKEMODEL_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 	if (!loadmodel->surfmesh.isanimated)
 	{
-		Mod_MakeCollisionBIH(loadmodel, true);
+		Mod_MakeCollisionBIH(loadmodel, true, &loadmodel->collision_bih);
 		loadmodel->TraceBox = Mod_CollisionBIH_TraceBox;
 		loadmodel->TraceLine = Mod_CollisionBIH_TraceLine;
 		loadmodel->TracePoint = Mod_CollisionBIH_TracePoint_Mesh;

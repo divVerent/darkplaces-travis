@@ -88,6 +88,8 @@ extern char engineversion[128];
 #define	MAX_LEVELNETWORKEYES	0 // no portal support
 #define	MAX_OCCLUSION_QUERIES	256
 
+#define MAX_NETWM_ICON 1026 // one 32x32
+
 #define	MAX_WATERPLANES			2
 #define	MAX_CUBEMAPS			64
 #define	MAX_EXPLOSIONS			8
@@ -148,9 +150,11 @@ extern char engineversion[128];
 #define	MAX_DEMONAME			16 ///< max demo name length for demos command
 #define	MAX_SAVEGAMES			12 ///< max savegames listed in savegame menu
 #define	SAVEGAME_COMMENT_LENGTH	39 ///< max comment length of savegame in menu
-#define	MAX_CLIENTNETWORKEYES	8 ///< max number of locations that can be added to pvs when culling network entities (must be at least 2 for prediction)
-#define	MAX_LEVELNETWORKEYES	64 ///< max number of locations that can be added to pvs when culling network entities (must be at least 2 for prediction)
+#define	MAX_CLIENTNETWORKEYES	16 ///< max number of locations that can be added to pvs when culling network entities (must be at least 2 for prediction)
+#define	MAX_LEVELNETWORKEYES	512 ///< max number of locations that can be added to pvs when culling network entities (must be at least 2 for prediction)
 #define	MAX_OCCLUSION_QUERIES	4096 ///< max number of GL_ARB_occlusion_query objects that can be used in one frame
+
+#define MAX_NETWM_ICON 352822 // 16x16, 22x22, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256, 512x512
 
 #define	MAX_WATERPLANES			16 ///< max number of water planes visible (each one causes additional view renders)
 #define	MAX_CUBEMAPS			256 ///< max number of cubemap textures loaded for light filters
@@ -182,7 +186,7 @@ extern char engineversion[128];
 #define	MAX_DECALS_INITIAL		8192 ///< initial allocation for cl.decals
 #define	MAX_DECALS				1048576 ///< upper limit on cl.decals size
 #define	MAX_ENITIES_INITIAL		256 ///< initial size of cl.entities
-#define	MAX_STATICENTITIES		256 ///< limit on size of cl.static_entities
+#define	MAX_STATICENTITIES		1024 ///< limit on size of cl.static_entities
 #define	MAX_EFFECTS				256 ///< limit on size of cl.effects
 #define	MAX_BEAMS				256 ///< limit on size of cl.beams
 #define	MAX_TEMPENTITIES		4096 ///< max number of temporary models visible per frame (certain sprite effects, certain types of CSQC entities also use this)
@@ -229,6 +233,10 @@ extern char engineversion[128];
 //#define STAT_TIME			17 ///< FTE
 //#define STAT_VIEW2		20 ///< FTE
 #define STAT_VIEWZOOM		21 ///< DP
+#define STAT_MOVEVARS_AIRCONTROL_PENALTY					221 ///< DP
+#define STAT_MOVEVARS_AIRSPEEDLIMIT_NONQW 222 ///< DP
+#define STAT_MOVEVARS_AIRSTRAFEACCEL_QW 223 ///< DP
+#define STAT_MOVEVARS_AIRCONTROL_POWER					224 ///< DP
 #define STAT_MOVEFLAGS                              225 ///< DP
 #define STAT_MOVEVARS_WARSOWBUNNY_AIRFORWARDACCEL	226 ///< DP
 #define STAT_MOVEVARS_WARSOWBUNNY_ACCEL				227 ///< DP

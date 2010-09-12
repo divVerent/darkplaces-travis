@@ -189,7 +189,7 @@ typedef struct pcx_s
 LoadPCX
 ============
 */
-unsigned char* LoadPCX_BGRA (const unsigned char *f, int filesize)
+unsigned char* LoadPCX_BGRA (const unsigned char *f, int filesize, int *miplevel)
 {
 	pcx_t pcx;
 	unsigned char *a, *b, *image_buffer, *pbuf;
@@ -219,7 +219,7 @@ unsigned char* LoadPCX_BGRA (const unsigned char *f, int filesize)
 
 	image_width = pcx.xmax + 1 - pcx.xmin;
 	image_height = pcx.ymax + 1 - pcx.ymin;
-	if (pcx.manufacturer != 0x0a || pcx.version != 5 || pcx.encoding != 1 || pcx.bits_per_pixel != 8 || image_width > 4096 || image_height > 4096 || image_width <= 0 || image_height <= 0)
+	if (pcx.manufacturer != 0x0a || pcx.version != 5 || pcx.encoding != 1 || pcx.bits_per_pixel != 8 || image_width > 32768 || image_height > 32768 || image_width <= 0 || image_height <= 0)
 	{
 		Con_Print("Bad pcx file\n");
 		return NULL;
@@ -382,7 +382,7 @@ void PrintTargaHeader(TargaHeader *t)
 LoadTGA
 =============
 */
-unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize)
+unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize, int *miplevel)
 {
 	int x, y, pix_inc, row_inci, runlen, alphabits;
 	unsigned char *image_buffer;
@@ -416,7 +416,7 @@ unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize)
 	targa_header.pixel_size = f[16];
 	targa_header.attributes = f[17];
 
-	if (image_width > 4096 || image_height > 4096 || image_width <= 0 || image_height <= 0)
+	if (image_width > 32768 || image_height > 32768 || image_width <= 0 || image_height <= 0)
 	{
 		Con_Print("LoadTGA: invalid size\n");
 		PrintTargaHeader(&targa_header);
@@ -609,6 +609,13 @@ unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize)
 						*pixbufi++ = palettei[*fin++];
 				}
 			}
+
+			if (x != image_width)
+			{
+				// pixbufi is useless now
+				Con_Printf("LoadTGA: corrupt file\n");
+				break;
+			}
 		}
 		break;
 	case 10:
@@ -657,6 +664,13 @@ unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize)
 						}
 					}
 				}
+
+				if (x != image_width)
+				{
+					// pixbufi is useless now
+					Con_Printf("LoadTGA: corrupt file\n");
+					break;
+				}
 			}
 		}
 		else
@@ -703,6 +717,13 @@ unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize)
 						}
 					}
 				}
+
+				if (x != image_width)
+				{
+					// pixbufi is useless now
+					Con_Printf("LoadTGA: corrupt file\n");
+					break;
+				}
 			}
 		}
 		break;
@@ -725,7 +746,7 @@ typedef struct q2wal_s
 	int			value;
 } q2wal_t;
 
-unsigned char *LoadWAL_BGRA (const unsigned char *f, int filesize)
+unsigned char *LoadWAL_BGRA (const unsigned char *f, int filesize, int *miplevel)
 {
 	unsigned char *image_buffer;
 	const q2wal_t *inwal = (const q2wal_t *)f;
@@ -738,7 +759,7 @@ unsigned char *LoadWAL_BGRA (const unsigned char *f, int filesize)
 
 	image_width = LittleLong(inwal->width);
 	image_height = LittleLong(inwal->height);
-	if (image_width > 4096 || image_height > 4096 || image_width <= 0 || image_height <= 0)
+	if (image_width > 32768 || image_height > 32768 || image_width <= 0 || image_height <= 0)
 	{
 		Con_Printf("LoadWAL: invalid size %ix%i\n", image_width, image_height);
 		return NULL;
@@ -783,7 +804,7 @@ void Image_MakeLinearColorsFromsRGB(unsigned char *pout, const unsigned char *pi
 	// this math from http://www.opengl.org/registry/specs/EXT/texture_sRGB.txt
 	if (!image_linearfromsrgb[255])
 		for (i = 0;i < 256;i++)
-			image_linearfromsrgb[i] = i < 11 ? (int)(i / 12.92f) : (int)(pow((i/256.0f + 0.055f)/1.0555f, 2.4)*256.0f);
+			image_linearfromsrgb[i] = i < 11 ? (int)(i / 12.92f) : (int)(pow((i/256.0f + 0.055f)/1.0555f, 2.4f)*256.0f);
 	for (i = 0;i < numpixels;i++)
 	{
 		pout[i*4+0] = image_linearfromsrgb[pin[i*4+0]];
@@ -796,7 +817,7 @@ void Image_MakeLinearColorsFromsRGB(unsigned char *pout, const unsigned char *pi
 typedef struct imageformat_s
 {
 	const char *formatstring;
-	unsigned char *(*loadfunc)(const unsigned char *f, int filesize);
+	unsigned char *(*loadfunc)(const unsigned char *f, int filesize, int *miplevel);
 }
 imageformat_t;
 
@@ -872,7 +893,7 @@ imageformat_t imageformats_other[] =
 };
 
 int fixtransparentpixels(unsigned char *data, int w, int h);
-unsigned char *loadimagepixelsbgra (const char *filename, qboolean complain, qboolean allowFixtrans, qboolean convertsRGB)
+unsigned char *loadimagepixelsbgra (const char *filename, qboolean complain, qboolean allowFixtrans, qboolean convertsRGB, int *miplevel)
 {
 	fs_offset_t filesize;
 	imageformat_t *firstformat, *format;
@@ -914,24 +935,30 @@ unsigned char *loadimagepixelsbgra (const char *filename, qboolean complain, qbo
 		f = FS_LoadFile(name, tempmempool, true, &filesize);
 		if (f)
 		{
-			data = format->loadfunc(f, (int)filesize);
+			int mymiplevel = miplevel ? *miplevel : 0;
+			data = format->loadfunc(f, (int)filesize, &mymiplevel);
 			Mem_Free(f);
-			if(format->loadfunc == JPEG_LoadImage_BGRA) // jpeg can't do alpha, so let's simulate it by loading another jpeg
-			{
-				dpsnprintf (name2, sizeof(name2), format->formatstring, va("%s_alpha", basename));
-				f = FS_LoadFile(name2, tempmempool, true, &filesize);
-				if(f)
-				{
-					data2 = format->loadfunc(f, (int)filesize);
-					Mem_Free(f);
-					Image_CopyAlphaFromBlueBGRA(data, data2, image_width, image_height);
-					Mem_Free(data2);
-				}
-			}
 			if (data)
 			{
+				if(format->loadfunc == JPEG_LoadImage_BGRA) // jpeg can't do alpha, so let's simulate it by loading another jpeg
+				{
+					dpsnprintf (name2, sizeof(name2), format->formatstring, va("%s_alpha", basename));
+					f = FS_LoadFile(name2, tempmempool, true, &filesize);
+					if(f)
+					{
+						int mymiplevel2 = miplevel ? *miplevel : 0;
+						data2 = format->loadfunc(f, (int)filesize, &mymiplevel2);
+						if(mymiplevel != mymiplevel2)
+							Host_Error("loadimagepixelsbgra: miplevels differ");
+						Mem_Free(f);
+						Image_CopyAlphaFromBlueBGRA(data, data2, image_width, image_height);
+						Mem_Free(data2);
+					}
+				}
 				if (developer_loading.integer)
 					Con_DPrintf("loaded image %s (%dx%d)\n", name, image_width, image_height);
+				if(miplevel)
+					*miplevel = mymiplevel;
 				//if (developer_memorydebug.integer)
 				//	Mem_CheckSentinelsGlobal();
 				if(allowFixtrans && r_fixtrans_auto.integer)
@@ -976,13 +1003,15 @@ unsigned char *loadimagepixelsbgra (const char *filename, qboolean complain, qbo
 	return NULL;
 }
 
+extern cvar_t gl_picmip;
 rtexture_t *loadtextureimage (rtexturepool_t *pool, const char *filename, qboolean complain, int flags, qboolean allowFixtrans, qboolean convertsRGB)
 {
 	unsigned char *data;
 	rtexture_t *rt;
-	if (!(data = loadimagepixelsbgra (filename, complain, allowFixtrans, convertsRGB)))
+	int miplevel = R_PicmipForFlags(flags);
+	if (!(data = loadimagepixelsbgra (filename, complain, allowFixtrans, convertsRGB, &miplevel)))
 		return 0;
-	rt = R_LoadTexture2D(pool, filename, image_width, image_height, data, TEXTYPE_BGRA, flags, NULL);
+	rt = R_LoadTexture2D(pool, filename, image_width, image_height, data, TEXTYPE_BGRA, flags, miplevel, NULL);
 	Mem_Free(data);
 	return rt;
 }
@@ -1128,7 +1157,7 @@ void Image_FixTransparentPixels_f(void)
 		Con_Printf("Processing %s... ", filename);
 		Image_StripImageExtension(filename, buf, sizeof(buf));
 		dpsnprintf(outfilename, sizeof(outfilename), "fixtrans/%s.tga", buf);
-		if(!(data = loadimagepixelsbgra(filename, true, false, false)))
+		if(!(data = loadimagepixelsbgra(filename, true, false, false, NULL)))
 			return;
 		if((n = fixtransparentpixels(data, image_width, image_height)))
 		{
@@ -1142,9 +1171,12 @@ void Image_FixTransparentPixels_f(void)
 	FS_FreeSearch(search);
 }
 
-qboolean Image_WriteTGABGR_preflipped (const char *filename, int width, int height, const unsigned char *data, unsigned char *buffer)
+qboolean Image_WriteTGABGR_preflipped (const char *filename, int width, int height, const unsigned char *data)
 {
 	qboolean ret;
+	unsigned char buffer[18];
+	const void *buffers[2];
+	fs_offset_t sizes[2];
 
 	memset (buffer, 0, 18);
 	buffer[2] = 2;		// uncompressed type
@@ -1154,18 +1186,21 @@ qboolean Image_WriteTGABGR_preflipped (const char *filename, int width, int heig
 	buffer[15] = (height >> 8) & 0xFF;
 	buffer[16] = 24;	// pixel size
 
-	// swap rgb to bgr
-	memcpy(buffer + 18, data, width*height*3);
-	ret = FS_WriteFile (filename, buffer, width*height*3 + 18 );
+	buffers[0] = buffer;
+	sizes[0] = 18;
+	buffers[1] = data;
+	sizes[1] = width*height*3;
+	ret = FS_WriteFileInBlocks(filename, buffers, sizes, 2);
 
 	return ret;
 }
 
-void Image_WriteTGABGRA (const char *filename, int width, int height, const unsigned char *data)
+qboolean Image_WriteTGABGRA (const char *filename, int width, int height, const unsigned char *data)
 {
 	int y;
 	unsigned char *buffer, *out;
 	const unsigned char *in, *end;
+	qboolean ret;
 
 	buffer = (unsigned char *)Mem_Alloc(tempmempool, width*height*4 + 18);
 
@@ -1214,9 +1249,11 @@ void Image_WriteTGABGRA (const char *filename, int width, int height, const unsi
 			}
 		}
 	}
-	FS_WriteFile (filename, buffer, out - buffer);
+	ret = FS_WriteFile (filename, buffer, out - buffer);
 
 	Mem_Free(buffer);
+
+	return ret;
 }
 
 static void Image_Resample32LerpLine (const unsigned char *in, unsigned char *out, int inwidth, int outwidth)

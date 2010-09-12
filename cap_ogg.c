@@ -345,7 +345,7 @@ typedef enum {
   OC_PF_420,    /**< Chroma subsampling by 2 in each direction (4:2:0) */
   OC_PF_RSVD,   /**< Reserved value */
   OC_PF_422,    /**< Horizonatal chroma subsampling by 2 (4:2:2) */
-  OC_PF_444,    /**< No chroma subsampling at all (4:4:4) */
+  OC_PF_444     /**< No chroma subsampling at all (4:4:4) */
 } theora_pixelformat;
 /**
  * Theora bitstream info.
@@ -522,6 +522,7 @@ qboolean SCR_CaptureVideo_Ogg_OpenLibrary(void)
 	const char* dllnames_og [] =
 	{
 #if defined(WIN32)
+		"libogg-0.dll",
 		"libogg.dll",
 		"ogg.dll",
 #elif defined(MACOSX)
@@ -535,6 +536,7 @@ qboolean SCR_CaptureVideo_Ogg_OpenLibrary(void)
 	const char* dllnames_vo [] =
 	{
 #if defined(WIN32)
+		"libvorbis-0.dll",
 		"libvorbis.dll",
 		"vorbis.dll",
 #elif defined(MACOSX)
@@ -548,6 +550,7 @@ qboolean SCR_CaptureVideo_Ogg_OpenLibrary(void)
 	const char* dllnames_ve [] =
 	{
 #if defined(WIN32)
+		"libvorbisenc-2.dll",
 		"libvorbisenc.dll",
 		"vorbisenc.dll",
 #elif defined(MACOSX)
@@ -561,6 +564,7 @@ qboolean SCR_CaptureVideo_Ogg_OpenLibrary(void)
 	const char* dllnames_th [] =
 	{
 #if defined(WIN32)
+		"libtheora-0.dll",
 		"libtheora.dll",
 		"theora.dll",
 #elif defined(MACOSX)

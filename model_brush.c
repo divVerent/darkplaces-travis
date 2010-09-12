@@ -28,7 +28,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 //cvar_t r_subdivide_size = {CVAR_SAVE, "r_subdivide_size", "128", "how large water polygons should be (smaller values produce more polygons which give better warping effects)"};
 cvar_t r_novis = {0, "r_novis", "0", "draws whole level, see also sv_cullentities_pvs 0"};
-cvar_t r_picmipworld = {CVAR_SAVE, "r_picmipworld", "1", "whether gl_picmip shall apply to world textures too"};
 cvar_t r_nosurftextures = {0, "r_nosurftextures", "0", "pretends there was no texture lump found in the q1bsp/hlbsp loading (useful for debugging this rare case)"};
 cvar_t r_subdivisions_tolerance = {0, "r_subdivisions_tolerance", "4", "maximum error tolerance on curve subdivision for rendering purposes (in other words, the curves will be given as many polygons as necessary to represent curves at this quality)"};
 cvar_t r_subdivisions_mintess = {0, "r_subdivisions_mintess", "0", "minimum number of subdivisions (values above 0 will smooth curves that don't need it)"};
@@ -62,7 +61,6 @@ void Mod_BrushInit(void)
 {
 //	Cvar_RegisterVariable(&r_subdivide_size);
 	Cvar_RegisterVariable(&r_novis);
-	Cvar_RegisterVariable(&r_picmipworld);
 	Cvar_RegisterVariable(&r_nosurftextures);
 	Cvar_RegisterVariable(&r_subdivisions_tolerance);
 	Cvar_RegisterVariable(&r_subdivisions_mintess);
@@ -1335,8 +1333,8 @@ void R_Q1BSP_LoadSplitSky (unsigned char *src, int width, int height, int bytesp
 	int x, y;
 	int w = width/2;
 	int h = height;
-	unsigned *solidpixels = Mem_Alloc(tempmempool, w*h*sizeof(unsigned char[4]));
-	unsigned *alphapixels = Mem_Alloc(tempmempool, w*h*sizeof(unsigned char[4]));
+	unsigned int *solidpixels = (unsigned int *)Mem_Alloc(tempmempool, w*h*sizeof(unsigned char[4]));
+	unsigned int *alphapixels = (unsigned int *)Mem_Alloc(tempmempool, w*h*sizeof(unsigned char[4]));
 
 	// allocate a texture pool if we need it
 	if (loadmodel->texturepool == NULL && cls.state != ca_dedicated)
@@ -1578,7 +1576,9 @@ static void Mod_Q1BSP_LoadTextures(lump_t *l)
 			// LordHavoc: HL sky textures are entirely different than quake
 			if (!loadmodel->brush.ishlbsp && !strncmp(tx->name, "sky", 3) && mtwidth == mtheight * 2)
 			{
-				data = loadimagepixelsbgra(tx->name, false, false, r_texture_convertsRGB_skin.integer);
+				data = loadimagepixelsbgra(gamemode == GAME_TENEBRAE ? tx->name : va("textures/%s/%s", mapname, tx->name), false, false, r_texture_convertsRGB_skin.integer != 0, NULL);
+				if (!data)
+					data = loadimagepixelsbgra(gamemode == GAME_TENEBRAE ? tx->name : va("textures/%s", tx->name), false, false, r_texture_convertsRGB_skin.integer != 0, NULL);
 				if (data && image_width == image_height * 2)
 				{
 					R_Q1BSP_LoadSplitSky(data, image_width, image_height, 4);
@@ -1589,9 +1589,9 @@ static void Mod_Q1BSP_LoadTextures(lump_t *l)
 			}
 			else
 			{
-				skinframe = R_SkinFrame_LoadExternal(gamemode == GAME_TENEBRAE ? tx->name : va("textures/%s/%s", mapname, tx->name), TEXF_ALPHA | TEXF_MIPMAP | (r_picmipworld.integer ? TEXF_PICMIP : 0) | TEXF_COMPRESS, false);
+				skinframe = R_SkinFrame_LoadExternal(gamemode == GAME_TENEBRAE ? tx->name : va("textures/%s/%s", mapname, tx->name), TEXF_ALPHA | TEXF_MIPMAP | TEXF_ISWORLD | TEXF_PICMIP | TEXF_COMPRESS, false);
 				if (!skinframe)
-					skinframe = R_SkinFrame_LoadExternal(gamemode == GAME_TENEBRAE ? tx->name : va("textures/%s", tx->name), TEXF_ALPHA | TEXF_MIPMAP | (r_picmipworld.integer ? TEXF_PICMIP : 0) | TEXF_COMPRESS, false);
+					skinframe = R_SkinFrame_LoadExternal(gamemode == GAME_TENEBRAE ? tx->name : va("textures/%s", tx->name), TEXF_ALPHA | TEXF_MIPMAP | TEXF_ISWORLD | TEXF_PICMIP | TEXF_COMPRESS, false);
 				if (!skinframe)
 				{
 					// did not find external texture, load it from the bsp or wad3
@@ -1608,13 +1608,13 @@ static void Mod_Q1BSP_LoadTextures(lump_t *l)
 						{
 							tx->width = image_width;
 							tx->height = image_height;
-							skinframe = R_SkinFrame_LoadInternalBGRA(tx->name, TEXF_ALPHA | TEXF_MIPMAP | (r_picmipworld.integer ? TEXF_PICMIP : 0), pixels, image_width, image_height);
+							skinframe = R_SkinFrame_LoadInternalBGRA(tx->name, TEXF_ALPHA | TEXF_MIPMAP | TEXF_ISWORLD | TEXF_PICMIP, pixels, image_width, image_height);
 						}
 						if (freepixels)
 							Mem_Free(freepixels);
 					}
 					else if (mtdata) // texture included
-						skinframe = R_SkinFrame_LoadInternalQuake(tx->name, TEXF_MIPMAP | (r_picmipworld.integer ? TEXF_PICMIP : 0), false, r_fullbrights.integer, mtdata, tx->width, tx->height);
+						skinframe = R_SkinFrame_LoadInternalQuake(tx->name, TEXF_MIPMAP | TEXF_ISWORLD | TEXF_PICMIP, false, r_fullbrights.integer, mtdata, tx->width, tx->height);
 				}
 				// if skinframe is still NULL the "missing" texture will be used
 				if (skinframe)
@@ -2454,11 +2454,11 @@ static void Mod_Q1BSP_LoadFaces(lump_t *l)
 					loadmodel->texturepool = R_AllocTexturePool();
 				// could not find room, make a new lightmap
 				loadmodel->brushq3.num_mergedlightmaps = lightmapnumber + 1;
-				loadmodel->brushq3.data_lightmaps = Mem_Realloc(loadmodel->mempool, loadmodel->brushq3.data_lightmaps, loadmodel->brushq3.num_mergedlightmaps * sizeof(loadmodel->brushq3.data_lightmaps[0]));
-				loadmodel->brushq3.data_deluxemaps = Mem_Realloc(loadmodel->mempool, loadmodel->brushq3.data_deluxemaps, loadmodel->brushq3.num_mergedlightmaps * sizeof(loadmodel->brushq3.data_deluxemaps[0]));
-				loadmodel->brushq3.data_lightmaps[lightmapnumber] = lightmaptexture = R_LoadTexture2D(loadmodel->texturepool, va("lightmap%i", lightmapnumber), lightmapsize, lightmapsize, NULL, TEXTYPE_BGRA, TEXF_FORCELINEAR | TEXF_ALLOWUPDATES, NULL);
+				loadmodel->brushq3.data_lightmaps = (rtexture_t **)Mem_Realloc(loadmodel->mempool, loadmodel->brushq3.data_lightmaps, loadmodel->brushq3.num_mergedlightmaps * sizeof(loadmodel->brushq3.data_lightmaps[0]));
+				loadmodel->brushq3.data_deluxemaps = (rtexture_t **)Mem_Realloc(loadmodel->mempool, loadmodel->brushq3.data_deluxemaps, loadmodel->brushq3.num_mergedlightmaps * sizeof(loadmodel->brushq3.data_deluxemaps[0]));
+				loadmodel->brushq3.data_lightmaps[lightmapnumber] = lightmaptexture = R_LoadTexture2D(loadmodel->texturepool, va("lightmap%i", lightmapnumber), lightmapsize, lightmapsize, NULL, TEXTYPE_BGRA, TEXF_FORCELINEAR | TEXF_ALLOWUPDATES, -1, NULL);
 				if (loadmodel->brushq1.nmaplightdata)
-					loadmodel->brushq3.data_deluxemaps[lightmapnumber] = deluxemaptexture = R_LoadTexture2D(loadmodel->texturepool, va("deluxemap%i", lightmapnumber), lightmapsize, lightmapsize, NULL, TEXTYPE_BGRA, TEXF_FORCELINEAR | TEXF_ALLOWUPDATES, NULL);
+					loadmodel->brushq3.data_deluxemaps[lightmapnumber] = deluxemaptexture = R_LoadTexture2D(loadmodel->texturepool, va("deluxemap%i", lightmapnumber), lightmapsize, lightmapsize, NULL, TEXTYPE_BGRA, TEXF_FORCELINEAR | TEXF_ALLOWUPDATES, -1, NULL);
 				lightmapnumber++;
 				Mod_AllocLightmap_Reset(&allocState);
 				Mod_AllocLightmap_Block(&allocState, ssize, tsize, &lightmapx, &lightmapy);
@@ -3182,7 +3182,7 @@ static void Mod_Q1BSP_RecursiveNodePortals(mnode_t *node)
 	if (portalpointsbuffersize < portalpointsbufferoffset + 6*MAX_PORTALPOINTS)
 	{
 		portalpointsbuffersize = portalpointsbufferoffset * 2;
-		portalpointsbuffer = Mem_Realloc(loadmodel->mempool, portalpointsbuffer, portalpointsbuffersize * sizeof(*portalpointsbuffer));
+		portalpointsbuffer = (double *)Mem_Realloc(loadmodel->mempool, portalpointsbuffer, portalpointsbuffersize * sizeof(*portalpointsbuffer));
 	}
 	frontpoints = portalpointsbuffer + portalpointsbufferoffset;
 	portalpointsbufferoffset += 3*MAX_PORTALPOINTS;
@@ -3315,7 +3315,7 @@ static void Mod_Q1BSP_MakePortals(void)
 	Mem_ExpandableArray_NewArray(&portalarray, loadmodel->mempool, sizeof(portal_t), 1020*1024/sizeof(portal_t));
 	portalpointsbufferoffset = 0;
 	portalpointsbuffersize = 6*MAX_PORTALPOINTS*128;
-	portalpointsbuffer = Mem_Alloc(loadmodel->mempool, portalpointsbuffersize * sizeof(*portalpointsbuffer));
+	portalpointsbuffer = (double *)Mem_Alloc(loadmodel->mempool, portalpointsbuffersize * sizeof(*portalpointsbuffer));
 	Mod_Q1BSP_RecursiveNodePortals(loadmodel->brush.data_nodes + loadmodel->brushq1.hulls[0].firstclipnode);
 	Mem_Free(portalpointsbuffer);
 	portalpointsbuffer = NULL;
@@ -3413,6 +3413,31 @@ static void Mod_Q1BSP_RoundUpToHullSize(dp_model_t *cmodel, const vec3_t inmins,
 	}
 	VectorCopy(inmins, outmins);
 	VectorAdd(inmins, hull->clip_size, outmaxs);
+}
+
+static int Mod_Q1BSP_CreateShadowMesh(dp_model_t *mod)
+{
+	int j;
+	int numshadowmeshtriangles = 0;
+	msurface_t *surface;
+	if (cls.state == ca_dedicated)
+		return 0;
+	// make a single combined shadow mesh to allow optimized shadow volume creation
+
+	for (j = 0, surface = mod->data_surfaces;j < mod->num_surfaces;j++, surface++)
+	{
+		surface->num_firstshadowmeshtriangle = numshadowmeshtriangles;
+		numshadowmeshtriangles += surface->num_triangles;
+	}
+	mod->brush.shadowmesh = Mod_ShadowMesh_Begin(mod->mempool, numshadowmeshtriangles * 3, numshadowmeshtriangles, NULL, NULL, NULL, false, false, true);
+	for (j = 0, surface = mod->data_surfaces;j < mod->num_surfaces;j++, surface++)
+		if (surface->num_triangles > 0)
+			Mod_ShadowMesh_AddMesh(mod->mempool, mod->brush.shadowmesh, NULL, NULL, NULL, mod->surfmesh.data_vertex3f, NULL, NULL, NULL, NULL, surface->num_triangles, (mod->surfmesh.data_element3i + 3 * surface->num_firsttriangle));
+	mod->brush.shadowmesh = Mod_ShadowMesh_Finish(mod->mempool, mod->brush.shadowmesh, false, true, false);
+	if (mod->brush.shadowmesh)
+		Mod_BuildTriangleNeighbors(mod->brush.shadowmesh->neighbor3i, mod->brush.shadowmesh->element3i, mod->brush.shadowmesh->numtriangles);
+
+	return numshadowmeshtriangles;
 }
 
 void Mod_Q1BSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
@@ -3550,17 +3575,7 @@ void Mod_Q1BSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	mod->numskins = 1;
 
 	// make a single combined shadow mesh to allow optimized shadow volume creation
-	numshadowmeshtriangles = 0;
-	for (j = 0, surface = loadmodel->data_surfaces;j < loadmodel->num_surfaces;j++, surface++)
-	{
-		surface->num_firstshadowmeshtriangle = numshadowmeshtriangles;
-		numshadowmeshtriangles += surface->num_triangles;
-	}
-	loadmodel->brush.shadowmesh = Mod_ShadowMesh_Begin(loadmodel->mempool, numshadowmeshtriangles * 3, numshadowmeshtriangles, NULL, NULL, NULL, false, false, true);
-	for (j = 0, surface = loadmodel->data_surfaces;j < loadmodel->num_surfaces;j++, surface++)
-		Mod_ShadowMesh_AddMesh(loadmodel->mempool, loadmodel->brush.shadowmesh, NULL, NULL, NULL, loadmodel->surfmesh.data_vertex3f, NULL, NULL, NULL, NULL, surface->num_triangles, (loadmodel->surfmesh.data_element3i + 3 * surface->num_firsttriangle));
-	loadmodel->brush.shadowmesh = Mod_ShadowMesh_Finish(loadmodel->mempool, loadmodel->brush.shadowmesh, false, true, false);
-	Mod_BuildTriangleNeighbors(loadmodel->brush.shadowmesh->neighbor3i, loadmodel->brush.shadowmesh->element3i, loadmodel->brush.shadowmesh->numtriangles);
+	numshadowmeshtriangles = Mod_Q1BSP_CreateShadowMesh(loadmodel);
 
 	if (loadmodel->brush.numsubmodels)
 		loadmodel->brush.submodels = (dp_model_t **)Mem_Alloc(loadmodel->mempool, loadmodel->brush.numsubmodels * sizeof(dp_model_t *));
@@ -3738,11 +3753,13 @@ void Mod_Q1BSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 
 		if (mod_q1bsp_polygoncollisions.integer)
 		{
-			Mod_MakeCollisionBIH(mod, true);
+			Mod_MakeCollisionBIH(mod, true, &mod->collision_bih);
 			// point traces and contents checks still use the bsp tree
 			mod->TraceLine = Mod_CollisionBIH_TraceLine;
 			mod->TraceBox = Mod_CollisionBIH_TraceBox;
 		}
+		else
+			Mod_MakeCollisionBIH(mod, true, &mod->render_bih);
 
 		// generate VBOs and other shared data before cloning submodels
 		if (i == 0)
@@ -4281,7 +4298,7 @@ static void Mod_Q3BSP_LoadTextures(lump_t *l)
 		strlcpy (out[i].name, in[i].name, sizeof (out[i].name));
 		out[i].surfaceflags = LittleLong(in[i].surfaceflags);
 		out[i].supercontents = Mod_Q3BSP_SuperContentsFromNativeContents(loadmodel, LittleLong(in[i].contents));
-		Mod_LoadTextureFromQ3Shader(out + i, out[i].name, true, true, TEXF_MIPMAP | (r_picmipworld.integer ? TEXF_PICMIP : 0) | TEXF_COMPRESS);
+		Mod_LoadTextureFromQ3Shader(out + i, out[i].name, true, true, TEXF_MIPMAP | TEXF_ISWORLD | TEXF_PICMIP | TEXF_COMPRESS);
 		// restore the surfaceflags and supercontents
 		out[i].surfaceflags = LittleLong(in[i].surfaceflags);
 		out[i].supercontents = Mod_Q3BSP_SuperContentsFromNativeContents(loadmodel, LittleLong(in[i].contents));
@@ -4529,12 +4546,32 @@ static void Mod_Q3BSP_LoadTriangles(lump_t *l)
 static void Mod_Q3BSP_LoadLightmaps(lump_t *l, lump_t *faceslump)
 {
 	q3dlightmap_t *input_pointer;
-	int i, j, k, count, power, power2, endlightmap, mergewidth, mergeheight;
+	int i;
+	int j;
+	int k;
+	int count;
+	int powerx;
+	int powery;
+	int powerxy;
+	int powerdxy;
+	int endlightmap;
+	int mergegoal;
+	int lightmapindex;
+	int realcount;
+	int realindex;
+	int mergedwidth;
+	int mergedheight;
+	int mergedcolumns;
+	int mergedrows;
+	int mergedrowsxcolumns;
+	int size;
+	int bytesperpixel;
+	int rgbmap[3];
 	unsigned char *c;
-
-	unsigned char *convertedpixels;
+	unsigned char *mergedpixels;
+	unsigned char *mergeddeluxepixels;
+	unsigned char *mergebuf;
 	char mapname[MAX_QPATH];
-	int size, bytesperpixel, rgbmap[3];
 	qboolean external;
 	unsigned char *inpixels[10000]; // max count q3map2 can output (it uses 4 digits)
 
@@ -4573,7 +4610,7 @@ static void Mod_Q3BSP_LoadLightmaps(lump_t *l, lump_t *faceslump)
 		if (developer_loading.integer)
 			Con_Printf("Using external lightmaps\n");
 		FS_StripExtension(loadmodel->name, mapname, sizeof(mapname));
-		inpixels[0] = loadimagepixelsbgra(va("%s/lm_%04d", mapname, 0), false, false, false);
+		inpixels[0] = loadimagepixelsbgra(va("%s/lm_%04d", mapname, 0), false, false, false, NULL);
 		if(!inpixels[0])
 			return;
 
@@ -4593,7 +4630,7 @@ static void Mod_Q3BSP_LoadLightmaps(lump_t *l, lump_t *faceslump)
 
 		for(count = 1; ; ++count)
 		{
-			inpixels[count] = loadimagepixelsbgra(va("%s/lm_%04d", mapname, count), false, false, false);
+			inpixels[count] = loadimagepixelsbgra(va("%s/lm_%04d", mapname, count), false, false, false, NULL);
 			if(!inpixels[count])
 				break; // we got all of them
 			if(image_width != size || image_height != size)
@@ -4606,7 +4643,6 @@ static void Mod_Q3BSP_LoadLightmaps(lump_t *l, lump_t *faceslump)
 		}
 	}
 
-	convertedpixels = (unsigned char *) Mem_Alloc(tempmempool, size*size*4);
 	loadmodel->brushq3.lightmapsize = size;
 	loadmodel->brushq3.num_originallightmaps = count;
 
@@ -4676,18 +4712,42 @@ static void Mod_Q3BSP_LoadLightmaps(lump_t *l, lump_t *faceslump)
 
 	// figure out what the most reasonable merge power is within limits
 
-	loadmodel->brushq3.num_lightmapmergepower = 0;
+	// find the appropriate NxN dimensions to merge to, to avoid wasted space
+	realcount = count >> (int)loadmodel->brushq3.deluxemapping;
 
-	for(i = 0; (128 << i) < size; ++i)
-		;
-	// i is now 0 for 128, 1 for 256, etc
+	// figure out how big the merged texture has to be
+	mergegoal = 128<<bound(0, mod_q3bsp_lightmapmergepower.integer, 6);
+	mergegoal = bound(size, mergegoal, (int)vid.maxtexturesize_2d);
+	while (mergegoal > size && mergegoal * mergegoal / 4 >= size * size * realcount)
+		mergegoal /= 2;
+	mergedwidth = mergegoal;
+	mergedheight = mergegoal;
+	// choose non-square size (2x1 aspect) if only half the space is used;
+	// this really only happens when the entire set fits in one texture, if
+	// there are multiple textures, we don't worry about shrinking the last
+	// one to fit, because the driver prefers the same texture size on
+	// consecutive draw calls...
+	if (mergedwidth * mergedheight / 2 >= size*size*realcount)
+		mergedheight /= 2;
 
-	for (power = 1;power + i <= mod_q3bsp_lightmapmergepower.integer && (size << power) <= (int)vid.maxtexturesize_2d && (1 << (power * 2)) < 4 * (count >> (loadmodel->brushq3.deluxemapping ? 1 : 0)); power++)
-		loadmodel->brushq3.num_lightmapmergepower = power;
+	loadmodel->brushq3.num_lightmapmergedwidthpower = 0;
+	loadmodel->brushq3.num_lightmapmergedheightpower = 0;
+	while (mergedwidth > size<<loadmodel->brushq3.num_lightmapmergedwidthpower)
+		loadmodel->brushq3.num_lightmapmergedwidthpower++;
+	while (mergedheight > size<<loadmodel->brushq3.num_lightmapmergedheightpower)
+		loadmodel->brushq3.num_lightmapmergedheightpower++;
+	loadmodel->brushq3.num_lightmapmergedwidthheightdeluxepower = loadmodel->brushq3.num_lightmapmergedwidthpower + loadmodel->brushq3.num_lightmapmergedheightpower + (loadmodel->brushq3.deluxemapping ? 1 : 0);
 
-	loadmodel->brushq3.num_lightmapmerge = 1 << loadmodel->brushq3.num_lightmapmergepower;
+	powerx = loadmodel->brushq3.num_lightmapmergedwidthpower;
+	powery = loadmodel->brushq3.num_lightmapmergedheightpower;
+	powerxy = powerx+powery;
+	powerdxy = loadmodel->brushq3.deluxemapping + powerxy;
 
-	loadmodel->brushq3.num_mergedlightmaps = ((count >> (loadmodel->brushq3.deluxemapping ? 1 : 0)) + (1 << (loadmodel->brushq3.num_lightmapmergepower * 2)) - 1) >> (loadmodel->brushq3.num_lightmapmergepower * 2);
+	mergedcolumns = 1 << powerx;
+	mergedrows = 1 << powery;
+	mergedrowsxcolumns = 1 << powerxy;
+
+	loadmodel->brushq3.num_mergedlightmaps = (realcount + (1 << powerxy) - 1) >> powerxy;
 	loadmodel->brushq3.data_lightmaps = (rtexture_t **)Mem_Alloc(loadmodel->mempool, loadmodel->brushq3.num_mergedlightmaps * sizeof(rtexture_t *));
 	if (loadmodel->brushq3.deluxemapping)
 		loadmodel->brushq3.data_deluxemaps = (rtexture_t **)Mem_Alloc(loadmodel->mempool, loadmodel->brushq3.num_mergedlightmaps * sizeof(rtexture_t *));
@@ -4696,60 +4756,43 @@ static void Mod_Q3BSP_LoadLightmaps(lump_t *l, lump_t *faceslump)
 	if (loadmodel->texturepool == NULL && cls.state != ca_dedicated)
 		loadmodel->texturepool = R_AllocTexturePool();
 
-	power = loadmodel->brushq3.num_lightmapmergepower;
-	power2 = power * 2;
+	mergedpixels = (unsigned char *) Mem_Alloc(tempmempool, mergedwidth * mergedheight * 4);
+	mergeddeluxepixels = loadmodel->brushq3.deluxemapping ? (unsigned char *) Mem_Alloc(tempmempool, mergedwidth * mergedheight * 4) : NULL;
 	for (i = 0;i < count;i++)
 	{
 		// figure out which merged lightmap texture this fits into
-		int lightmapindex = i >> (loadmodel->brushq3.deluxemapping + power2);
-		for (k = 0;k < size*size;k++)
+		realindex = i >> (int)loadmodel->brushq3.deluxemapping;
+		lightmapindex = i >> powerdxy;
+
+		// choose the destination address
+		mergebuf = (loadmodel->brushq3.deluxemapping && (i & 1)) ? mergeddeluxepixels : mergedpixels;
+		mergebuf += 4 * (realindex & (mergedcolumns-1))*size + 4 * ((realindex >> powerx) & (mergedrows-1))*mergedwidth*size;
+		if ((i & 1) == 0 || !loadmodel->brushq3.deluxemapping)
+			Con_Printf("copying original lightmap %i (%ix%i) to %i (at %i,%i)\n", i, size, size, lightmapindex, (realindex & (mergedcolumns-1))*size, ((realindex >> powerx) & (mergedrows-1))*size);
+
+		// convert pixels from RGB or BGRA while copying them into the destination rectangle
+		for (j = 0;j < size;j++)
+		for (k = 0;k < size;k++)
 		{
-			convertedpixels[k*4+0] = inpixels[i][k*bytesperpixel+rgbmap[0]];
-			convertedpixels[k*4+1] = inpixels[i][k*bytesperpixel+rgbmap[1]];
-			convertedpixels[k*4+2] = inpixels[i][k*bytesperpixel+rgbmap[2]];
-			convertedpixels[k*4+3] = 255;
+			mergebuf[(j*mergedwidth+k)*4+0] = inpixels[i][(j*size+k)*bytesperpixel+rgbmap[0]];
+			mergebuf[(j*mergedwidth+k)*4+1] = inpixels[i][(j*size+k)*bytesperpixel+rgbmap[1]];
+			mergebuf[(j*mergedwidth+k)*4+2] = inpixels[i][(j*size+k)*bytesperpixel+rgbmap[2]];
+			mergebuf[(j*mergedwidth+k)*4+3] = 255;
 		}
-		if (loadmodel->brushq3.num_lightmapmergepower > 0)
+
+		// upload texture if this was the last tile being written to the texture
+		if (((realindex + 1) & (mergedrowsxcolumns - 1)) == 0 || (realindex + 1) == realcount)
 		{
-			// if the lightmap has not been allocated yet, create it
-			if (!loadmodel->brushq3.data_lightmaps[lightmapindex])
-			{
-				// create a lightmap only as large as necessary to hold the
-				// remaining size*size blocks
-				// if there are multiple merged lightmap textures then they will
-				// all be full size except the last one which may be smaller
-				// because it only needs to the remaining blocks, and it will often
-				// be odd sizes like 2048x512 due to only being 25% full or so.
-				j = (count >> (loadmodel->brushq3.deluxemapping ? 1 : 0)) - (lightmapindex << power2);
-				for (mergewidth = 1;mergewidth < j && mergewidth < (1 << power);mergewidth *= 2)
-					;
-				for (mergeheight = 1;mergewidth*mergeheight < j && mergeheight < (1 << power);mergeheight *= 2)
-					;
-				if (developer_loading.integer)
-					Con_Printf("lightmap merge texture #%i is %ix%i (%i of %i used)\n", lightmapindex, mergewidth*size, mergeheight*size, min(j, mergewidth*mergeheight), mergewidth*mergeheight);
-				loadmodel->brushq3.data_lightmaps[lightmapindex] = R_LoadTexture2D(loadmodel->texturepool, va("lightmap%04i", lightmapindex), mergewidth * size, mergeheight * size, NULL, TEXTYPE_BGRA, TEXF_FORCELINEAR | (gl_texturecompression_q3bsplightmaps.integer ? TEXF_COMPRESS : TEXF_ALLOWUPDATES), NULL);
-				if (loadmodel->brushq3.data_deluxemaps)
-					loadmodel->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(loadmodel->texturepool, va("deluxemap%04i", lightmapindex), mergewidth * size, mergeheight * size, NULL, TEXTYPE_BGRA, TEXF_FORCELINEAR | (gl_texturecompression_q3bspdeluxemaps.integer ? TEXF_COMPRESS : TEXF_ALLOWUPDATES), NULL);
-			}
-			mergewidth = R_TextureWidth(loadmodel->brushq3.data_lightmaps[lightmapindex]) / size;
-			mergeheight = R_TextureHeight(loadmodel->brushq3.data_lightmaps[lightmapindex]) / size;
-			j = (i >> (loadmodel->brushq3.deluxemapping ? 1 : 0)) & ((1 << power2) - 1);
 			if (loadmodel->brushq3.deluxemapping && (i & 1))
-				R_UpdateTexture(loadmodel->brushq3.data_deluxemaps[lightmapindex], convertedpixels, (j % mergewidth) * size, (j / mergewidth) * size, size, size);
+				loadmodel->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(loadmodel->texturepool, va("deluxemap%04i", lightmapindex), mergedwidth, mergedheight, mergeddeluxepixels, TEXTYPE_BGRA, TEXF_FORCELINEAR | (gl_texturecompression_q3bspdeluxemaps.integer ? TEXF_COMPRESS : 0), -1, NULL);
 			else
-				R_UpdateTexture(loadmodel->brushq3.data_lightmaps [lightmapindex], convertedpixels, (j % mergewidth) * size, (j / mergewidth) * size, size, size);
-		}
-		else
-		{
-			// figure out which merged lightmap texture this fits into
-			if (loadmodel->brushq3.deluxemapping && (i & 1))
-				loadmodel->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(loadmodel->texturepool, va("deluxemap%04i", lightmapindex), size, size, convertedpixels, TEXTYPE_BGRA, TEXF_FORCELINEAR | (gl_texturecompression_q3bspdeluxemaps.integer ? TEXF_COMPRESS : 0), NULL);
-			else
-				loadmodel->brushq3.data_lightmaps [lightmapindex] = R_LoadTexture2D(loadmodel->texturepool, va("lightmap%04i", lightmapindex), size, size, convertedpixels, TEXTYPE_BGRA, TEXF_FORCELINEAR | (gl_texturecompression_q3bsplightmaps.integer ? TEXF_COMPRESS : 0), NULL);
+				loadmodel->brushq3.data_lightmaps [lightmapindex] = R_LoadTexture2D(loadmodel->texturepool, va("lightmap%04i", lightmapindex), mergedwidth, mergedheight, mergedpixels, TEXTYPE_BGRA, TEXF_FORCELINEAR | (gl_texturecompression_q3bsplightmaps.integer ? TEXF_COMPRESS : 0), -1, NULL);
 		}
 	}
 
-	Mem_Free(convertedpixels);
+	if (mergeddeluxepixels)
+		Mem_Free(mergeddeluxepixels);
+	Mem_Free(mergedpixels);
 	if(external)
 	{
 		for(i = 0; i < count; ++i)
@@ -4911,9 +4954,9 @@ static void Mod_Q3BSP_LoadFaces(lump_t *l)
 			}
 			else
 			{
-				out->lightmaptexture = loadmodel->brushq3.data_lightmaps[n >> (loadmodel->brushq3.num_lightmapmergepower * 2 + loadmodel->brushq3.deluxemapping)];
+				out->lightmaptexture = loadmodel->brushq3.data_lightmaps[n >> loadmodel->brushq3.num_lightmapmergedwidthheightdeluxepower];
 				if (loadmodel->brushq3.deluxemapping)
-					out->deluxemaptexture = loadmodel->brushq3.data_deluxemaps[n >> (loadmodel->brushq3.num_lightmapmergepower * 2 + loadmodel->brushq3.deluxemapping)];
+					out->deluxemaptexture = loadmodel->brushq3.data_deluxemaps[n >> loadmodel->brushq3.num_lightmapmergedwidthheightdeluxepower];
 			}
 		}
 
@@ -5053,8 +5096,8 @@ static void Mod_Q3BSP_LoadFaces(lump_t *l)
 	Mod_AllocSurfMesh(loadmodel->mempool, meshvertices, meshtriangles, false, true, false);
 	if (collisiontriangles)
 	{
-		loadmodel->brush.data_collisionvertex3f = Mem_Alloc(loadmodel->mempool, collisionvertices * sizeof(float[3]));
-		loadmodel->brush.data_collisionelement3i = Mem_Alloc(loadmodel->mempool, collisiontriangles * sizeof(int[3]));
+		loadmodel->brush.data_collisionvertex3f = (float *)Mem_Alloc(loadmodel->mempool, collisionvertices * sizeof(float[3]));
+		loadmodel->brush.data_collisionelement3i = (int *)Mem_Alloc(loadmodel->mempool, collisiontriangles * sizeof(int[3]));
 	}
 	meshvertices = 0;
 	meshtriangles = 0;
@@ -6589,7 +6632,7 @@ static int Mod_Q3BSP_PointSuperContents(struct model_s *model, int frame, const 
 	return supercontents;
 }
 
-void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces)
+bih_t *Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces, bih_t *out)
 {
 	int j;
 	int bihnumleafs;
@@ -6626,17 +6669,17 @@ void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces)
 		for (j = 0, surface = model->data_surfaces + model->firstmodelsurface;j < nummodelsurfaces;j++, surface++)
 		{
 			if (surface->texture->basematerialflags & MATERIALFLAG_MESHCOLLISIONS)
-				bihnumleafs += surface->num_triangles;
+				bihnumleafs += surface->num_triangles + surface->num_collisiontriangles;
 			else
 				bihnumleafs += surface->num_collisiontriangles;
 		}
 	}
 
 	if (!bihnumleafs)
-		return;
+		return NULL;
 
 	// allocate the memory for the BIH leaf nodes
-	bihleafs = Mem_Alloc(loadmodel->mempool, sizeof(bih_leaf_t) * bihnumleafs);
+	bihleafs = (bih_leaf_t *)Mem_Alloc(loadmodel->mempool, sizeof(bih_leaf_t) * bihnumleafs);
 
 	// now populate the BIH leaf nodes
 	bihleafindex = 0;
@@ -6652,6 +6695,7 @@ void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces)
 				continue;
 			bihleafs[bihleafindex].type = BIH_RENDERTRIANGLE;
 			bihleafs[bihleafindex].textureindex = surface->texture - model->data_textures;
+			bihleafs[bihleafindex].surfaceindex = surface - model->data_surfaces;
 			bihleafs[bihleafindex].itemindex = triangleindex+surface->num_firsttriangle;
 			bihleafs[bihleafindex].mins[0] = min(rendervertex3f[3*e[0]+0], min(rendervertex3f[3*e[1]+0], rendervertex3f[3*e[2]+0])) - 1;
 			bihleafs[bihleafindex].mins[1] = min(rendervertex3f[3*e[0]+1], min(rendervertex3f[3*e[1]+1], rendervertex3f[3*e[2]+1])) - 1;
@@ -6672,6 +6716,7 @@ void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces)
 				continue;
 			bihleafs[bihleafindex].type = BIH_BRUSH;
 			bihleafs[bihleafindex].textureindex = brush->texture - model->data_textures;
+			bihleafs[bihleafindex].surfaceindex = -1;
 			bihleafs[bihleafindex].itemindex = brushindex+model->firstmodelbrush;
 			VectorCopy(brush->colbrushf->mins, bihleafs[bihleafindex].mins);
 			VectorCopy(brush->colbrushf->maxs, bihleafs[bihleafindex].maxs);
@@ -6687,6 +6732,7 @@ void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces)
 			{
 				bihleafs[bihleafindex].type = BIH_COLLISIONTRIANGLE;
 				bihleafs[bihleafindex].textureindex = surface->texture - model->data_textures;
+				bihleafs[bihleafindex].surfaceindex = surface - model->data_surfaces;
 				bihleafs[bihleafindex].itemindex = triangleindex+surface->num_firstcollisiontriangle;
 				bihleafs[bihleafindex].mins[0] = min(collisionvertex3f[3*e[0]+0], min(collisionvertex3f[3*e[1]+0], collisionvertex3f[3*e[2]+0])) - 1;
 				bihleafs[bihleafindex].mins[1] = min(collisionvertex3f[3*e[0]+1], min(collisionvertex3f[3*e[1]+1], collisionvertex3f[3*e[2]+1])) - 1;
@@ -6701,22 +6747,24 @@ void Mod_MakeCollisionBIH(dp_model_t *model, qboolean userendersurfaces)
 
 	// allocate buffers for the produced and temporary data
 	bihmaxnodes = bihnumleafs - 1;
-	bihnodes = Mem_Alloc(loadmodel->mempool, sizeof(bih_node_t) * bihmaxnodes);
-	temp_leafsort = Mem_Alloc(loadmodel->mempool, sizeof(int) * bihnumleafs * 2);
+	bihnodes = (bih_node_t *)Mem_Alloc(loadmodel->mempool, sizeof(bih_node_t) * bihmaxnodes);
+	temp_leafsort = (int *)Mem_Alloc(loadmodel->mempool, sizeof(int) * bihnumleafs * 2);
 	temp_leafsortscratch = temp_leafsort + bihnumleafs;
 
 	// now build it
-	BIH_Build(&model->collision_bih, bihnumleafs, bihleafs, bihmaxnodes, bihnodes, temp_leafsort, temp_leafsortscratch);
+	BIH_Build(out, bihnumleafs, bihleafs, bihmaxnodes, bihnodes, temp_leafsort, temp_leafsortscratch);
 
 	// we're done with the temporary data
 	Mem_Free(temp_leafsort);
 
 	// resize the BIH nodes array if it over-allocated
-	if (model->collision_bih.maxnodes > model->collision_bih.numnodes)
+	if (out->maxnodes > out->numnodes)
 	{
-		model->collision_bih.maxnodes = model->collision_bih.numnodes;
-		model->collision_bih.nodes = Mem_Realloc(loadmodel->mempool, model->collision_bih.nodes, model->collision_bih.numnodes * sizeof(bih_node_t));
+		out->maxnodes = out->numnodes;
+		out->nodes = (bih_node_t *)Mem_Realloc(loadmodel->mempool, out->nodes, out->numnodes * sizeof(bih_node_t));
 	}
+
+	return out;
 }
 
 static int Mod_Q3BSP_SuperContentsFromNativeContents(dp_model_t *model, int nativecontents)
@@ -6797,7 +6845,6 @@ void Mod_Q3BSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	int i, j, numshadowmeshtriangles, lumps;
 	q3dheader_t *header;
 	float corner[3], yawradius, modelradius;
-	msurface_t *surface;
 
 	mod->modeldatatypestring = "Q3BSP";
 
@@ -6915,22 +6962,7 @@ void Mod_Q3BSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	loadmodel->brush.supportwateralpha = true;
 
 	// make a single combined shadow mesh to allow optimized shadow volume creation
-	numshadowmeshtriangles = 0;
-	if (cls.state != ca_dedicated)
-	{
-		for (j = 0, surface = loadmodel->data_surfaces;j < loadmodel->num_surfaces;j++, surface++)
-		{
-			surface->num_firstshadowmeshtriangle = numshadowmeshtriangles;
-			numshadowmeshtriangles += surface->num_triangles;
-		}
-		loadmodel->brush.shadowmesh = Mod_ShadowMesh_Begin(loadmodel->mempool, numshadowmeshtriangles * 3, numshadowmeshtriangles, NULL, NULL, NULL, false, false, true);
-		for (j = 0, surface = loadmodel->data_surfaces;j < loadmodel->num_surfaces;j++, surface++)
-			if (surface->num_triangles > 0)
-				Mod_ShadowMesh_AddMesh(loadmodel->mempool, loadmodel->brush.shadowmesh, NULL, NULL, NULL, loadmodel->surfmesh.data_vertex3f, NULL, NULL, NULL, NULL, surface->num_triangles, (loadmodel->surfmesh.data_element3i + 3 * surface->num_firsttriangle));
-		loadmodel->brush.shadowmesh = Mod_ShadowMesh_Finish(loadmodel->mempool, loadmodel->brush.shadowmesh, false, true, false);
-		if (loadmodel->brush.shadowmesh)
-			Mod_BuildTriangleNeighbors(loadmodel->brush.shadowmesh->neighbor3i, loadmodel->brush.shadowmesh->element3i, loadmodel->brush.shadowmesh->numtriangles);
-	}
+	numshadowmeshtriangles = Mod_Q1BSP_CreateShadowMesh(loadmodel);
 
 	loadmodel->brush.num_leafs = 0;
 	Mod_Q3BSP_RecursiveFindNumLeafs(loadmodel->brush.data_nodes);
@@ -7032,7 +7064,8 @@ void Mod_Q3BSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 		if (j < mod->nummodelsurfaces)
 			mod->DrawAddWaterPlanes = R_Q1BSP_DrawAddWaterPlanes;
 
-		Mod_MakeCollisionBIH(mod, false);
+		Mod_MakeCollisionBIH(mod, false, &mod->collision_bih);
+		Mod_MakeCollisionBIH(mod, true, &mod->render_bih);
 
 		// generate VBOs and other shared data before cloning submodels
 		if (i == 0)
@@ -7064,12 +7097,15 @@ void Mod_MAP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 typedef struct objvertex_s
 {
 	int nextindex;
+	int submodelindex;
 	int textureindex;
 	float v[3];
 	float vt[2];
 	float vn[3];
 }
 objvertex_t;
+
+static unsigned char nobsp_pvs[1] = {1};
 
 void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 {
@@ -7078,7 +7114,7 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	char *argv[512];
 	char line[1024];
 	char materialname[MAX_QPATH];
-	int i, j, numvertices, firstvertex, firsttriangle, elementindex, vertexindex, numsurfaces, surfacevertices, surfacetriangles, surfaceelements;
+	int i, j, l, numvertices, firstvertex, firsttriangle, elementindex, vertexindex, surfacevertices, surfacetriangles, surfaceelements, submodelindex = 0;
 	int index1, index2, index3;
 	objvertex_t vfirst, vprev, vcurrent;
 	int argc;
@@ -7092,12 +7128,13 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	int maxvt = 0, numvt = 1;
 	int maxvn = 0, numvn = 1;
 	char *texturenames = NULL;
-	float dist, modelradius, modelyawradius;
+	float dist, modelradius, modelyawradius, yawradius;
 	float *v = NULL;
 	float *vt = NULL;
 	float *vn = NULL;
 	float mins[3];
 	float maxs[3];
+	float corner[3];
 	objvertex_t *thisvertex = NULL;
 	int vertexhashindex;
 	int *vertexhashtable = NULL;
@@ -7107,6 +7144,9 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	int vertexhashcount = 0;
 	skinfile_t *skinfiles = NULL;
 	unsigned char *data = NULL;
+	int *submodelfirstsurface;
+	msurface_t *surface;
+	msurface_t *tempsurfaces;
 
 	memset(&vfirst, 0, sizeof(vfirst));
 	memset(&vprev, 0, sizeof(vprev));
@@ -7167,6 +7207,7 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	// parse the OBJ text now
 	for(;;)
 	{
+		static char emptyarg[1] = "";
 		if (!*text)
 			break;
 		linenumber++;
@@ -7175,7 +7216,7 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 			line[linelen] = text[linelen];
 		line[linelen] = 0;
 		for (argc = 0;argc < 4;argc++)
-			argv[argc] = "";
+			argv[argc] = emptyarg;
 		argc = 0;
 		s = line;
 		while (*s == ' ' || *s == '\t')
@@ -7271,6 +7312,7 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 					index3 = numvn - index3;
 				vcurrent.nextindex = -1;
 				vcurrent.textureindex = textureindex;
+				vcurrent.submodelindex = submodelindex;
 				VectorCopy(v + 3*index1, vcurrent.v);
 				Vector2Copy(vt + 2*index2, vcurrent.vt);
 				VectorCopy(vn + 3*index3, vcurrent.vn);
@@ -7306,7 +7348,10 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 			}
 		}
 		else if (!strcmp(argv[0], "o") || !strcmp(argv[0], "g"))
-			;
+		{
+			submodelindex = atof(argv[1]);
+			loadmodel->brush.numsubmodels = max(submodelindex + 1, loadmodel->brush.numsubmodels);
+		}
 		else if (!strcmp(argv[0], "usemtl"))
 		{
 			for (i = 0;i < numtextures;i++)
@@ -7349,75 +7394,103 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	loadmodel->radius2 = modelradius * modelradius;
 
 	// allocate storage for triangles
-	loadmodel->num_surfaces = loadmodel->nummodelsurfaces = numsurfaces = numtextures;
-	loadmodel->surfmesh.data_element3i = Mem_Alloc(loadmodel->mempool, numtriangles * sizeof(int[3]));
-	loadmodel->data_surfaces = (msurface_t *)Mem_Alloc(loadmodel->mempool, loadmodel->num_surfaces * sizeof(msurface_t));
+	loadmodel->surfmesh.data_element3i = (int *)Mem_Alloc(loadmodel->mempool, numtriangles * sizeof(int[3]));
 	// allocate vertex hash structures to build an optimal vertex subset
 	vertexhashsize = numtriangles*2;
-	vertexhashtable = Mem_Alloc(loadmodel->mempool, sizeof(int) * vertexhashsize);
+	vertexhashtable = (int *)Mem_Alloc(loadmodel->mempool, sizeof(int) * vertexhashsize);
 	memset(vertexhashtable, 0xFF, sizeof(int) * vertexhashsize);
-	vertexhashdata = Mem_Alloc(loadmodel->mempool, sizeof(*vertexhashdata) * numtriangles*3);
+	vertexhashdata = (objvertex_t *)Mem_Alloc(loadmodel->mempool, sizeof(*vertexhashdata) * numtriangles*3);
 	vertexhashcount = 0;
 
 	// gather surface stats for assigning vertex/triangle ranges
 	firstvertex = 0;
 	firsttriangle = 0;
 	elementindex = 0;
-	for (textureindex = 0;textureindex < numtextures;textureindex++)
+	loadmodel->num_surfaces = 0;
+	// allocate storage for the worst case number of surfaces, later we resize
+	tempsurfaces = (msurface_t *)Mem_Alloc(loadmodel->mempool, numtextures * loadmodel->brush.numsubmodels * sizeof(msurface_t));
+	submodelfirstsurface = (int *)Mem_Alloc(loadmodel->mempool, (loadmodel->brush.numsubmodels+1) * sizeof(int));
+	surface = tempsurfaces;
+	for (submodelindex = 0;submodelindex < loadmodel->brush.numsubmodels;submodelindex++)
 	{
-		msurface_t *surface = loadmodel->data_surfaces + textureindex;
-		// copy the mins/maxs of the model backwards so that the first vertex
-		// added will set the surface bounds to a point
-		VectorCopy(loadmodel->normalmaxs, surface->mins);
-		VectorCopy(loadmodel->normalmins, surface->maxs);
-		surfacevertices = 0;
-		surfaceelements = 0;
-		for (vertexindex = 0;vertexindex < numtriangles*3;vertexindex++)
+		submodelfirstsurface[submodelindex] = loadmodel->num_surfaces;
+		for (textureindex = 0;textureindex < numtextures;textureindex++)
 		{
-			thisvertex = vertices + vertexindex;
-			if (thisvertex->textureindex != textureindex)
-				continue;
-			surface->mins[0] = min(surface->mins[0], thisvertex->v[0]);
-			surface->mins[1] = min(surface->mins[1], thisvertex->v[1]);
-			surface->mins[2] = min(surface->mins[2], thisvertex->v[2]);
-			surface->maxs[0] = max(surface->maxs[0], thisvertex->v[0]);
-			surface->maxs[1] = max(surface->maxs[1], thisvertex->v[1]);
-			surface->maxs[2] = max(surface->maxs[2], thisvertex->v[2]);
-			vertexhashindex = (unsigned int)(thisvertex->v[0] * 3571 + thisvertex->v[0] * 1777 + thisvertex->v[0] * 457) % (unsigned int)vertexhashsize;
-			for (i = vertexhashtable[vertexhashindex];i >= 0;i = vertexhashdata[i].nextindex)
+			for (vertexindex = 0;vertexindex < numtriangles*3;vertexindex++)
 			{
-				vdata = vertexhashdata + i;
-				if (vdata->textureindex == thisvertex->textureindex && VectorCompare(thisvertex->v, vdata->v) && VectorCompare(thisvertex->vn, vdata->vn) && Vector2Compare(thisvertex->vt, vdata->vt))
+				thisvertex = vertices + vertexindex;
+				if (thisvertex->submodelindex == submodelindex && thisvertex->textureindex == textureindex)
 					break;
 			}
-			if (i < 0)
+			// skip the surface creation if there are no triangles for it
+			if (vertexindex == numtriangles*3)
+				continue;
+			// create a surface for these vertices
+			surfacevertices = 0;
+			surfaceelements = 0;
+			// we hack in a texture index in the surface to be fixed up later...
+			surface->texture = (texture_t *)((size_t)textureindex);
+			// calculate bounds as we go
+			VectorCopy(thisvertex->v, surface->mins);
+			VectorCopy(thisvertex->v, surface->maxs);
+			for (;vertexindex < numtriangles*3;vertexindex++)
 			{
-				i = vertexhashcount++;
-				vdata = vertexhashdata + i;
-				*vdata = *thisvertex;
-				vdata->nextindex = vertexhashtable[vertexhashindex];
-				vertexhashtable[vertexhashindex] = i;
-				surfacevertices++;
+				thisvertex = vertices + vertexindex;
+				if (thisvertex->submodelindex != submodelindex)
+					continue;
+				if (thisvertex->textureindex != textureindex)
+					continue;
+				// add vertex to surface bounds
+				surface->mins[0] = min(surface->mins[0], thisvertex->v[0]);
+				surface->mins[1] = min(surface->mins[1], thisvertex->v[1]);
+				surface->mins[2] = min(surface->mins[2], thisvertex->v[2]);
+				surface->maxs[0] = max(surface->maxs[0], thisvertex->v[0]);
+				surface->maxs[1] = max(surface->maxs[1], thisvertex->v[1]);
+				surface->maxs[2] = max(surface->maxs[2], thisvertex->v[2]);
+				// add the vertex if it is not found in the merged set, and
+				// get its index (triangle element) for the surface
+				vertexhashindex = (unsigned int)(thisvertex->v[0] * 3571 + thisvertex->v[0] * 1777 + thisvertex->v[0] * 457) % (unsigned int)vertexhashsize;
+				for (i = vertexhashtable[vertexhashindex];i >= 0;i = vertexhashdata[i].nextindex)
+				{
+					vdata = vertexhashdata + i;
+					if (vdata->submodelindex == thisvertex->submodelindex && vdata->textureindex == thisvertex->textureindex && VectorCompare(thisvertex->v, vdata->v) && VectorCompare(thisvertex->vn, vdata->vn) && Vector2Compare(thisvertex->vt, vdata->vt))
+						break;
+				}
+				if (i < 0)
+				{
+					i = vertexhashcount++;
+					vdata = vertexhashdata + i;
+					*vdata = *thisvertex;
+					vdata->nextindex = vertexhashtable[vertexhashindex];
+					vertexhashtable[vertexhashindex] = i;
+					surfacevertices++;
+				}
+				loadmodel->surfmesh.data_element3i[elementindex++] = i;
+				surfaceelements++;
 			}
-			loadmodel->surfmesh.data_element3i[elementindex++] = i;
-			surfaceelements++;
+			surfacetriangles = surfaceelements / 3;
+			surface->num_vertices = surfacevertices;
+			surface->num_triangles = surfacetriangles;
+			surface->num_firstvertex = firstvertex;
+			surface->num_firsttriangle = firsttriangle;
+			firstvertex += surface->num_vertices;
+			firsttriangle += surface->num_triangles;
+			surface++;
+			loadmodel->num_surfaces++;
 		}
-		surfacetriangles = surfaceelements / 3;
-		surface->num_vertices = surfacevertices;
-		surface->num_triangles = surfacetriangles;
-		surface->num_firstvertex = firstvertex;
-		surface->num_firsttriangle = firsttriangle;
-		firstvertex += surface->num_vertices;
-		firsttriangle += surface->num_triangles;
 	}
+	submodelfirstsurface[submodelindex] = loadmodel->num_surfaces;
 	numvertices = firstvertex;
+	loadmodel->data_surfaces = (msurface_t *)Mem_Realloc(loadmodel->mempool, tempsurfaces, loadmodel->num_surfaces * sizeof(msurface_t));
+	tempsurfaces = NULL;
 
 	// allocate storage for final mesh data
 	loadmodel->num_textures = numtextures * loadmodel->numskins;
 	loadmodel->num_texturesperskin = numtextures;
-	data = (unsigned char *)Mem_Alloc(loadmodel->mempool, numsurfaces * sizeof(int) + numsurfaces * loadmodel->numskins * sizeof(texture_t) + numtriangles * sizeof(int[3]) + (numvertices <= 65536 ? numtriangles * sizeof(unsigned short[3]) : 0) + numvertices * sizeof(float[14]));
-	loadmodel->sortedmodelsurfaces = (int *)data;data += numsurfaces * sizeof(int);
-	loadmodel->data_textures = (texture_t *)data;data += numsurfaces * loadmodel->numskins * sizeof(texture_t);
+	data = (unsigned char *)Mem_Alloc(loadmodel->mempool, loadmodel->num_surfaces * sizeof(int) + loadmodel->num_surfaces * loadmodel->numskins * sizeof(texture_t) + numtriangles * sizeof(int[3]) + (numvertices <= 65536 ? numtriangles * sizeof(unsigned short[3]) : 0) + numvertices * sizeof(float[14]) + loadmodel->brush.numsubmodels * sizeof(dp_model_t *));
+	loadmodel->brush.submodels = (dp_model_t **)data;data += loadmodel->brush.numsubmodels * sizeof(dp_model_t *);
+	loadmodel->sortedmodelsurfaces = (int *)data;data += loadmodel->num_surfaces * sizeof(int);
+	loadmodel->data_textures = (texture_t *)data;data += loadmodel->num_surfaces * loadmodel->numskins * sizeof(texture_t);
 	loadmodel->surfmesh.num_vertices = numvertices;
 	loadmodel->surfmesh.num_triangles = numtriangles;
 	loadmodel->surfmesh.data_neighbor3i = (int *)data;data += numtriangles * sizeof(int[3]);
@@ -7441,12 +7514,9 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 		Mod_BuildAliasSkinsFromSkinFiles(loadmodel->data_textures + textureindex, skinfiles, texturenames + textureindex*MAX_QPATH, texturenames + textureindex*MAX_QPATH);
 	Mod_FreeSkinFiles(skinfiles);
 
-	// set the surface textures
-	for (textureindex = 0;textureindex < numtextures;textureindex++)
-	{
-		msurface_t *surface = loadmodel->data_surfaces + textureindex;
-		surface->texture = loadmodel->data_textures + textureindex;
-	}
+	// set the surface textures to their real values now that we loaded them...
+	for (i = 0;i < loadmodel->num_surfaces;i++)
+		loadmodel->data_surfaces[i].texture = loadmodel->data_textures + (size_t)loadmodel->data_surfaces[i].texture;
 
 	// free data
 	Mem_Free(vertices);
@@ -7457,8 +7527,10 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	Mem_Free(vertexhashtable);
 	Mem_Free(vertexhashdata);
 
+	// make a single combined shadow mesh to allow optimized shadow volume creation
+	Mod_Q1BSP_CreateShadowMesh(loadmodel);
+
 	// compute all the mesh information that was not loaded from the file
-	Mod_MakeSortedSurfaces(loadmodel);
 	if (loadmodel->surfmesh.data_element3s)
 		for (i = 0;i < loadmodel->surfmesh.num_triangles*3;i++)
 			loadmodel->surfmesh.data_element3s[i] = loadmodel->surfmesh.data_element3i[i];
@@ -7469,7 +7541,138 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	Mod_BuildTextureVectorsFromNormals(0, loadmodel->surfmesh.num_vertices, loadmodel->surfmesh.num_triangles, loadmodel->surfmesh.data_vertex3f, loadmodel->surfmesh.data_texcoordtexture2f, loadmodel->surfmesh.data_normal3f, loadmodel->surfmesh.data_element3i, loadmodel->surfmesh.data_svector3f, loadmodel->surfmesh.data_tvector3f, true);
 	Mod_BuildTriangleNeighbors(loadmodel->surfmesh.data_neighbor3i, loadmodel->surfmesh.data_element3i, loadmodel->surfmesh.num_triangles);
 
-	Mod_MakeCollisionBIH(loadmodel, true);
+	// if this is a worldmodel and has no BSP tree, create a fake one for the purpose
+	loadmodel->brush.num_visleafs = 1;
+	loadmodel->brush.num_leafs = 1;
+	loadmodel->brush.num_nodes = 0;
+	loadmodel->brush.num_leafsurfaces = loadmodel->num_surfaces;
+	loadmodel->brush.data_leafs = (mleaf_t *)Mem_Alloc(loadmodel->mempool, loadmodel->brush.num_leafs * sizeof(mleaf_t));
+	loadmodel->brush.data_nodes = (mnode_t *)loadmodel->brush.data_leafs;
+	loadmodel->brush.num_pvsclusters = 1;
+	loadmodel->brush.num_pvsclusterbytes = 1;
+	loadmodel->brush.data_pvsclusters = nobsp_pvs;
+	//if (loadmodel->num_nodes) loadmodel->data_nodes = (mnode_t *)Mem_Alloc(loadmodel->mempool, loadmodel->num_nodes * sizeof(mnode_t));
+	//loadmodel->data_leafsurfaces = (int *)Mem_Alloc(loadmodel->mempool, loadmodel->num_leafsurfaces * sizeof(int));
+	loadmodel->brush.data_leafsurfaces = loadmodel->sortedmodelsurfaces;
+	VectorCopy(loadmodel->normalmins, loadmodel->brush.data_leafs->mins);
+	VectorCopy(loadmodel->normalmaxs, loadmodel->brush.data_leafs->maxs);
+	loadmodel->brush.data_leafs->combinedsupercontents = 0; // FIXME?
+	loadmodel->brush.data_leafs->clusterindex = 0;
+	loadmodel->brush.data_leafs->areaindex = 0;
+	loadmodel->brush.data_leafs->numleafsurfaces = loadmodel->brush.num_leafsurfaces;
+	loadmodel->brush.data_leafs->firstleafsurface = loadmodel->brush.data_leafsurfaces;
+	loadmodel->brush.data_leafs->numleafbrushes = 0;
+	loadmodel->brush.data_leafs->firstleafbrush = NULL;
+	loadmodel->brush.supportwateralpha = true;
+
+	if (loadmodel->brush.numsubmodels)
+		loadmodel->brush.submodels = (dp_model_t **)Mem_Alloc(loadmodel->mempool, loadmodel->brush.numsubmodels * sizeof(dp_model_t *));
+
+	mod = loadmodel;
+	for (i = 0;i < loadmodel->brush.numsubmodels;i++)
+	{
+		if (i > 0)
+		{
+			char name[10];
+			// duplicate the basic information
+			dpsnprintf(name, sizeof(name), "*%i", i);
+			mod = Mod_FindName(name, loadmodel->name);
+			// copy the base model to this one
+			*mod = *loadmodel;
+			// rename the clone back to its proper name
+			strlcpy(mod->name, name, sizeof(mod->name));
+			mod->brush.parentmodel = loadmodel;
+			// textures and memory belong to the main model
+			mod->texturepool = NULL;
+			mod->mempool = NULL;
+			mod->brush.GetPVS = NULL;
+			mod->brush.FatPVS = NULL;
+			mod->brush.BoxTouchingPVS = NULL;
+			mod->brush.BoxTouchingLeafPVS = NULL;
+			mod->brush.BoxTouchingVisibleLeafs = NULL;
+			mod->brush.FindBoxClusters = NULL;
+			mod->brush.LightPoint = NULL;
+			mod->brush.AmbientSoundLevelsForPoint = NULL;
+		}
+		mod->brush.submodel = i;
+		if (loadmodel->brush.submodels)
+			loadmodel->brush.submodels[i] = mod;
+
+		// make the model surface list (used by shadowing/lighting)
+		mod->firstmodelsurface = submodelfirstsurface[i];
+		mod->nummodelsurfaces = submodelfirstsurface[i+1] - submodelfirstsurface[i];
+		mod->firstmodelbrush = 0;
+		mod->nummodelbrushes = 0;
+		mod->sortedmodelsurfaces = loadmodel->sortedmodelsurfaces + mod->firstmodelsurface;
+		Mod_MakeSortedSurfaces(mod);
+
+		VectorClear(mod->normalmins);
+		VectorClear(mod->normalmaxs);
+		l = false;
+		for (j = 0;j < mod->nummodelsurfaces;j++)
+		{
+			const msurface_t *surface = mod->data_surfaces + j + mod->firstmodelsurface;
+			const float *v = mod->surfmesh.data_vertex3f + 3 * surface->num_firstvertex;
+			int k;
+			if (!surface->num_vertices)
+				continue;
+			if (!l)
+			{
+				l = true;
+				VectorCopy(v, mod->normalmins);
+				VectorCopy(v, mod->normalmaxs);
+			}
+			for (k = 0;k < surface->num_vertices;k++, v += 3)
+			{
+				mod->normalmins[0] = min(mod->normalmins[0], v[0]);
+				mod->normalmins[1] = min(mod->normalmins[1], v[1]);
+				mod->normalmins[2] = min(mod->normalmins[2], v[2]);
+				mod->normalmaxs[0] = max(mod->normalmaxs[0], v[0]);
+				mod->normalmaxs[1] = max(mod->normalmaxs[1], v[1]);
+				mod->normalmaxs[2] = max(mod->normalmaxs[2], v[2]);
+			}
+		}
+		corner[0] = max(fabs(mod->normalmins[0]), fabs(mod->normalmaxs[0]));
+		corner[1] = max(fabs(mod->normalmins[1]), fabs(mod->normalmaxs[1]));
+		corner[2] = max(fabs(mod->normalmins[2]), fabs(mod->normalmaxs[2]));
+		modelradius = sqrt(corner[0]*corner[0]+corner[1]*corner[1]+corner[2]*corner[2]);
+		yawradius = sqrt(corner[0]*corner[0]+corner[1]*corner[1]);
+		mod->rotatedmins[0] = mod->rotatedmins[1] = mod->rotatedmins[2] = -modelradius;
+		mod->rotatedmaxs[0] = mod->rotatedmaxs[1] = mod->rotatedmaxs[2] = modelradius;
+		mod->yawmaxs[0] = mod->yawmaxs[1] = yawradius;
+		mod->yawmins[0] = mod->yawmins[1] = -yawradius;
+		mod->yawmins[2] = mod->normalmins[2];
+		mod->yawmaxs[2] = mod->normalmaxs[2];
+		mod->radius = modelradius;
+		mod->radius2 = modelradius * modelradius;
+
+		// this gets altered below if sky or water is used
+		mod->DrawSky = NULL;
+		mod->DrawAddWaterPlanes = NULL;
+
+		for (j = 0;j < mod->nummodelsurfaces;j++)
+			if (mod->data_surfaces[j + mod->firstmodelsurface].texture->basematerialflags & MATERIALFLAG_SKY)
+				break;
+		if (j < mod->nummodelsurfaces)
+			mod->DrawSky = R_Q1BSP_DrawSky;
+
+		for (j = 0;j < mod->nummodelsurfaces;j++)
+			if (mod->data_surfaces[j + mod->firstmodelsurface].texture->basematerialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_REFLECTION | MATERIALFLAG_CAMERA))
+				break;
+		if (j < mod->nummodelsurfaces)
+			mod->DrawAddWaterPlanes = R_Q1BSP_DrawAddWaterPlanes;
+
+		Mod_MakeCollisionBIH(mod, true, &mod->collision_bih);
+		mod->render_bih = mod->collision_bih;
+
+		// generate VBOs and other shared data before cloning submodels
+		if (i == 0)
+			Mod_BuildVBOs();
+	}
+	mod = loadmodel;
+	Mem_Free(submodelfirstsurface);
+
+	Con_DPrintf("Stats for obj model \"%s\": %i faces, %i nodes, %i leafs, %i clusters, %i clusterportals, mesh: %i vertices, %i triangles, %i surfaces\n", loadmodel->name, loadmodel->num_surfaces, loadmodel->brush.num_nodes, loadmodel->brush.num_leafs, mod->brush.num_pvsclusters, loadmodel->brush.num_portals, loadmodel->surfmesh.num_vertices, loadmodel->surfmesh.num_triangles, loadmodel->num_surfaces);
 }
 
 
@@ -8161,7 +8364,7 @@ void Mod_OBJ_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	loadmodel->num_textures = numtextures;
 	loadmodel->data_textures = Mem_Alloc(loadmodel->mempool, loadmodel->num_textures * sizeof(texture_t));
 	for (i = 0;i < numtextures;i++)
-		Mod_LoadTextureFromQ3Shader(loadmodel->data_textures + i, texturenames[i], true, true, TEXF_MIPMAP | TEXF_ALPHA | (r_picmipworld.integer ? TEXF_PICMIP : 0) | TEXF_COMPRESS);
+		Mod_LoadTextureFromQ3Shader(loadmodel->data_textures + i, texturenames[i], true, true, TEXF_MIPMAP | TEXF_ALPHA | TEXF_ISWORLD | TEXF_PICMIP | TEXF_COMPRESS);
 
 	// free the texturenames array since we are now done with it
 	for (i = 0;i < numtextures;i++)

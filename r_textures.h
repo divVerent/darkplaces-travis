@@ -22,10 +22,16 @@
 #define TEXF_COMPARE 0x00000800
 // indicates texture should use lower precision where supported
 #define TEXF_LOWPRECISION 0x00001000
-// indicates texture should support R_UpdateTexture, actual uploads may be delayed until R_Mesh_TexBind if gl_nopartialtextureupdates is on
+// indicates texture should support R_UpdateTexture on small regions, actual uploads may be delayed until R_Mesh_TexBind if gl_nopartialtextureupdates is on
 #define TEXF_ALLOWUPDATES 0x00002000
+// indicates texture should be affected by gl_picmip_world and r_picmipworld (maybe others in the future) instead of gl_picmip_other
+#define TEXF_ISWORLD 0x00004000
+// indicates texture should be affected by gl_picmip_sprites and r_picmipsprites (maybe others in the future) instead of gl_picmip_other
+#define TEXF_ISSPRITE 0x00008000
+// indicates the texture will be used as a render target (D3D hint)
+#define TEXF_RENDERTARGET 0x0010000
 // used for checking if textures mismatch
-#define TEXF_IMPORTANTBITS (TEXF_ALPHA | TEXF_MIPMAP | TEXF_CLAMP | TEXF_FORCENEAREST | TEXF_FORCELINEAR | TEXF_PICMIP | TEXF_COMPRESS | TEXF_COMPARE | TEXF_LOWPRECISION)
+#define TEXF_IMPORTANTBITS (TEXF_ALPHA | TEXF_MIPMAP | TEXF_CLAMP | TEXF_FORCENEAREST | TEXF_FORCELINEAR | TEXF_PICMIP | TEXF_COMPRESS | TEXF_COMPARE | TEXF_LOWPRECISION | TEXF_RENDERTARGET)
 
 typedef enum textype_e
 {
@@ -48,9 +54,19 @@ typedef enum textype_e
 	// 4x4 block compressed 15bit color plus 8bit alpha (8 bits per pixel)
 	TEXTYPE_DXT5,
 	// this represents the same format as the framebuffer, for fast copies
-	TEXTYPE_COLORBUFFER,
+	TEXTYPE_COLORBUFFER
 }
 textype_t;
+
+/*
+#ifdef WIN32
+#define SUPPORTD3D
+#define SUPPORTDIRECTX
+#ifdef SUPPORTD3D
+#include <d3d9.h>
+#endif
+#endif
+*/
 
 // contents of this structure are mostly private to gl_textures.c
 typedef struct rtexture_s
@@ -59,6 +75,22 @@ typedef struct rtexture_s
 	int texnum;
 	qboolean dirty;
 	int gltexturetypeenum; // exposed for use in R_Mesh_TexBind
+	// d3d stuff the backend needs
+	void *d3dtexture;
+#ifdef SUPPORTD3D
+	int d3dformat;
+	int d3dusage;
+	int d3dpool;
+	int d3daddressu;
+	int d3daddressv;
+	int d3daddressw;
+	int d3dmagfilter;
+	int d3dminfilter;
+	int d3dmipfilter;
+	int d3dmaxmiplevelfilter;
+	int d3dmipmaplodbias;
+	int d3dmaxmiplevel;
+#endif
 }
 rtexture_t;
 
@@ -92,17 +124,17 @@ extern cvar_t gl_texturecompression_reflectmask;
 // add a texture to a pool and optionally precache (upload) it
 // (note: data == NULL is perfectly acceptable)
 // (note: palette must not be NULL if using TEXTYPE_PALETTE)
-rtexture_t *R_LoadTexture2D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, const unsigned char *data, textype_t textype, int flags, const unsigned int *palette);
-rtexture_t *R_LoadTexture3D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, int depth, const unsigned char *data, textype_t textype, int flags, const unsigned int *palette);
-rtexture_t *R_LoadTextureCubeMap(rtexturepool_t *rtexturepool, const char *identifier, int width, const unsigned char *data, textype_t textype, int flags, const unsigned int *palette);
-rtexture_t *R_LoadTextureRectangle(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, const unsigned char *data, textype_t textype, int flags, const unsigned int *palette);
+rtexture_t *R_LoadTexture2D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
+rtexture_t *R_LoadTexture3D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, int depth, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
+rtexture_t *R_LoadTextureCubeMap(rtexturepool_t *rtexturepool, const char *identifier, int width, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
+rtexture_t *R_LoadTextureRectangle(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
 rtexture_t *R_LoadTextureShadowMapRectangle(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, int precision, qboolean filter);
 rtexture_t *R_LoadTextureShadowMap2D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, int precision, qboolean filter);
 rtexture_t *R_LoadTextureShadowMapCube(rtexturepool_t *rtexturepool, const char *identifier, int width, int precision, qboolean filter);
-rtexture_t *R_LoadTextureDDSFile(rtexturepool_t *rtexturepool, const char *filename, int flags, qboolean *hasalphaflag, float *avgcolor);
+rtexture_t *R_LoadTextureDDSFile(rtexturepool_t *rtexturepool, const char *filename, int flags, qboolean *hasalphaflag, float *avgcolor, int miplevel);
 
 // saves a texture to a DDS file
-int R_SaveTextureDDSFile(rtexture_t *rt, const char *filename, qboolean skipuncompressed);
+int R_SaveTextureDDSFile(rtexture_t *rt, const char *filename, qboolean skipuncompressed, qboolean hasalpha);
 
 // free a texture
 void R_FreeTexture(rtexture_t *rt);
@@ -136,6 +168,9 @@ void R_MakeTextureDynamic(rtexture_t *rt, updatecallback_t updatecallback, void 
 
 // Clear the texture's contents
 void R_ClearTexture (rtexture_t *rt);
+
+// returns the desired picmip level for given TEXF_ flags
+int R_PicmipForFlags(int flags);
 
 #endif
 

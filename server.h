@@ -98,9 +98,12 @@ typedef struct server_s
 	world_t world;
 
 	/// map name
-	char name[64];
-	/// maps/<name>.bsp, for model_precache[0]
-	char modelname[64];
+	char name[64]; // %s followed by entrance name
+	// variants of map name
+	char worldmessage[40]; // map title (not related to filename)
+	char worldbasename[MAX_QPATH]; // %s
+	char worldname[MAX_QPATH]; // maps/%s.bsp
+	char worldnamenoextension[MAX_QPATH]; // maps/%s
 	struct model_s *worldmodel;
 	// NULL terminated
 	// LordHavoc: precaches are now MAX_QPATH rather than a pointer
@@ -387,7 +390,11 @@ extern cvar_t sv_airaccelerate;
 extern cvar_t sv_airstopaccelerate;
 extern cvar_t sv_airstrafeaccelerate;
 extern cvar_t sv_maxairstrafespeed;
+extern cvar_t sv_airstrafeaccel_qw;
 extern cvar_t sv_aircontrol;
+extern cvar_t sv_aircontrol_power;
+extern cvar_t sv_aircontrol_penalty;
+extern cvar_t sv_airspeedlimit_nonqw;
 extern cvar_t sv_allowdownloads;
 extern cvar_t sv_allowdownloads_archive;
 extern cvar_t sv_allowdownloads_config;

@@ -25,8 +25,10 @@
 #include "quakedef.h"
 #include "image.h"
 #include "jpeg.h"
+#include "image_png.h"
 
 cvar_t sv_writepicture_quality = {CVAR_SAVE, "sv_writepicture_quality", "10", "WritePicture quality offset (higher means better quality, but slower)"};
+cvar_t r_texture_jpeg_fastpicmip = {CVAR_SAVE, "r_texture_jpeg_fastpicmip", "1", "perform gl_picmip during decompression for JPEG files (faster)"};
 
 // jboolean is unsigned char instead of int on Win32
 #ifdef WIN32
@@ -594,16 +596,20 @@ JPEG_LoadImage
 Load a JPEG image into a BGRA buffer
 ====================
 */
-unsigned char* JPEG_LoadImage_BGRA (const unsigned char *f, int filesize)
+unsigned char* JPEG_LoadImage_BGRA (const unsigned char *f, int filesize, int *miplevel)
 {
 	struct jpeg_decompress_struct cinfo;
 	struct jpeg_error_mgr jerr;
 	unsigned char *image_buffer = NULL, *scanline = NULL;
 	unsigned int line;
+	int submip = 0;
 
 	// No DLL = no JPEGs
 	if (!jpeg_dll)
 		return NULL;
+
+	if(miplevel && r_texture_jpeg_fastpicmip.integer)
+		submip = bound(0, *miplevel, 3);
 
 	cinfo.err = qjpeg_std_error (&jerr);
 	qjpeg_create_decompress (&cinfo);
@@ -613,12 +619,14 @@ unsigned char* JPEG_LoadImage_BGRA (const unsigned char *f, int filesize)
 	cinfo.err->error_exit = JPEG_ErrorExit;
 	JPEG_MemSrc (&cinfo, f, filesize);
 	qjpeg_read_header (&cinfo, TRUE);
+	cinfo.scale_num = 1;
+	cinfo.scale_denom = (1 << submip);
 	qjpeg_start_decompress (&cinfo);
 
-	image_width = cinfo.image_width;
-	image_height = cinfo.image_height;
+	image_width = cinfo.output_width;
+	image_height = cinfo.output_height;
 
-	if (image_width > 4096 || image_height > 4096 || image_width <= 0 || image_height <= 0)
+	if (image_width > 32768 || image_height > 32768 || image_width <= 0 || image_height <= 0)
 	{
 		Con_Printf("JPEG_LoadImage: invalid image size %ix%i\n", image_width, image_height);
 		return NULL;
@@ -678,10 +686,13 @@ unsigned char* JPEG_LoadImage_BGRA (const unsigned char *f, int filesize)
 
 		line++;
 	}
-	Mem_Free (scanline);
+	Mem_Free (scanline); scanline = NULL;
 
 	qjpeg_finish_decompress (&cinfo);
 	qjpeg_destroy_decompress (&cinfo);
+
+	if(miplevel)
+		*miplevel -= submip;
 
 	return image_buffer;
 
@@ -954,7 +965,7 @@ size_t JPEG_SaveImage_to_Buffer (char *jpegbuf, size_t jpegsize, int width, int 
 #endif
 
 	//quality_guess = (100 * jpegsize - 41000) / (width*height) + 2; // fits random data
-	quality_guess   = (256 * jpegsize - 81920) / (width*height) - 8; // fits Nexuiz's map pictures
+	quality_guess   = (256 * jpegsize - 81920) / (width*height) - 8; // fits Nexuiz's/Xonotic's map pictures
 
 	quality_guess = bound(0, quality_guess, 100);
 	quality = bound(0, quality_guess + sv_writepicture_quality.integer, 100); // assume it can do 10 failed attempts
@@ -1032,6 +1043,7 @@ qboolean Image_Compress(const char *imagename, size_t maxsize, void **buf, size_
 	CompressedImageCacheItem *i;
 
 	JPEG_OpenLibrary (); // for now; LH had the idea of replacing this by a better format
+	PNG_OpenLibrary (); // for loading
 
 	// No DLL = no JPEGs
 	if (!jpeg_dll)
@@ -1048,7 +1060,7 @@ qboolean Image_Compress(const char *imagename, size_t maxsize, void **buf, size_
 	}
 
 	// load the image
-	imagedata = loadimagepixelsbgra(imagename, true, false, false);
+	imagedata = loadimagepixelsbgra(imagename, true, false, false, NULL);
 	if(!imagedata)
 		return false;
 

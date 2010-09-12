@@ -713,7 +713,7 @@ Key_Console (int key, int unicode)
 		{
 			int		pos;
 			size_t          inchar = 0;
-			pos = u8_prevbyte(key_line, key_linepos);
+			pos = u8_prevbyte(key_line+1, key_linepos-1) + 1; // do NOT give the ']' to u8_prevbyte
 			while (pos)
 				if(pos-1 > 0 && key_line[pos-1] == STRING_COLOR_TAG && isdigit(key_line[pos]))
 					pos-=2;
@@ -733,7 +733,7 @@ Key_Console (int key, int unicode)
 		}
 		else
 		{
-			key_linepos = u8_prevbyte(key_line, key_linepos);
+			key_linepos = u8_prevbyte(key_line+1, key_linepos-1) + 1; // do NOT give the ']' to u8_prevbyte
 		}
 		return;
 	}
@@ -743,7 +743,7 @@ Key_Console (int key, int unicode)
 	{
 		if (key_linepos > 1)
 		{
-			int newpos = u8_prevbyte(key_line, key_linepos);
+			int newpos = u8_prevbyte(key_line+1, key_linepos-1) + 1; // do NOT give the ']' to u8_prevbyte
 			strlcpy(key_line + newpos, key_line + key_linepos, sizeof(key_line) + 1 - key_linepos);
 			key_linepos = newpos;
 		}
@@ -1011,6 +1011,10 @@ Key_Message (int key, int ascii)
 		return;
 	}
 
+	// ctrl+key generates an ascii value < 32 and shows a char from the charmap
+	if (ascii < 32 && utf8_enable.integer)
+		ascii = 0xE000 + ascii;
+
 	if (chat_bufferlen == sizeof (chat_buffer) - 1)
 		return;							// all full
 
@@ -1085,14 +1089,16 @@ Key_KeynumToString (int keynum)
 }
 
 
-void
+qboolean
 Key_SetBinding (int keynum, int bindmap, const char *binding)
 {
 	char *newbinding;
 	size_t l;
 
 	if (keynum == -1 || keynum >= MAX_KEYS)
-		return;
+		return false;
+	if ((bindmap < 0) || (bindmap >= MAX_BINDMAPS))
+		return false;
 
 // free old bindings
 	if (keybindings[bindmap][keynum]) {
@@ -1100,13 +1106,35 @@ Key_SetBinding (int keynum, int bindmap, const char *binding)
 		keybindings[bindmap][keynum] = NULL;
 	}
 	if(!binding[0]) // make "" binds be removed --blub
-		return;
+		return true;
 // allocate memory for new binding
 	l = strlen (binding);
 	newbinding = (char *)Z_Malloc (l + 1);
 	memcpy (newbinding, binding, l + 1);
 	newbinding[l] = 0;
 	keybindings[bindmap][keynum] = newbinding;
+	return true;
+}
+
+void Key_GetBindMap(int *fg, int *bg)
+{
+	if(fg)
+		*fg = key_bmap;
+	if(bg)
+		*bg = key_bmap2;
+}
+
+qboolean Key_SetBindMap(int fg, int bg)
+{
+	if(fg >= MAX_BINDMAPS)
+		return false;
+	if(bg >= MAX_BINDMAPS)
+		return false;
+	if(fg >= 0)
+		key_bmap = fg;
+	if(bg >= 0)
+		key_bmap2 = bg;
+	return true;
 }
 
 static void
@@ -1121,7 +1149,7 @@ Key_In_Unbind_f (void)
 	}
 
 	m = strtol(Cmd_Argv (1), &errchar, 0);
-	if ((m < 0) || (m >= 8) || (errchar && *errchar)) {
+	if ((m < 0) || (m >= MAX_BINDMAPS) || (errchar && *errchar)) {
 		Con_Printf("%s isn't a valid bindmap\n", Cmd_Argv(1));
 		return;
 	}
@@ -1132,7 +1160,8 @@ Key_In_Unbind_f (void)
 		return;
 	}
 
-	Key_SetBinding (b, m, "");
+	if(!Key_SetBinding (b, m, ""))
+		Con_Printf("Key_SetBinding failed for unknown reason\n");
 }
 
 static void
@@ -1150,7 +1179,7 @@ Key_In_Bind_f (void)
 	}
 
 	m = strtol(Cmd_Argv (1), &errchar, 0);
-	if ((m < 0) || (m >= 8) || (errchar && *errchar)) {
+	if ((m < 0) || (m >= MAX_BINDMAPS) || (errchar && *errchar)) {
 		Con_Printf("%s isn't a valid bindmap\n", Cmd_Argv(1));
 		return;
 	}
@@ -1176,7 +1205,8 @@ Key_In_Bind_f (void)
 			strlcat (cmd, " ", sizeof (cmd));
 	}
 
-	Key_SetBinding (b, m, cmd);
+	if(!Key_SetBinding (b, m, cmd))
+		Con_Printf("Key_SetBinding failed for unknown reason\n");
 }
 
 static void
@@ -1193,13 +1223,13 @@ Key_In_Bindmap_f (void)
 	}
 
 	m1 = strtol(Cmd_Argv (1), &errchar, 0);
-	if ((m1 < 0) || (m1 >= 8) || (errchar && *errchar)) {
+	if ((m1 < 0) || (m1 >= MAX_BINDMAPS) || (errchar && *errchar)) {
 		Con_Printf("%s isn't a valid bindmap\n", Cmd_Argv(1));
 		return;
 	}
 
 	m2 = strtol(Cmd_Argv (2), &errchar, 0);
-	if ((m2 < 0) || (m2 >= 8) || (errchar && *errchar)) {
+	if ((m2 < 0) || (m2 >= MAX_BINDMAPS) || (errchar && *errchar)) {
 		Con_Printf("%s isn't a valid bindmap\n", Cmd_Argv(2));
 		return;
 	}
@@ -1224,7 +1254,8 @@ Key_Unbind_f (void)
 		return;
 	}
 
-	Key_SetBinding (b, 0, "");
+	if(!Key_SetBinding (b, 0, ""))
+		Con_Printf("Key_SetBinding failed for unknown reason\n");
 }
 
 static void
@@ -1232,7 +1263,7 @@ Key_Unbindall_f (void)
 {
 	int         i, j;
 
-	for (j = 0; j < 8; j++)
+	for (j = 0; j < MAX_BINDMAPS; j++)
 		for (i = 0; i < (int)(sizeof(keybindings[0])/sizeof(keybindings[0][0])); i++)
 			if (keybindings[j][i])
 				Key_SetBinding (i, j, "");
@@ -1268,7 +1299,7 @@ Key_In_BindList_f (void)
 	if(Cmd_Argc() >= 2)
 	{
 		m = strtol(Cmd_Argv(1), &errchar, 0);
-		if ((m < 0) || (m >= 8) || (errchar && *errchar)) {
+		if ((m < 0) || (m >= MAX_BINDMAPS) || (errchar && *errchar)) {
 			Con_Printf("%s isn't a valid bindmap\n", Cmd_Argv(1));
 			return;
 		}
@@ -1320,7 +1351,8 @@ Key_Bind_f (void)
 			strlcat (cmd, " ", sizeof (cmd));
 	}
 
-	Key_SetBinding (b, 0, cmd);
+	if(!Key_SetBinding (b, 0, cmd))
+		Con_Printf("Key_SetBinding failed for unknown reason\n");
 }
 
 /*
@@ -1383,15 +1415,52 @@ Key_Shutdown (void)
 	Key_History_Shutdown();
 }
 
-const char *Key_GetBind (int key)
+const char *Key_GetBind (int key, int bindmap)
 {
 	const char *bind;
 	if (key < 0 || key >= MAX_KEYS)
 		return NULL;
-	bind = keybindings[key_bmap][key];
-	if (!bind)
-		bind = keybindings[key_bmap2][key];
+	if(bindmap >= MAX_BINDMAPS)
+		return NULL;
+	if(bindmap >= 0)
+	{
+		bind = keybindings[bindmap][key];
+	}
+	else
+	{
+		bind = keybindings[key_bmap][key];
+		if (!bind)
+			bind = keybindings[key_bmap2][key];
+	}
 	return bind;
+}
+
+void Key_FindKeysForCommand (const char *command, int *keys, int numkeys, int bindmap)
+{
+	int		count;
+	int		j;
+	const char	*b;
+
+	for (j = 0;j < numkeys;j++)
+		keys[j] = -1;
+
+	if(bindmap >= MAX_BINDMAPS)
+		return;
+
+	count = 0;
+
+	for (j = 0; j < MAX_KEYS; ++j)
+	{
+		b = Key_GetBind(j, bindmap);
+		if (!b)
+			continue;
+		if (!strcmp (b, command) )
+		{
+			keys[count++] = j;
+			if (count == numkeys)
+				break;
+		}
+	}
 }
 
 qboolean CL_VM_InputEvent (qboolean down, int key, int ascii);
@@ -1458,6 +1527,11 @@ Key_Event (int key, int ascii, qboolean down)
 		Key_EventQueue_Add(key, ascii, down);
 		return;
 	}
+
+	if (ascii == 0x80 && utf8_enable.integer) // pressing AltGr-5 (or AltGr-e) and for some reason we get windows-1252 encoding?
+		ascii = 0x20AC; // we want the Euro currency sign
+		// TODO find out which vid_ drivers do it and fix it there
+		// but catching U+0080 here is no loss as that char is not useful anyway
 
 	// get key binding
 	bind = keybindings[key_bmap][key];

@@ -39,6 +39,8 @@ typedef struct cachepic_s
 	rtexture_t *tex;
 	// used for hash lookups
 	struct cachepic_s *chain;
+	// has alpha?
+	qboolean hasalpha;
 	// name of pic
 	char name[MAX_QPATH];
 }
@@ -49,7 +51,7 @@ typedef enum cachepicflags_e
 	CACHEPICFLAG_NOTPERSISTENT = 1,
 	CACHEPICFLAG_QUIET = 2,
 	CACHEPICFLAG_NOCOMPRESSION = 4,
-	CACHEPICFLAG_NOCLAMP = 8,
+	CACHEPICFLAG_NOCLAMP = 8
 }
 cachepicflags_t;
 
@@ -92,6 +94,7 @@ DRAWFLAG_MIPMAP = 0x100 // ONLY R_BeginPolygon()
 
 typedef struct ft2_settings_s
 {
+	float scale, voffset;
 	// cvar parameters (only read on loadfont command)
 	int antialias, hinting;
 	float outline, blur, shadowx, shadowy, shadowz;
@@ -104,7 +107,6 @@ typedef struct dp_font_s
 	rtexture_t *tex;
 	float width_of[256]; // width_of[0] == max width of any char; 1.0f is base width (1/16 of texture width); therefore, all widths have to be <= 1 (does not include scale)
 	float maxwidth; // precalculated max width of the font (includes scale)
-	float scale; // scales the font (without changing line height!)
 	char texpath[MAX_QPATH];
 	char title[MAX_QPATH];
 
@@ -118,18 +120,26 @@ typedef struct dp_font_s
 }
 dp_font_t;
 
-#define MAX_FONTS 16
-extern dp_font_t dp_fonts[MAX_FONTS];
-#define FONT_DEFAULT     (&dp_fonts[0]) // should be fixed width
-#define FONT_CONSOLE     (&dp_fonts[1]) // REALLY should be fixed width (ls!)
-#define FONT_SBAR        (&dp_fonts[2]) // must be fixed width
-#define FONT_NOTIFY      (&dp_fonts[3]) // free
-#define FONT_CHAT        (&dp_fonts[4]) // free
-#define FONT_CENTERPRINT (&dp_fonts[5]) // free
-#define FONT_INFOBAR     (&dp_fonts[6]) // free
-#define FONT_MENU        (&dp_fonts[7]) // should be fixed width
-#define FONT_USER        (&dp_fonts[8]) // userdefined fonts
-#define MAX_USERFONTS (MAX_FONTS - (FONT_USER - dp_fonts))
+typedef struct dp_fonts_s
+{
+	dp_font_t *f;
+	int maxsize;
+}
+dp_fonts_t;
+extern dp_fonts_t dp_fonts;
+
+#define MAX_FONTS         16 // fonts at the start
+#define FONTS_EXPAND       8  // fonts grow when no free slots
+#define FONT_DEFAULT     (&dp_fonts.f[0]) // should be fixed width
+#define FONT_CONSOLE     (&dp_fonts.f[1]) // REALLY should be fixed width (ls!)
+#define FONT_SBAR        (&dp_fonts.f[2]) // must be fixed width
+#define FONT_NOTIFY      (&dp_fonts.f[3]) // free
+#define FONT_CHAT        (&dp_fonts.f[4]) // free
+#define FONT_CENTERPRINT (&dp_fonts.f[5]) // free
+#define FONT_INFOBAR     (&dp_fonts.f[6]) // free
+#define FONT_MENU        (&dp_fonts.f[7]) // should be fixed width
+#define FONT_USER(i)     (&dp_fonts.f[8+i]) // userdefined fonts
+#define MAX_USERFONTS    (dp_fonts.maxsize - 8)
 
 // shared color tag printing constants
 #define STRING_COLOR_TAG			'^'
@@ -161,7 +171,7 @@ float DrawQ_TextWidth_UntilWidth_TrackColors_Scale(const char *text, size_t *max
 // draw a very fancy pic (per corner texcoord/color control), the order is tl, tr, bl, br
 void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height, float s1, float t1, float r1, float g1, float b1, float a1, float s2, float t2, float r2, float g2, float b2, float a2, float s3, float t3, float r3, float g3, float b3, float a3, float s4, float t4, float r4, float g4, float b4, float a4, int flags);
 // draw a triangle mesh
-void DrawQ_Mesh(drawqueuemesh_t *mesh, int flags);
+void DrawQ_Mesh(drawqueuemesh_t *mesh, int flags, qboolean hasalpha);
 // set the clipping area
 void DrawQ_SetClipArea(float x, float y, float width, float height);
 // reset the clipping area
@@ -172,6 +182,8 @@ void DrawQ_Line(float width, float x1, float y1, float x2, float y2, float r, fl
 void DrawQ_LineLoop(drawqueuemesh_t *mesh, int flags);
 // resets r_refdef.draw2dstage
 void DrawQ_Finish(void);
+void DrawQ_ProcessDrawFlag(int flags, qboolean alpha); // sets GL_DepthMask and GL_BlendFunc
+void DrawQ_RecalcView(void); // use this when changing r_refdef.view.* from e.g. csqc
 
 void R_DrawGamma(void);
 

@@ -21,11 +21,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-char *cvar_dummy_description = "custom cvar";
+const char *cvar_dummy_description = "custom cvar";
 
 cvar_t *cvar_vars = NULL;
 cvar_t *cvar_hashtable[CVAR_HASHSIZE];
-char *cvar_null_string = "";
+const char *cvar_null_string = "";
 
 /*
 ============
@@ -68,6 +68,36 @@ cvar_t *Cvar_FindVarAfter (const char *prev_var_name, int neededflags)
 		var = var->next;
 	}
 	return var;
+}
+
+cvar_t *Cvar_FindVarLink (const char *var_name, cvar_t **parent, cvar_t ***link, cvar_t **prev_alpha)
+{
+	int hashindex;
+	cvar_t *var;
+
+	// use hash lookup to minimize search time
+	hashindex = CRC_Block((const unsigned char *)var_name, strlen(var_name));
+	if(parent) *parent = NULL;
+	if(prev_alpha) *prev_alpha = NULL;
+	if(link) *link = &cvar_hashtable[hashindex];
+	for (var = cvar_hashtable[hashindex];var;var = var->nextonhashchain)
+	{
+		if (!strcmp (var_name, var->name))
+		{
+			if(!prev_alpha || var == cvar_vars)
+				return var;
+
+			*prev_alpha = cvar_vars;
+			// if prev_alpha happens to become NULL then there has been some inconsistency elsewhere
+			// already - should I still insert '*prev_alpha &&' in the loop?
+			while((*prev_alpha)->next != var)
+				*prev_alpha = (*prev_alpha)->next;
+			return var;
+		}
+		if(parent) *parent = var;
+	}
+
+	return NULL;
 }
 
 /*
@@ -223,6 +253,55 @@ void Cvar_CompleteCvarPrint (const char *partial)
 			Con_Printf ("^3%s^7 is \"%s\" [\"%s\"] %s\n", cvar->name, cvar->string, cvar->defstring, cvar->description);
 }
 
+// we assume that prog is already set to the target progs
+static void Cvar_UpdateAutoCvar(cvar_t *var)
+{
+	int i;
+	if(!prog)
+		Host_Error("Cvar_UpdateAutoCvar: no prog set");
+	i = PRVM_GetProgNr();
+	if(var->globaldefindex_progid[i] == prog->id)
+	{
+		// MUST BE SYNCED WITH prvm_edict.c PRVM_LoadProgs
+		int j;
+		const char *s;
+		prvm_eval_t *val = (prvm_eval_t *)(prog->globals.generic + prog->globaldefs[var->globaldefindex[i]].ofs);
+		switch(prog->globaldefs[var->globaldefindex[i]].type & ~DEF_SAVEGLOBAL)
+		{
+			case ev_float:
+				val->_float = var->value;
+				break;
+			case ev_vector:
+				s = var->string;
+				VectorClear(val->vector);
+				for (j = 0;j < 3;j++)
+				{
+					while (*s && ISWHITESPACE(*s))
+						s++;
+					if (!*s)
+						break;
+					val->vector[j] = atof(s);
+					while (!ISWHITESPACE(*s))
+						s++;
+					if (!*s)
+						break;
+				}
+				break;
+			case ev_string:
+				PRVM_ChangeEngineString(var->globaldefindex_stringno[i], var->string);
+				val->string = var->globaldefindex_stringno[i];
+				break;
+		}
+	}
+}
+
+// called after loading a savegame
+void Cvar_UpdateAllAutoCvars(void)
+{
+	cvar_t *var;
+	for (var = cvar_vars ; var ; var = var->next)
+		Cvar_UpdateAutoCvar(var);
+}
 
 /*
 ============
@@ -245,11 +324,11 @@ void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
 	valuelen = strlen(value);
 	if (!var->string || strlen(var->string) != valuelen)
 	{
-		Z_Free (var->string);	// free the old value string
+		Z_Free ((char *)var->string);	// free the old value string
 
 		var->string = (char *)Z_Malloc (valuelen + 1);
 	}
-	memcpy (var->string, value, valuelen + 1);
+	memcpy ((char *)var->string, value, valuelen + 1);
 	var->value = atof (var->string);
 	var->integer = (int) var->value;
 	if ((var->flags & CVAR_NOTIFY) && changed && sv.active)
@@ -314,39 +393,7 @@ void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
 		if(PRVM_ProgLoaded(i))
 		{
 			PRVM_SetProg(i);
-			if(var->globaldefindex_progid[i] == prog->id)
-			{
-				// MUST BE SYNCED WITH prvm_edict.c PRVM_LoadProgs
-				int j;
-				const char *s;
-				prvm_eval_t *val = (prvm_eval_t *)(prog->globals.generic + prog->globaldefs[var->globaldefindex[i]].ofs);
-				switch(prog->globaldefs[var->globaldefindex[i]].type & ~DEF_SAVEGLOBAL)
-				{
-					case ev_float:
-						val->_float = var->value;
-						break;
-					case ev_vector:
-						s = var->string;
-						VectorClear(val->vector);
-						for (j = 0;j < 3;j++)
-						{
-							while (*s && ISWHITESPACE(*s))
-								s++;
-							if (!*s)
-								break;
-							val->vector[j] = atof(s);
-							while (!ISWHITESPACE(*s))
-								s++;
-							if (!*s)
-								break;
-						}
-						break;
-					case ev_string:
-						PRVM_ChangeEngineString(var->globaldefindex_stringno[i], var->string);
-						val->string = var->globaldefindex_stringno[i];
-						break;
-				}
-			}
+			Cvar_UpdateAutoCvar(var);
 		}
 	}
 	prog = tmpprog;
@@ -457,7 +504,7 @@ void Cvar_RegisterVariable (cvar_t *variable)
 
 			// get rid of old allocated cvar
 			// (but not cvar->string and cvar->defstring, because we kept those)
-			Z_Free(cvar->name);
+			Z_Free((char *)cvar->name);
 			Z_Free(cvar);
 		}
 		else
@@ -473,12 +520,12 @@ void Cvar_RegisterVariable (cvar_t *variable)
 	}
 
 // copy the value off, because future sets will Z_Free it
-	oldstr = variable->string;
+	oldstr = (char *)variable->string;
 	alloclen = strlen(variable->string) + 1;
 	variable->string = (char *)Z_Malloc (alloclen);
-	memcpy (variable->string, oldstr, alloclen);
+	memcpy ((char *)variable->string, oldstr, alloclen);
 	variable->defstring = (char *)Z_Malloc (alloclen);
-	memcpy (variable->defstring, oldstr, alloclen);
+	memcpy ((char *)variable->defstring, oldstr, alloclen);
 	variable->value = atof (variable->string);
 	variable->integer = (int) variable->value;
 
@@ -524,13 +571,13 @@ cvar_t *Cvar_Get (const char *name, const char *value, int flags, const char *ne
 		if(newdescription && (cvar->flags & CVAR_ALLOCATED))
 		{
 			if(cvar->description != cvar_dummy_description)
-				Z_Free(cvar->description);
+				Z_Free((char *)cvar->description);
 
 			if(*newdescription)
 			{
 				alloclen = strlen(newdescription) + 1;
 				cvar->description = (char *)Z_Malloc(alloclen);
-				memcpy(cvar->description, newdescription, alloclen);
+				memcpy((char *)cvar->description, newdescription, alloclen);
 			}
 			else
 				cvar->description = cvar_dummy_description;
@@ -559,12 +606,12 @@ cvar_t *Cvar_Get (const char *name, const char *value, int flags, const char *ne
 	cvar->flags = flags | CVAR_ALLOCATED;
 	alloclen = strlen(name) + 1;
 	cvar->name = (char *)Z_Malloc(alloclen);
-	memcpy(cvar->name, name, alloclen);
+	memcpy((char *)cvar->name, name, alloclen);
 	alloclen = strlen(value) + 1;
 	cvar->string = (char *)Z_Malloc(alloclen);
-	memcpy(cvar->string, value, alloclen);
+	memcpy((char *)cvar->string, value, alloclen);
 	cvar->defstring = (char *)Z_Malloc(alloclen);
-	memcpy(cvar->defstring, value, alloclen);
+	memcpy((char *)cvar->defstring, value, alloclen);
 	cvar->value = atof (cvar->string);
 	cvar->integer = (int) cvar->value;
 
@@ -572,7 +619,7 @@ cvar_t *Cvar_Get (const char *name, const char *value, int flags, const char *ne
 	{
 		alloclen = strlen(newdescription) + 1;
 		cvar->description = (char *)Z_Malloc(alloclen);
-		memcpy(cvar->description, newdescription, alloclen);
+		memcpy((char *)cvar->description, newdescription, alloclen);
 	}
 	else
 		cvar->description = cvar_dummy_description; // actually checked by VM_cvar_type
@@ -655,10 +702,10 @@ void Cvar_LockDefaults_f (void)
 
 			//Con_Printf("locking cvar %s (%s -> %s)\n", var->name, var->string, var->defstring);
 			var->flags |= CVAR_DEFAULTSET;
-			Z_Free(var->defstring);
+			Z_Free((char *)var->defstring);
 			alloclen = strlen(var->string) + 1;
 			var->defstring = (char *)Z_Malloc(alloclen);
-			memcpy(var->defstring, var->string, alloclen);
+			memcpy((char *)var->defstring, var->string, alloclen);
 		}
 	}
 }
@@ -818,6 +865,60 @@ void Cvar_SetA_f (void)
 
 	// all looks ok, create/modify the cvar
 	Cvar_Get(Cmd_Argv(1), Cmd_Argv(2), CVAR_SAVE, Cmd_Argc() > 3 ? Cmd_Argv(3) : NULL);
+}
+
+void Cvar_Del_f (void)
+{
+	int i;
+	cvar_t *cvar, *parent, **link, *prev;
+
+	if(Cmd_Argc() < 2)
+	{
+		Con_Printf("Del: wrong number of parameters, useage: unset <variablename1> [<variablename2> ...]\n");
+		return;
+	}
+	for(i = 1; i < Cmd_Argc(); ++i)
+	{
+		cvar = Cvar_FindVarLink(Cmd_Argv(i), &parent, &link, &prev);
+		if(!cvar)
+		{
+			Con_Printf("Del: %s is not defined\n", Cmd_Argv(i));
+			continue;
+		}
+		if(cvar->flags & CVAR_READONLY)
+		{
+			Con_Printf("Del: %s is read-only\n", cvar->name);
+			continue;
+		}
+		if(!(cvar->flags & CVAR_ALLOCATED))
+		{
+			Con_Printf("Del: %s is static and cannot be deleted\n", cvar->name);
+			continue;
+		}
+		if(cvar == cvar_vars)
+		{
+			cvar_vars = cvar->next;
+		}
+		else
+		{
+			// in this case, prev must be set, otherwise there has been some inconsistensy
+			// elsewhere already... should I still check for prev != NULL?
+			prev->next = cvar->next;
+		}
+
+		if(parent)
+			parent->nextonhashchain = cvar->nextonhashchain;
+		else if(link)
+			*link = cvar->nextonhashchain;
+
+		if(cvar->description != cvar_dummy_description)
+			Z_Free((char *)cvar->description);
+
+		Z_Free((char *)cvar->name);
+		Z_Free((char *)cvar->string);
+		Z_Free((char *)cvar->defstring);
+		Z_Free(cvar);
+	}
 }
 
 #ifdef FILLALLCVARSWITHRUBBISH

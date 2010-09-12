@@ -86,7 +86,7 @@ static void r_explosion_start(void)
 			data[y][x][3] = bound(0, a, 255);
 		}
 	}
-	explosiontexture = R_LoadTexture2D(explosiontexturepool, "explosiontexture", 128, 128, &data[0][0][0], TEXTYPE_BGRA, TEXF_MIPMAP | TEXF_ALPHA | TEXF_FORCELINEAR, NULL);
+	explosiontexture = R_LoadTexture2D(explosiontexturepool, "explosiontexture", 128, 128, &data[0][0][0], TEXTYPE_BGRA, TEXF_MIPMAP | TEXF_ALPHA | TEXF_FORCELINEAR, -1, NULL);
 //	if (r_loadfog)
 //	{
 //		for (y = 0;y < 128;y++)
@@ -153,7 +153,7 @@ void R_Explosion_Init(void)
 #ifdef MAX_EXPLOSIONS
 	Cvar_RegisterVariable(&r_drawexplosions);
 
-	R_RegisterModule("R_Explosions", r_explosion_start, r_explosion_shutdown, r_explosion_newmap);
+	R_RegisterModule("R_Explosions", r_explosion_start, r_explosion_shutdown, r_explosion_newmap, NULL, NULL);
 #endif
 }
 
@@ -212,17 +212,15 @@ static void R_DrawExplosion_TransparentCallback(const entity_render_t *ent, cons
 	GL_CullFace(r_refdef.view.cullface_back);
 	R_EntityMatrix(&identitymatrix);
 
-	R_Mesh_ColorPointer(NULL, 0, 0);
 	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(explosiontexture, NULL, GL_MODULATE, 1);
-	R_Mesh_TexCoordPointer(0, 2, explosiontexcoord2f[0], 0, 0);
 	for (surfacelistindex = 0;surfacelistindex < numsurfaces;surfacelistindex++)
 	{
 		const explosion_t *e = explosion + surfacelist[surfacelistindex];
-		R_Mesh_VertexPointer(e->vert[0], 0, 0);
-		// FIXME: fixed function path can't properly handle r_refdef.view.colorscale > 1
+		// FIXME: this can't properly handle r_refdef.view.colorscale > 1
 		GL_Color(e->alpha * r_refdef.view.colorscale, e->alpha * r_refdef.view.colorscale, e->alpha * r_refdef.view.colorscale, 1);
-		R_Mesh_Draw(0, numverts, 0, numtriangles, NULL, explosiontris[0], 0, 0);
+		R_Mesh_PrepareVertices_Generic_Arrays(numverts, e->vert[0], NULL, explosiontexcoord2f[0]);
+		R_Mesh_Draw(0, numverts, 0, numtriangles, NULL, NULL, 0, explosiontris[0], NULL, 0);
 	}
 }
 

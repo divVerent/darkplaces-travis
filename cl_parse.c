@@ -26,7 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "libcurl.h"
 #include "utf8lib.h"
 
-char *svc_strings[128] =
+const char *svc_strings[128] =
 {
 	"svc_bad",
 	"svc_nop",
@@ -100,7 +100,7 @@ char *svc_strings[128] =
 	"svc_pointparticles1", //	62		// [short] effectnum [vector] start, same as svc_pointparticles except velocity is zero and count is 1
 };
 
-char *qw_svc_strings[128] =
+const char *qw_svc_strings[128] =
 {
 	"qw_svc_bad",					// 0
 	"qw_svc_nop",					// 1
@@ -159,6 +159,11 @@ char *qw_svc_strings[128] =
 };
 
 //=============================================================================
+
+cvar_t cl_worldmessage = {CVAR_READONLY, "cl_worldmessage", "", "title of current level"};
+cvar_t cl_worldname = {CVAR_READONLY, "cl_worldname", "", "name of current worldmodel"};
+cvar_t cl_worldnamenoextension = {CVAR_READONLY, "cl_worldnamenoextension", "", "name of current worldmodel without extension"};
+cvar_t cl_worldbasename = {CVAR_READONLY, "cl_worldbasename", "", "name of current worldmodel without maps/ prefix or extension"};
 
 cvar_t demo_nehahra = {0, "demo_nehahra", "0", "reads all quake demos as nehahra movie protocol"};
 cvar_t developer_networkentities = {0, "developer_networkentities", "0", "prints received entities, value is 0-4 (higher for more info)"};
@@ -441,11 +446,26 @@ static void CL_SetupWorldModel(void)
 	cl.entities[0].render.model = cl.worldmodel = CL_GetModelByIndex(1);
 	CL_UpdateRenderEntity(&cl.entities[0].render);
 
+	// make sure the cl.worldname and related cvars are set up now that we know the world model name
 	// set up csqc world for collision culling
 	if (cl.worldmodel)
-		World_SetSize(&cl.world, cl.worldmodel->name, cl.worldmodel->normalmins, cl.worldmodel->normalmaxs);
+	{
+		strlcpy(cl.worldname, cl.worldmodel->name, sizeof(cl.worldname));
+		FS_StripExtension(cl.worldname, cl.worldnamenoextension, sizeof(cl.worldnamenoextension));
+		strlcpy(cl.worldbasename, !strncmp(cl.worldnamenoextension, "maps/", 5) ? cl.worldnamenoextension + 5 : cl.worldnamenoextension, sizeof(cl.worldbasename));
+		Cvar_SetQuick(&cl_worldmessage, cl.worldmessage);
+		Cvar_SetQuick(&cl_worldname, cl.worldname);
+		Cvar_SetQuick(&cl_worldnamenoextension, cl.worldnamenoextension);
+		Cvar_SetQuick(&cl_worldbasename, cl.worldbasename);
+		World_SetSize(&cl.world, cl.worldname, cl.worldmodel->normalmins, cl.worldmodel->normalmaxs);
+	}
 	else
+	{
+		Cvar_SetQuick(&cl_worldmessage, cl.worldmessage);
+		Cvar_SetQuick(&cl_worldnamenoextension, "");
+		Cvar_SetQuick(&cl_worldbasename, "");
 		World_SetSize(&cl.world, "", defaultmins, defaultmaxs);
+	}
 	World_Start(&cl.world);
 
 	// load or reload .loc file for team chat messages
@@ -1170,13 +1190,13 @@ void CL_BeginDownloads(qboolean aborteddownload)
 		// finished loading sounds
 	}
 
-	if(gamemode == GAME_NEXUIZ)
+	if(gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 		Cvar_SetValueQuick(&cl_serverextension_download, false);
-		// in Nexuiz, the built in download protocol is kinda broken (misses lots
+		// in Nexuiz/Xonotic, the built in download protocol is kinda broken (misses lots
 		// of dependencies) anyway, and can mess around with the game directory;
 		// until this is fixed, only support pk3 downloads via curl, and turn off
 		// individual file downloads other than for CSQC
-		// on the other end of the download protocol, GAME_NEXUIZ enforces writing
+		// on the other end of the download protocol, GAME_NEXUIZ/GAME_XONOTIC enforces writing
 		// to dlcache only
 		// idea: support download of pk3 files using this protocol later
 
@@ -1349,8 +1369,8 @@ void CL_StopDownload(int size, int crc)
 			// save to disk only if we don't already have it
 			// (this is mainly for playing back demos)
 			existingcrc = FS_CRCFile(cls.qw_downloadname, &existingsize);
-			if (existingsize || gamemode == GAME_NEXUIZ || !strcmp(cls.qw_downloadname, csqc_progname.string))
-				// let csprogs ALWAYS go to dlcache, to prevent "viral csprogs"; also, never put files outside dlcache for Nexuiz
+			if (existingsize || gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC || !strcmp(cls.qw_downloadname, csqc_progname.string))
+				// let csprogs ALWAYS go to dlcache, to prevent "viral csprogs"; also, never put files outside dlcache for Nexuiz/Xonotic
 			{
 				if ((int)existingsize != size || existingcrc != crc)
 				{
@@ -1660,7 +1680,7 @@ void CL_ParseServerInfo (void)
 
 		// get the full level name
 		str = MSG_ReadString ();
-		strlcpy (cl.levelname, str, sizeof(cl.levelname));
+		strlcpy (cl.worldmessage, str, sizeof(cl.worldmessage));
 
 		// get the movevars that are defined in the qw protocol
 		cl.movevars_gravity            = MSG_ReadFloat();
@@ -1705,6 +1725,17 @@ void CL_ParseServerInfo (void)
 		// note: on QW protocol we can't set up the gameworld until after
 		// downloads finish...
 		// (we don't even know the name of the map yet)
+		// this also means cl_autodemo does not work on QW protocol...
+
+		strlcpy(cl.worldname, "", sizeof(cl.worldname));
+		strlcpy(cl.worldnamenoextension, "", sizeof(cl.worldnamenoextension));
+		strlcpy(cl.worldbasename, "qw", sizeof(cl.worldbasename));
+		Cvar_SetQuick(&cl_worldname, cl.worldname);
+		Cvar_SetQuick(&cl_worldnamenoextension, cl.worldnamenoextension);
+		Cvar_SetQuick(&cl_worldbasename, cl.worldbasename);
+
+		// check memory integrity
+		Mem_CheckSentinelsGlobal();
 	}
 	else
 	{
@@ -1726,7 +1757,7 @@ void CL_ParseServerInfo (void)
 
 	// parse signon message
 		str = MSG_ReadString ();
-		strlcpy (cl.levelname, str, sizeof(cl.levelname));
+		strlcpy (cl.worldmessage, str, sizeof(cl.worldmessage));
 
 	// seperate the printfs so the server message can have a color
 		if (cls.protocol != PROTOCOL_NEHAHRAMOVIE) // no messages when playing the Nehahra movie
@@ -1759,6 +1790,15 @@ void CL_ParseServerInfo (void)
 				Host_Error("Server sent a precache name of %i characters (max %i)", (int)strlen(str), MAX_QPATH - 1);
 			strlcpy (cl.sound_name[numsounds], str, sizeof (cl.sound_name[numsounds]));
 		}
+
+		// set the base name for level-specific things...  this gets updated again by CL_SetupWorldModel later
+		strlcpy(cl.worldname, cl.model_name[1], sizeof(cl.worldname));
+		FS_StripExtension(cl.worldname, cl.worldnamenoextension, sizeof(cl.worldnamenoextension));
+		strlcpy(cl.worldbasename, !strncmp(cl.worldnamenoextension, "maps/", 5) ? cl.worldnamenoextension + 5 : cl.worldnamenoextension, sizeof(cl.worldbasename));
+		Cvar_SetQuick(&cl_worldmessage, cl.worldmessage);
+		Cvar_SetQuick(&cl_worldname, cl.worldname);
+		Cvar_SetQuick(&cl_worldnamenoextension, cl.worldnamenoextension);
+		Cvar_SetQuick(&cl_worldbasename, cl.worldbasename);
 
 		// touch all of the precached models that are still loaded so we can free
 		// anything that isn't needed
@@ -1803,43 +1843,46 @@ void CL_ParseServerInfo (void)
 		cl.loadbegun = false;
 		cl.loadfinished = false;
 		cl.loadcsqc = true;
-	}
 
-	// check memory integrity
-	Mem_CheckSentinelsGlobal();
+		// check memory integrity
+		Mem_CheckSentinelsGlobal();
 
-// if cl_autodemo is set, automatically start recording a demo if one isn't being recorded already
-	if (cl_autodemo.integer && cls.netcon && cls.protocol != PROTOCOL_QUAKEWORLD)
-	{
-		char demofile[MAX_OSPATH];
-		char levelname[MAX_QPATH];
-
-		if (cls.demorecording)
+	// if cl_autodemo is set, automatically start recording a demo if one isn't being recorded already
+		if (cl_autodemo.integer && cls.netcon && cls.protocol != PROTOCOL_QUAKEWORLD)
 		{
-			// finish the previous level's demo file
-			CL_Stop_f();
+			char demofile[MAX_OSPATH];
+
+			if (cls.demorecording)
+			{
+				// finish the previous level's demo file
+				CL_Stop_f();
+			}
+
+			// start a new demo file
+			dpsnprintf (demofile, sizeof(demofile), "%s_%s.dem", Sys_TimeString (cl_autodemo_nameformat.string), cl.worldbasename);
+
+			Con_Printf ("Auto-recording to %s.\n", demofile);
+
+			// Reset bit 0 for every new demo
+			Cvar_SetValueQuick(&cl_autodemo_delete,
+				(cl_autodemo_delete.integer & ~0x1)
+				|
+				((cl_autodemo_delete.integer & 0x2) ? 0x1 : 0)
+			);
+
+			cls.demofile = FS_OpenRealFile(demofile, "wb", false);
+			if (cls.demofile)
+			{
+				cls.forcetrack = -1;
+				FS_Printf (cls.demofile, "%i\n", cls.forcetrack);
+				cls.demorecording = true;
+				strlcpy(cls.demoname, demofile, sizeof(cls.demoname));
+				cls.demo_lastcsprogssize = -1;
+				cls.demo_lastcsprogscrc = -1;
+			}
+			else
+				Con_Print ("ERROR: couldn't open.\n");
 		}
-
-		// start a new demo file
-		strlcpy(levelname, FS_FileWithoutPath(cl.model_name[1]), sizeof(levelname));
-		if (strrchr(levelname, '.'))
-			*(strrchr(levelname, '.')) = 0;
-		dpsnprintf (demofile, sizeof(demofile), "%s_%s.dem", Sys_TimeString (cl_autodemo_nameformat.string), levelname);
-
-		Con_Printf ("Auto-recording to %s.\n", demofile);
-
-		cls.demofile = FS_OpenRealFile(demofile, "wb", false);
-		if (cls.demofile)
-		{
-			cls.forcetrack = -1;
-			FS_Printf (cls.demofile, "%i\n", cls.forcetrack);
-			cls.demorecording = true;
-			strlcpy(cls.demoname, demofile, sizeof(cls.demoname));
-			cls.demo_lastcsprogssize = -1;
-			cls.demo_lastcsprogscrc = -1;
-		}
-		else
-			Con_Print ("ERROR: couldn't open.\n");
 	}
 }
 
@@ -2821,7 +2864,7 @@ void CL_ParseTrailParticles(void)
 	effectindex = (unsigned short)MSG_ReadShort();
 	MSG_ReadVector(start, cls.protocol);
 	MSG_ReadVector(end, cls.protocol);
-	CL_ParticleEffect(effectindex, VectorDistance(start, end), start, end, vec3_origin, vec3_origin, entityindex > 0 ? cl.entities + entityindex : NULL, 0);
+	CL_ParticleEffect(effectindex, 1, start, end, vec3_origin, vec3_origin, entityindex > 0 ? cl.entities + entityindex : NULL, 0);
 }
 
 void CL_ParsePointParticles(void)
@@ -3245,7 +3288,7 @@ void CL_ParseServerMessage(void)
 	int			i;
 	protocolversion_t protocol;
 	unsigned char		cmdlog[32];
-	char		*cmdlogname[32], *temp;
+	const char		*cmdlogname[32], *temp;
 	int			cmdindex, cmdcount = 0;
 	qboolean	qwplayerupdatereceived;
 	qboolean	strip_pqc;
@@ -4128,6 +4171,11 @@ void CL_Parse_ErrorCleanUp(void)
 
 void CL_Parse_Init(void)
 {
+	Cvar_RegisterVariable(&cl_worldmessage);
+	Cvar_RegisterVariable(&cl_worldname);
+	Cvar_RegisterVariable(&cl_worldnamenoextension);
+	Cvar_RegisterVariable(&cl_worldbasename);
+
 	// LordHavoc: added demo_nehahra cvar
 	Cvar_RegisterVariable (&demo_nehahra);
 	if (gamemode == GAME_NEHAHRA)

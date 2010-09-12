@@ -72,7 +72,7 @@ cvar_t cl_maxfps = {CVAR_SAVE, "cl_maxfps", "0", "maximum fps cap, 0 = unlimited
 cvar_t cl_maxfps_alwayssleep = {0, "cl_maxfps_alwayssleep","1", "gives up some processing time to other applications each frame, value in milliseconds, disabled if cl_maxfps is 0"};
 cvar_t cl_maxidlefps = {CVAR_SAVE, "cl_maxidlefps", "20", "maximum fps cap when the game is not the active window (makes cpu time available to other programs"};
 
-cvar_t developer = {CVAR_SAVE, "developer","0", "prints debugging messages and information (recommended for all developers and level designers)"};
+cvar_t developer = {CVAR_SAVE, "developer","0", "shows debugging messages and information (recommended for all developers and level designers); the value -1 also suppresses buffering and logging these messages"};
 cvar_t developer_extra = {0, "developer_extra", "0", "prints additional debugging messages, often very verbose!"};
 cvar_t developer_insane = {0, "developer_insane", "0", "prints huge streams of information about internal workings, entire contents of files being read/written, etc.  Not recommended!"};
 cvar_t developer_loadfile = {0, "developer_loadfile","0", "prints name and size of every file loaded via the FS_LoadFile function (which is almost everything)"};
@@ -189,7 +189,7 @@ void Host_ServerOptions (void)
 		else
 		{
 			// default players in some games, singleplayer in most
-			if (gamemode != GAME_GOODVSBAD2 && gamemode != GAME_NEXUIZ && gamemode != GAME_BATTLEMECH)
+			if (gamemode != GAME_GOODVSBAD2 && gamemode != GAME_NEXUIZ && gamemode != GAME_XONOTIC && gamemode != GAME_BATTLEMECH)
 				svs.maxclients = 1;
 		}
 	}
@@ -210,6 +210,7 @@ Host_InitLocal
 void Host_SaveConfig_f(void);
 void Host_LoadConfig_f(void);
 extern cvar_t sv_writepicture_quality;
+extern cvar_t r_texture_jpeg_fastpicmip;
 static void Host_InitLocal (void)
 {
 	Cmd_AddCommand("saveconfig", Host_SaveConfig_f, "save settings to config.cfg (or a specified filename) immediately (also automatic when quitting)");
@@ -239,6 +240,7 @@ static void Host_InitLocal (void)
 	Cvar_RegisterVariable (&timeformat);
 
 	Cvar_RegisterVariable (&sv_writepicture_quality);
+	Cvar_RegisterVariable (&r_texture_jpeg_fastpicmip);
 }
 
 
@@ -1120,6 +1122,7 @@ static void Host_Init (void)
 	Mod_Init();
 	World_Init();
 	SV_Init();
+	V_Init(); // some cvars needed by server player physics (cl_rollangle etc)
 	Host_InitCommands();
 	Host_InitLocal();
 	Host_ServerOptions();
@@ -1139,7 +1142,6 @@ static void Host_Init (void)
 		S_Init();
 		CDAudio_Init();
 		Key_Init();
-		V_Init();
 		CL_Init();
 	}
 

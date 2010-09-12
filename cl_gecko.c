@@ -443,7 +443,7 @@ static void cl_gecko_updatecallback( rtexture_t *texture, void* callbackData ) {
 static void cl_gecko_linktexture( clgecko_t *instance ) {
 	// TODO: assert that instance->texture == NULL
 	instance->texture = R_LoadTexture2D( cl_geckotexturepool, instance->name, 
-		instance->texWidth, instance->texHeight, NULL, TEXTYPE_BGRA, TEXF_ALPHA | TEXF_PERSISTENT | TEXF_ALLOWUPDATES, NULL );
+		instance->texWidth, instance->texHeight, NULL, TEXTYPE_BGRA, TEXF_ALPHA | TEXF_PERSISTENT, -1, NULL );
 	R_MakeTextureDynamic( instance->texture, cl_gecko_updatecallback, instance );
 	CL_LinkDynTexture( instance->name, instance->texture );
 }
@@ -869,7 +869,7 @@ void CL_Gecko_Init( void )
 	Cmd_AddCommand( "gecko_injecttext", cl_gecko_injecttext_f, "Injects text into a browser" );
 	Cmd_AddCommand( "gecko_movecursor", gl_gecko_movecursor_f, "Move the cursor to a certain position" );
 
-	R_RegisterModule( "CL_Gecko", cl_gecko_start, cl_gecko_shutdown, cl_gecko_newmap );
+	R_RegisterModule( "CL_Gecko", cl_gecko_start, cl_gecko_shutdown, cl_gecko_newmap, NULL, NULL );
 }
 
 void CL_Gecko_NavigateToURI( clgecko_t *instance, const char *URI ) {

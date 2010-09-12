@@ -37,6 +37,13 @@ void ModPlug_CloseLibrary (void)
 {
 }
 #define modplug_dll 1
+#define qModPlug_Load ModPlug_Load
+#define qModPlug_Unload ModPlug_Unload
+#define qModPlug_Read ModPlug_Read
+#define qModPlug_Seek ModPlug_Seek
+#define qModPlug_GetSettings ModPlug_GetSettings
+#define qModPlug_SetSettings ModPlug_SetSettings
+#define qModPlug_SetMasterVolume ModPlug_SetMasterVolume
 
 #else
 // BEGIN SECTION FROM modplug.h
@@ -74,6 +81,9 @@ void ModPlug_CloseLibrary (void)
 			int mBits;           /* Bits per sample - 8, 16, or 32 */
 			int mFrequency;      /* Sampling rate - 11025, 22050, or 44100 */
 			int mResamplingMode; /* One of MODPLUG_RESAMPLE_*, above */
+
+			int mStereoSeparation; /* Stereo separation, 1 - 256 */
+			int mMaxMixChannels; /* Maximum number of mixing channels (polyphony), 32 - 256 */
 			
 			int mReverbDepth;    /* Reverb level 0(quiet)-100(loud)      */
 			int mReverbDelay;    /* Reverb delay in ms, usually 40-200ms */
@@ -90,24 +100,24 @@ void ModPlug_CloseLibrary (void)
 
 // END SECTION FROM modplug.h
 
-static ModPlugFile* (*ModPlug_Load) (const void* data, int size);
-static void (*ModPlug_Unload) (ModPlugFile* file);
-static int (*ModPlug_Read) (ModPlugFile* file, void* buffer, int size);
-static void (*ModPlug_Seek) (ModPlugFile* file, int millisecond);
-static void (*ModPlug_GetSettings) (ModPlug_Settings* settings);
-static void (*ModPlug_SetSettings) (const ModPlug_Settings* settings);
+static ModPlugFile* (*qModPlug_Load) (const void* data, int size);
+static void (*qModPlug_Unload) (ModPlugFile* file);
+static int (*qModPlug_Read) (ModPlugFile* file, void* buffer, int size);
+static void (*qModPlug_Seek) (ModPlugFile* file, int millisecond);
+static void (*qModPlug_GetSettings) (ModPlug_Settings* settings);
+static void (*qModPlug_SetSettings) (const ModPlug_Settings* settings);
 typedef void (ModPlug_SetMasterVolume_t) (ModPlugFile* file,unsigned int cvol) ;
-ModPlug_SetMasterVolume_t *ModPlug_SetMasterVolume;
+ModPlug_SetMasterVolume_t *qModPlug_SetMasterVolume;
 
 
 static dllfunction_t modplugfuncs[] =
 {
-	{"ModPlug_Load",			(void **) &ModPlug_Load},
-	{"ModPlug_Unload",			(void **) &ModPlug_Unload},
-	{"ModPlug_Read",			(void **) &ModPlug_Read},
-	{"ModPlug_Seek",			(void **) &ModPlug_Seek},
-	{"ModPlug_GetSettings",		(void **) &ModPlug_GetSettings},
-	{"ModPlug_SetSettings",		(void **) &ModPlug_SetSettings},
+	{"ModPlug_Load",			(void **) &qModPlug_Load},
+	{"ModPlug_Unload",			(void **) &qModPlug_Unload},
+	{"ModPlug_Read",			(void **) &qModPlug_Read},
+	{"ModPlug_Seek",			(void **) &qModPlug_Seek},
+	{"ModPlug_GetSettings",		(void **) &qModPlug_GetSettings},
+	{"ModPlug_SetSettings",		(void **) &qModPlug_SetSettings},
 	{NULL, NULL}
 };
 
@@ -134,12 +144,12 @@ qboolean ModPlug_OpenLibrary (void)
 	const char* dllnames_modplug [] =
 	{
 #if defined(WIN32)
-		"libmodplug-0.dll",
+		"libmodplug-1.dll",
 		"modplug.dll",
 #elif defined(MACOSX)
 		"libmodplug.dylib",
 #else
-		"libmodplug.so.0",
+		"libmodplug.so.1",
 		"libmodplug.so",
 #endif
 		NULL
@@ -158,8 +168,8 @@ qboolean ModPlug_OpenLibrary (void)
 	// the modplug DLL automatically when loading the modplugFile DLL
 	if(Sys_LoadLibrary (dllnames_modplug, &modplug_dll, modplugfuncs))
 	{
-		ModPlug_SetMasterVolume = (ModPlug_SetMasterVolume_t *) Sys_GetProcAddress(modplug_dll, "ModPlug_SetMasterVolume");
-		if(!ModPlug_SetMasterVolume)
+		qModPlug_SetMasterVolume = (ModPlug_SetMasterVolume_t *) Sys_GetProcAddress(modplug_dll, "ModPlug_SetMasterVolume");
+		if(!qModPlug_SetMasterVolume)
 			Con_Print("Warning: modplug volume control not supported. Try getting a newer version of libmodplug.\n");
 		return true;
 	}
@@ -240,7 +250,7 @@ static const snd_buffer_t* ModPlug_FetchSound (void *sfxfetcher, void **chfetche
 		per_ch = (modplug_stream_perchannel_t *)Mem_Alloc (snd_mempool, memsize);
 
 		// Open it with the modplugFile API
-		per_ch->mf = ModPlug_Load(per_sfx->file, per_sfx->filesize);
+		per_ch->mf = qModPlug_Load(per_sfx->file, per_sfx->filesize);
 		if (!per_ch->mf)
 		{
 			Con_Printf("error while reading ModPlug stream \"%s\"\n", per_sfx->name);
@@ -249,9 +259,9 @@ static const snd_buffer_t* ModPlug_FetchSound (void *sfxfetcher, void **chfetche
 		}
 
 #ifndef SND_MODPLUG_STATIC
-		if(ModPlug_SetMasterVolume)
+		if(qModPlug_SetMasterVolume)
 #endif
-			ModPlug_SetMasterVolume(per_ch->mf, 512); // max volume, DP scales down!
+			qModPlug_SetMasterVolume(per_ch->mf, 512); // max volume, DP scales down!
 
 		per_ch->bs = 0;
 
@@ -306,7 +316,7 @@ static const snd_buffer_t* ModPlug_FetchSound (void *sfxfetcher, void **chfetche
 
 		Con_DPrintf("warning: mod file needed to seek (to %d)\n", modplug_start);
 
-		ModPlug_Seek(per_ch->mf, modplug_start);
+		qModPlug_Seek(per_ch->mf, modplug_start);
 		sb->nbframes = 0;
 
 		real_start = (unsigned int) ((float)modplug_start / 1000 * snd_renderbuffer->format.speed);
@@ -343,7 +353,7 @@ static const snd_buffer_t* ModPlug_FetchSound (void *sfxfetcher, void **chfetche
 
 	// Decompress in the resampling_buffer
 	done = 0;
-	while ((ret = ModPlug_Read (per_ch->mf, (char *)&resampling_buffer[done], (int)(newlength - done))) > 0)
+	while ((ret = qModPlug_Read (per_ch->mf, (char *)&resampling_buffer[done], (int)(newlength - done))) > 0)
 		done += ret;
 	if(done < newlength)
 	{
@@ -376,7 +386,7 @@ static void ModPlug_FetchEnd (void *chfetcherdata)
 	if (per_ch != NULL)
 	{
 		// Free the modplug decoder
-		ModPlug_Unload (per_ch->mf);
+		qModPlug_Unload (per_ch->mf);
 
 		Mem_Free (per_ch);
 	}
@@ -405,13 +415,13 @@ static void ModPlug_FreeSfx (void *sfxfetcherdata)
 ModPlug_GetFormat
 ====================
 */
-static const snd_format_t* ModPlug_GetFormat (sfx_t* sfx)
+static const snd_format_t* qModPlug_GetFormat (sfx_t* sfx)
 {
 	modplug_stream_persfx_t* per_sfx = (modplug_stream_persfx_t *)sfx->fetcher_data;
 	return &per_sfx->format;
 }
 
-static const snd_fetcher_t modplug_fetcher = { ModPlug_FetchSound, ModPlug_FetchEnd, ModPlug_FreeSfx, ModPlug_GetFormat };
+static const snd_fetcher_t modplug_fetcher = { ModPlug_FetchSound, ModPlug_FetchEnd, ModPlug_FreeSfx, qModPlug_GetFormat };
 
 
 /*
@@ -444,17 +454,17 @@ qboolean ModPlug_LoadModPlugFile (const char *filename, sfx_t *sfx)
 	if (developer_loading.integer >= 2)
 		Con_Printf ("Loading ModPlug file \"%s\"\n", filename);
 
-	ModPlug_GetSettings(&s);
+	qModPlug_GetSettings(&s);
 	s.mFlags = MODPLUG_ENABLE_OVERSAMPLING | MODPLUG_ENABLE_NOISE_REDUCTION | MODPLUG_ENABLE_REVERB;
 	s.mChannels = 2;
 	s.mBits = 16;
 	s.mFrequency = 44100;
 	s.mResamplingMode = MODPLUG_RESAMPLE_SPLINE;
 	s.mLoopCount = -1;
-	ModPlug_SetSettings(&s);
+	qModPlug_SetSettings(&s);
 
 	// Open it with the modplugFile API
-	if (!(mf = ModPlug_Load (data, filesize)))
+	if (!(mf = qModPlug_Load (data, filesize)))
 	{
 		Con_Printf ("error while opening ModPlug file \"%s\"\n", filename);
 		Mem_Free(data);
@@ -462,9 +472,9 @@ qboolean ModPlug_LoadModPlugFile (const char *filename, sfx_t *sfx)
 	}
 
 #ifndef SND_MODPLUG_STATIC
-	if(ModPlug_SetMasterVolume)
+	if(qModPlug_SetMasterVolume)
 #endif
-		ModPlug_SetMasterVolume(mf, 512); // max volume, DP scales down!
+		qModPlug_SetMasterVolume(mf, 512); // max volume, DP scales down!
 
 	if (developer_loading.integer >= 2)
 		Con_Printf ("\"%s\" will be streamed\n", filename);

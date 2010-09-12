@@ -186,8 +186,8 @@ qboolean Font_OpenLibrary (void)
 	const char* dllnames [] =
 	{
 #if defined(WIN32)
-		"freetype6.dll",
 		"libfreetype-6.dll",
+		"freetype6.dll",
 #elif defined(MACOSX)
 		"libfreetype.6.dylib",
 		"libfreetype.dylib",
@@ -251,12 +251,12 @@ void font_start(void)
 void font_shutdown(void)
 {
 	int i;
-	for (i = 0; i < MAX_FONTS; ++i)
+	for (i = 0; i < dp_fonts.maxsize; ++i)
 	{
-		if (dp_fonts[i].ft2)
+		if (dp_fonts.f[i].ft2)
 		{
-			Font_UnloadFont(dp_fonts[i].ft2);
-			dp_fonts[i].ft2 = NULL;
+			Font_UnloadFont(dp_fonts.f[i].ft2);
+			dp_fonts.f[i].ft2 = NULL;
 		}
 	}
 	Font_CloseLibrary();
@@ -273,6 +273,7 @@ void Font_Init(void)
 	Cvar_RegisterVariable(&r_font_size_snapping);
 	Cvar_RegisterVariable(&r_font_kerning);
 	Cvar_RegisterVariable(&developer_font);
+
 	// let's open it at startup already
 	Font_OpenLibrary();
 }
@@ -289,7 +290,7 @@ ft2_font_t *Font_Alloc(void)
 {
 	if (!ft2_dll)
 		return NULL;
-	return Mem_Alloc(font_mempool, sizeof(ft2_font_t));
+	return (ft2_font_t *)Mem_Alloc(font_mempool, sizeof(ft2_font_t));
 }
 
 qboolean Font_Attach(ft2_font_t *font, ft2_attachment_t *attachment)
@@ -463,14 +464,22 @@ static qboolean Font_LoadFile(const char *name, int _face, ft2_settings_t *setti
 
 	namelen = strlen(name);
 
-	memcpy(filename, name, namelen);
-	memcpy(filename + namelen, ".ttf", 5);
+	// try load direct file
+	memcpy(filename, name, namelen+1);
 	data = FS_LoadFile(filename, font_mempool, false, &datasize);
+	// try load .ttf
+	if (!data)
+	{
+		memcpy(filename + namelen, ".ttf", 5);
+		data = FS_LoadFile(filename, font_mempool, false, &datasize);
+	}
+	// try load .otf
 	if (!data)
 	{
 		memcpy(filename + namelen, ".otf", 5);
 		data = FS_LoadFile(filename, font_mempool, false, &datasize);
 	}
+	// try load .pfb/afm
 	if (!data)
 	{
 		ft2_attachment_t afm;
@@ -487,13 +496,12 @@ static qboolean Font_LoadFile(const char *name, int _face, ft2_settings_t *setti
 				Font_Attach(font, &afm);
 		}
 	}
-
 	if (!data)
 	{
 		// FS_LoadFile being not-quiet should print an error :)
 		return false;
 	}
-	Con_Printf("Loading font %s face %i...\n", filename, _face);
+	Con_DPrintf("Loading font %s face %i...\n", filename, _face);
 
 	status = qFT_New_Memory_Face(font_ft2lib, (FT_Bytes)data, datasize, _face, (FT_Face*)&font->face);
 	if (status && _face != 0)
@@ -519,7 +527,7 @@ static qboolean Font_LoadFile(const char *name, int _face, ft2_settings_t *setti
 		args.flags = FT_OPEN_MEMORY;
 		args.memory_base = (const FT_Byte*)font->attachments[i].data;
 		args.memory_size = font->attachments[i].size;
-		if (qFT_Attach_Stream(font->face, &args))
+		if (qFT_Attach_Stream((FT_Face)font->face, &args))
 			Con_Printf("Failed to add attachment %u to %s\n", (unsigned)i, font->name);
 	}
 
@@ -578,7 +586,7 @@ void Font_Postprocess_Update(ft2_font_t *fnt, int bpp, int w, int h)
 		if(pp.buf)
 			Mem_Free(pp.buf);
 		pp.bufsize = needed * 4;
-		pp.buf = Mem_Alloc(font_mempool, pp.bufsize);
+		pp.buf = (unsigned char *)Mem_Alloc(font_mempool, pp.bufsize);
 		pp.buf2 = pp.buf + needed;
 	}
 }
@@ -765,9 +773,9 @@ static qboolean Font_LoadSize(ft2_font_t *font, float size, qboolean check_only)
 			for (r = 0; r < 256; ++r)
 			{
 				FT_ULong ul, ur;
-				ul = qFT_Get_Char_Index(font->face, l);
-				ur = qFT_Get_Char_Index(font->face, r);
-				if (qFT_Get_Kerning(font->face, ul, ur, FT_KERNING_DEFAULT, &kernvec))
+				ul = qFT_Get_Char_Index((FT_Face)font->face, l);
+				ur = qFT_Get_Char_Index((FT_Face)font->face, r);
+				if (qFT_Get_Kerning((FT_Face)font->face, ul, ur, FT_KERNING_DEFAULT, &kernvec))
 				{
 					fmap->kerning.kerning[l][r][0] = 0;
 					fmap->kerning.kerning[l][r][1] = 0;
@@ -915,9 +923,9 @@ qboolean Font_GetKerningForMap(ft2_font_t *font, int map_index, float w, float h
 			Con_Printf("Failed to get kerning for %s\n", font->name);
 			return false;
 		}
-		ul = qFT_Get_Char_Index(font->face, left);
-		ur = qFT_Get_Char_Index(font->face, right);
-		if (qFT_Get_Kerning(font->face, ul, ur, FT_KERNING_DEFAULT, &kernvec))
+		ul = qFT_Get_Char_Index((FT_Face)font->face, left);
+		ur = qFT_Get_Char_Index((FT_Face)font->face, right);
+		if (qFT_Get_Kerning((FT_Face)font->face, ul, ur, FT_KERNING_DEFAULT, &kernvec))
 		{
 			if (outx) *outx = Font_SnapTo(kernvec.x * fmap->sfx, 1 / fmap->size);// * (w / (float)fmap->size);
 			if (outy) *outy = Font_SnapTo(kernvec.y * fmap->sfy, 1 / fmap->size);// * (h / (float)fmap->size);
@@ -1099,7 +1107,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 		return false;
 	}
 
-	map = Mem_Alloc(font_mempool, sizeof(ft2_font_map_t));
+	map = (ft2_font_map_t *)Mem_Alloc(font_mempool, sizeof(ft2_font_map_t));
 	if (!map)
 	{
 		Con_Printf("ERROR: Out of memory when loading fontmap for %s\n", font->name);
@@ -1116,7 +1124,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 	map->sfy = mapstart->sfy;
 
 	pitch = map->glyphSize * FONT_CHARS_PER_LINE * bytesPerPixel;
-	data = Mem_Alloc(font_mempool, (FONT_CHAR_LINES * map->glyphSize) * pitch);
+	data = (unsigned char *)Mem_Alloc(font_mempool, (FONT_CHAR_LINES * map->glyphSize) * pitch);
 	if (!data)
 	{
 		Con_Printf("ERROR: Failed to allocate memory for font %s size %g\n", font->name, map->size);
@@ -1177,7 +1185,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 		imagedata += gpad_t * pitch + gpad_l * bytesPerPixel;
 		//status = qFT_Load_Char(face, ch, FT_LOAD_RENDER);
 		// we need the glyphIndex
-		face = font->face;
+		face = (FT_Face)font->face;
 		usefont = NULL;
 		if (font->image_font && mapch == ch && img_fontmap[mapch])
 		{
@@ -1194,7 +1202,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 				if (!Font_SetSize(usefont, mapstart->intSize, mapstart->intSize))
 					continue;
 				// try that glyph
-				face = usefont->face;
+				face = (FT_Face)usefont->face;
 				glyphIndex = qFT_Get_Char_Index(face, ch);
 				if (glyphIndex == 0)
 					continue;
@@ -1207,7 +1215,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 			{
 				//Con_Printf("failed to load fallback glyph for char %lx from font %s\n", (unsigned long)ch, font->name);
 				// now we let it use the "missing-glyph"-glyph
-				face = font->face;
+				face = (FT_Face)font->face;
 				glyphIndex = 0;
 			}
 		}
@@ -1215,7 +1223,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 		if (!usefont)
 		{
 			usefont = font;
-			face = font->face;
+			face = (FT_Face)font->face;
 			status = qFT_Load_Glyph(face, glyphIndex, FT_LOAD_RENDER | load_flags);
 			if (status)
 			{
@@ -1391,12 +1399,12 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 		map->texture = R_LoadTexture2D(font_texturepool, map_identifier,
 					       map->glyphSize * FONT_CHARS_PER_LINE,
 					       map->glyphSize * FONT_CHAR_LINES,
-					       data, TEXTYPE_ALPHA, TEXF_ALPHA /*gone: | TEXF_ALWAYSPRECACHE*/ /* | TEXF_MIPMAP*/, NULL);
+					       data, TEXTYPE_ALPHA, TEXF_ALPHA /*gone: | TEXF_ALWAYSPRECACHE*/ /* | TEXF_MIPMAP*/, -1, NULL);
 	} else {
 		map->texture = R_LoadTexture2D(font_texturepool, map_identifier,
 					       map->glyphSize * FONT_CHARS_PER_LINE,
 					       map->glyphSize * FONT_CHAR_LINES,
-					       data, TEXTYPE_RGBA, TEXF_ALPHA /*gone: | TEXF_ALWAYSPRECACHE*/ /* | TEXF_MIPMAP*/, NULL);
+					       data, TEXTYPE_RGBA, TEXF_ALPHA /*gone: | TEXF_ALWAYSPRECACHE*/ /* | TEXF_MIPMAP*/, -1, NULL);
 	}
 
 	Mem_Free(data);

@@ -36,6 +36,7 @@ cvar_t prvm_language = {0, "prvm_language", "", "when set, loads progs.dat.LANGU
 cvar_t prvm_traceqc = {0, "prvm_traceqc", "0", "prints every QuakeC statement as it is executed (only for really thorough debugging!)"};
 // LordHavoc: counts usage of each QuakeC statement
 cvar_t prvm_statementprofiling = {0, "prvm_statementprofiling", "0", "counts how many times each QuakeC statement has been executed, these counts are displayed in prvm_printfunction output (if enabled)"};
+cvar_t prvm_timeprofiling = {0, "prvm_timeprofiling", "0", "counts how long each function has been executed, these counts are displayed in prvm_profile output (if enabled)"};
 cvar_t prvm_backtraceforwarnings = {0, "prvm_backtraceforwarnings", "0", "print a backtrace for warnings too"};
 cvar_t prvm_leaktest = {0, "prvm_leaktest", "0", "try to detect memory leaks in strings or entities"};
 cvar_t prvm_leaktest_ignore_classnames = {0, "prvm_leaktest_ignore_classnames", "", "classnames of entities to NOT leak check because they are found by find(world, classname, ...) but are actually spawned by QC code (NOT map entities)"};
@@ -1181,7 +1182,7 @@ void PRVM_ED_EdictGet_f(void)
 	}
 
 	v = (prvm_eval_t *)(ed->fields.vp + key->ofs);
-	s = PRVM_UglyValueString(key->type, v);
+	s = PRVM_UglyValueString((etype_t)key->type, v);
 	if(Cmd_Argc() == 5)
 	{
 		cvar_t *cvar = Cvar_FindVar(Cmd_Argv(4));
@@ -1226,7 +1227,7 @@ void PRVM_ED_GlobalGet_f(void)
 	}
 
 	v = (prvm_eval_t *) &prog->globals.generic[key->ofs];
-	s = PRVM_UglyValueString(key->type, v);
+	s = PRVM_UglyValueString((etype_t)key->type, v);
 	if(Cmd_Argc() == 4)
 	{
 		cvar_t *cvar = Cvar_FindVar(Cmd_Argv(3));
@@ -1486,7 +1487,7 @@ void PRVM_ED_LoadFromFile (const char *data)
 				}
 				else
 				{
-					if (developer.integer) // don't confuse non-developers with errors
+					if (developer.integer > 0) // don't confuse non-developers with errors
 					{
 						Con_Print("No spawn function for:\n");
 						PRVM_ED_Print(ent, NULL);
@@ -1575,6 +1576,7 @@ void PRVM_FindOffsets(void)
 	prog->fieldoffsets.dimension_hit                  = PRVM_ED_FindFieldOffset("dimension_hit");
 	prog->fieldoffsets.dimension_solid                = PRVM_ED_FindFieldOffset("dimension_solid");
 	prog->fieldoffsets.disableclientprediction        = PRVM_ED_FindFieldOffset("disableclientprediction");
+	prog->fieldoffsets.discardabledemo                = PRVM_ED_FindFieldOffset("discardabledemo");
 	prog->fieldoffsets.dphitcontentsmask              = PRVM_ED_FindFieldOffset("dphitcontentsmask");
 	prog->fieldoffsets.drawonlytoclient               = PRVM_ED_FindFieldOffset("drawonlytoclient");
 	prog->fieldoffsets.exteriormodeltoclient          = PRVM_ED_FindFieldOffset("exteriormodeltoclient");
@@ -1655,6 +1657,10 @@ void PRVM_FindOffsets(void)
 	prog->fieldoffsets.movedir                        = PRVM_ED_FindFieldOffset("movedir");
 
 	prog->fieldoffsets.camera_transform               = PRVM_ED_FindFieldOffset("camera_transform");
+	prog->fieldoffsets.userwavefunc_param0            = PRVM_ED_FindFieldOffset("userwavefunc_param0");
+	prog->fieldoffsets.userwavefunc_param1            = PRVM_ED_FindFieldOffset("userwavefunc_param1");
+	prog->fieldoffsets.userwavefunc_param2            = PRVM_ED_FindFieldOffset("userwavefunc_param2");
+	prog->fieldoffsets.userwavefunc_param3            = PRVM_ED_FindFieldOffset("userwavefunc_param3");
 
 	prog->funcoffsets.CSQC_ConsoleCommand             = PRVM_ED_FindFunctionOffset("CSQC_ConsoleCommand");
 	prog->funcoffsets.CSQC_Ent_Remove                 = PRVM_ED_FindFunctionOffset("CSQC_Ent_Remove");
@@ -1725,6 +1731,10 @@ void PRVM_FindOffsets(void)
 	prog->globaloffsets.v_up                          = PRVM_ED_FindGlobalOffset("v_up");
 	prog->globaloffsets.view_angles                   = PRVM_ED_FindGlobalOffset("view_angles");
 	prog->globaloffsets.worldstatus                   = PRVM_ED_FindGlobalOffset("worldstatus");
+	prog->globaloffsets.particles_alphamin            = PRVM_ED_FindGlobalOffset("particles_alphamin");
+	prog->globaloffsets.particles_alphamax            = PRVM_ED_FindGlobalOffset("particles_alphamax");
+	prog->globaloffsets.particles_colormin            = PRVM_ED_FindGlobalOffset("particles_colormin");
+	prog->globaloffsets.particles_colormax            = PRVM_ED_FindGlobalOffset("particles_colormax");
 
 	// menu qc only uses some functions, nothing else
 	prog->funcoffsets.m_draw                          = PRVM_ED_FindFunctionOffset("m_draw");
@@ -1884,7 +1894,9 @@ po_t *PRVM_PO_Load(const char *filename, mempool_t *pool)
 	if(!buf)
 		return NULL;
 
-	po = Mem_Alloc(pool, sizeof(*po));
+	memset(&thisstr, 0, sizeof(thisstr)); // hush compiler warning
+
+	po = (po_t *)Mem_Alloc(pool, sizeof(*po));
 	memset(po, 0, sizeof(*po));
 
 	p = buf;
@@ -1948,16 +1960,16 @@ po_t *PRVM_PO_Load(const char *filename, mempool_t *pool)
 		{
 			if(thisstr.key)
 				Mem_Free(thisstr.key);
-			thisstr.key = Mem_Alloc(pool, decodedpos + 1);
+			thisstr.key = (char *)Mem_Alloc(pool, decodedpos + 1);
 			memcpy(thisstr.key, decodedbuf, decodedpos + 1);
 		}
 		else if(decodedpos > 0 && thisstr.key) // skip empty translation results
 		{
-			thisstr.value = Mem_Alloc(pool, decodedpos + 1);
+			thisstr.value = (char *)Mem_Alloc(pool, decodedpos + 1);
 			memcpy(thisstr.value, decodedbuf, decodedpos + 1);
 			hashindex = CRC_Block((const unsigned char *) thisstr.key, strlen(thisstr.key)) % PO_HASHSIZE;
 			thisstr.nextonhashchain = po->hashtable[hashindex];
-			po->hashtable[hashindex] = Mem_Alloc(pool, sizeof(thisstr));
+			po->hashtable[hashindex] = (po_string_t *)Mem_Alloc(pool, sizeof(thisstr));
 			memcpy(po->hashtable[hashindex], &thisstr, sizeof(thisstr));
 			memset(&thisstr, 0, sizeof(thisstr));
 		}
@@ -2060,7 +2072,7 @@ void PRVM_LoadLNO( const char *progname ) {
 PRVM_LoadProgs
 ===============
 */
-void PRVM_LoadProgs (const char * filename, int numrequiredfunc, char **required_func, int numrequiredfields, prvm_required_field_t *required_field, int numrequiredglobals, char **required_global)
+void PRVM_LoadProgs (const char * filename, int numrequiredfunc, const char **required_func, int numrequiredfields, prvm_required_field_t *required_field, int numrequiredglobals, char **required_global)
 {
 	int i;
 	dstatement_t *st;
@@ -2313,6 +2325,20 @@ void PRVM_LoadProgs (const char * filename, int numrequiredfunc, char **required
 	// later idea: include a list of authorized .po file checksums with the csprogs
 	{
 		qboolean deftrans = !!strcmp(PRVM_NAME, "client");
+		if(deftrans) // once we have dotranslate_ strings, ALWAYS use the opt-in method!
+		{
+			for (i=0 ; i<prog->progs->numglobaldefs ; i++)
+			{
+				const char *name;
+				name = PRVM_GetString(prog->globaldefs[i].s_name);
+				if((prog->globaldefs[i].type & ~DEF_SAVEGLOBAL) == ev_string)
+				if(name && !strncmp(name, "dotranslate_", 12))
+				{
+					deftrans = false;
+					break;
+				}
+			}
+		}
 		if(!strcmp(prvm_language.string, "dump"))
 		{
 			qfile_t *f = FS_OpenRealFile(va("%s.%s.po", filename, prvm_language.string), "w", false);
@@ -2323,8 +2349,8 @@ void PRVM_LoadProgs (const char * filename, int numrequiredfunc, char **required
 				{
 					const char *name;
 					name = PRVM_GetString(prog->globaldefs[i].s_name);
-					if(deftrans ? (!name || strncmp(name, "notranslate_", 12)) : (name && !strncmp(name, "dotranslate_", 12)))
 					if((prog->globaldefs[i].type & ~DEF_SAVEGLOBAL) == ev_string)
+					if(deftrans ? (!name || strncmp(name, "notranslate_", 12)) : (name && !strncmp(name, "dotranslate_", 12)))
 					{
 						prvm_eval_t *val = (prvm_eval_t *)(prog->globals.generic + prog->globaldefs[i].ofs);
 						const char *value = PRVM_GetString(val->string);
@@ -2717,6 +2743,7 @@ void PRVM_Init (void)
 	Cvar_RegisterVariable (&prvm_language);
 	Cvar_RegisterVariable (&prvm_traceqc);
 	Cvar_RegisterVariable (&prvm_statementprofiling);
+	Cvar_RegisterVariable (&prvm_timeprofiling);
 	Cvar_RegisterVariable (&prvm_backtraceforwarnings);
 	Cvar_RegisterVariable (&prvm_leaktest);
 	Cvar_RegisterVariable (&prvm_leaktest_ignore_classnames);
@@ -2779,7 +2806,7 @@ void _PRVM_FreeAll(const char *filename, int fileline)
 }
 
 // LordHavoc: turned PRVM_EDICT_NUM into a #define for speed reasons
-unsigned int PRVM_EDICT_NUM_ERROR(unsigned int n, char *filename, int fileline)
+unsigned int PRVM_EDICT_NUM_ERROR(unsigned int n, const char *filename, int fileline)
 {
 	PRVM_ERROR ("PRVM_EDICT_NUM: %s: bad number %i (called at %s:%i)", PRVM_NAME, n, filename, fileline);
 	return 0;

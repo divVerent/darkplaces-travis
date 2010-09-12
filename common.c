@@ -19,13 +19,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 // common.c -- misc functions used in client and server
 
-#include "quakedef.h"
-
 #include <stdlib.h>
 #include <fcntl.h>
 #ifndef WIN32
 #include <unistd.h>
 #endif
+
+#include "quakedef.h"
 
 cvar_t registered = {0, "registered","0", "indicates if this is running registered quake (whether gfx/pop.lmp was found)"};
 cvar_t cmdline = {0, "cmdline","0", "contains commandline the engine was launched with"};
@@ -606,7 +606,7 @@ void SZ_Write (sizebuf_t *buf, const unsigned char *data, int length)
 // attention, it has been eradicated from here, its only (former) use in
 // all of darkplaces.
 
-static char *hexchar = "0123456789ABCDEF";
+static const char *hexchar = "0123456789ABCDEF";
 void Com_HexDumpToConsole(const unsigned char *data, int size)
 {
 	int i, j, n;
@@ -1313,7 +1313,7 @@ skipwhite:
 	else
 	{
 		// regular word
-		for (;!ISWHITESPACE(*data) && *data != ',' && *data != ';' && *data != '{' && *data != '}' && *data != ')' && *data != '(' && *data != ']' && *data != '[' && *data != ':' && *data != ',' && *data != ';';data++)
+		for (;!ISWHITESPACE(*data) && *data != '{' && *data != '}' && *data != ')' && *data != '(' && *data != ']' && *data != '[' && *data != ':' && *data != ',' && *data != ';';data++)
 			if (len < (int)sizeof(com_token) - 1)
 				com_token[len++] = *data;
 		com_token[len] = 0;
@@ -1448,6 +1448,9 @@ static const gamemode_info_t gamemode_info [GAME_COUNT] =
 // GAME_NEXUIZ
 // COMMANDLINEOPTION: Game: -nexuiz runs the multiplayer game Nexuiz
 { "nexuiz",			"-nexuiz",		"Nexuiz",				"data",		NULL,			"nexuiz",		"nexuiz" },
+// GAME_XONOTIC
+// COMMANDLINEOPTION: Game: -xonotic runs the multiplayer game Xonotic
+{ "xonotic",			"-xonotic",		"Xonotic",				"data",		NULL,			"xonotic",		"xonotic" },
 // GAME_TRANSFUSION
 // COMMANDLINEOPTION: Game: -transfusion runs Transfusion (the recreation of Blood in Quake)
 { "transfusion",	"-transfusion",	"Transfusion",			"basetf",	NULL,			"transfusion",	"transfusion" },
@@ -1508,6 +1511,9 @@ static const gamemode_info_t gamemode_info [GAME_COUNT] =
 // GAME_STEELSTORM
 // COMMANDLINEOPTION: Game: -steelstorm runs the game Steel Storm
 { "steelstorm",				"-steelstorm",		"Steel-Storm",		"gamedata",		NULL,			"ss",			"steelstorm" },
+// GAME_STRAPBOMB
+// COMMANDLINEOPTION: Game: -strapbomb runs the game Strap-on-bomb Car
+{ "strapbomb",				"-strapbomb",		"Strap-on-bomb Car",		"id1",		NULL,			"strap",			"strapbomb" },
 };
 
 void COM_InitGameType (void)
@@ -1993,8 +1999,6 @@ void InfoString_GetValue(const char *buffer, const char *key, char *value, size_
 	size_t keylength;
 	if (!key)
 		key = "";
-	if (!value)
-		value = "";
 	keylength = strlen(key);
 	if (valuelength < 1 || !value)
 	{
@@ -2224,4 +2228,32 @@ void FindFraction(double val, int *num, int *denom, int denomMax)
 			*denom = i;
 		}
 	}
+}
+
+// decodes an XPM from C syntax
+char **XPM_DecodeString(const char *in)
+{
+	static char *tokens[257];
+	static char lines[257][512];
+	size_t line = 0;
+
+	// skip until "{" token
+	while(COM_ParseToken_QuakeC(&in, false) && strcmp(com_token, "{"));
+
+	// now, read in succession: string, comma-or-}
+	while(COM_ParseToken_QuakeC(&in, false))
+	{
+		tokens[line] = lines[line];
+		strlcpy(lines[line++], com_token, sizeof(lines[0]));
+		if(!COM_ParseToken_QuakeC(&in, false))
+			return NULL;
+		if(!strcmp(com_token, "}"))
+			break;
+		if(strcmp(com_token, ","))
+			return NULL;
+		if(line >= sizeof(tokens) / sizeof(tokens[0]))
+			return NULL;
+	}
+
+	return tokens;
 }

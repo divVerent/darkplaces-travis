@@ -374,6 +374,8 @@ void Host_Map_f (void)
 	}
 
 	// remove menu
+	if (key_dest == key_menu || key_dest == key_menu_grabbed)
+		MR_ToggleMenu(0);
 	key_dest = key_game;
 
 	svs.serverflags = 0;			// haven't completed an episode yet
@@ -381,7 +383,7 @@ void Host_Map_f (void)
 	strlcpy(level, Cmd_Argv(1), sizeof(level));
 	SV_SpawnServer(level);
 	if (sv.active && cls.state == ca_disconnected)
-		CL_EstablishConnection("local:1");
+		CL_EstablishConnection("local:1", -2);
 }
 
 /*
@@ -407,6 +409,8 @@ void Host_Changelevel_f (void)
 	}
 
 	// remove menu
+	if (key_dest == key_menu || key_dest == key_menu_grabbed)
+		MR_ToggleMenu(0);
 	key_dest = key_game;
 
 	SV_VM_Begin();
@@ -416,7 +420,7 @@ void Host_Changelevel_f (void)
 	strlcpy(level, Cmd_Argv(1), sizeof(level));
 	SV_SpawnServer(level);
 	if (sv.active && cls.state == ca_disconnected)
-		CL_EstablishConnection("local:1");
+		CL_EstablishConnection("local:1", -2);
 }
 
 /*
@@ -442,13 +446,15 @@ void Host_Restart_f (void)
 	}
 
 	// remove menu
+	if (key_dest == key_menu || key_dest == key_menu_grabbed)
+		MR_ToggleMenu(0);
 	key_dest = key_game;
 
 	allowcheats = sv_cheats.integer != 0;
 	strlcpy(mapname, sv.name, sizeof(mapname));
 	SV_SpawnServer(mapname);
 	if (sv.active && cls.state == ca_disconnected)
-		CL_EstablishConnection("local:1");
+		CL_EstablishConnection("local:1", -2);
 }
 
 /*
@@ -469,7 +475,7 @@ void Host_Reconnect_f (void)
 		// will still contain its IP address, so get the address...
 		InfoString_GetValue(cls.userinfo, "*ip", temp, sizeof(temp));
 		if (temp[0])
-			CL_EstablishConnection(temp);
+			CL_EstablishConnection(temp, -1);
 		else
 			Con_Printf("Reconnect to what server?  (you have not connected to a server yet)\n");
 		return;
@@ -516,15 +522,15 @@ User command to connect to server
 */
 void Host_Connect_f (void)
 {
-	if (Cmd_Argc() != 2)
+	if (Cmd_Argc() < 2)
 	{
-		Con_Print("connect <serveraddress> : connect to a multiplayer game\n");
+		Con_Print("connect <serveraddress> [<key> <value> ...]: connect to a multiplayer game\n");
 		return;
 	}
 	// clear the rcon password, to prevent vulnerability by stuffcmd-ing a connect command
 	if(rcon_secure.integer <= 0)
 		Cvar_SetQuick(&rcon_password, "");
-	CL_EstablishConnection(Cmd_Argv(1));
+	CL_EstablishConnection(Cmd_Argv(1), 2);
 }
 
 
@@ -774,6 +780,8 @@ void Host_Loadgame_f (void)
 		CL_Disconnect ();
 
 	// remove menu
+	if (key_dest == key_menu || key_dest == key_menu_grabbed)
+		MR_ToggleMenu(0);
 	key_dest = key_game;
 
 	cls.demonum = -1;		// stop demo loop in case this fails
@@ -916,6 +924,9 @@ void Host_Loadgame_f (void)
 
 			// parse the global vars
 			PRVM_ED_ParseGlobals (start);
+
+			// restore the autocvar globals
+			Cvar_UpdateAllAutoCvars();
 		}
 		else
 		{
@@ -991,7 +1002,7 @@ void Host_Loadgame_f (void)
 					if (i >= 0 && i < MAX_MODELS)
 					{
 						strlcpy(sv.model_precache[i], com_token, sizeof(sv.model_precache[i]));
-						sv.models[i] = Mod_ForName (sv.model_precache[i], true, false, sv.model_precache[i][0] == '*' ? sv.modelname : NULL);
+						sv.models[i] = Mod_ForName (sv.model_precache[i], true, false, sv.model_precache[i][0] == '*' ? sv.worldname : NULL);
 					}
 					else
 						Con_Printf("unsupported model %i \"%s\"\n", i, com_token);
@@ -1061,7 +1072,7 @@ void Host_Loadgame_f (void)
 
 	// make sure we're connected to loopback
 	if (sv.active && cls.state == ca_disconnected)
-		CL_EstablishConnection("local:1");
+		CL_EstablishConnection("local:1", -2);
 }
 
 //============================================================================
@@ -1198,7 +1209,7 @@ void Host_Name_f (void)
 Host_Playermodel_f
 ======================
 */
-cvar_t cl_playermodel = {CVAR_SAVE | CVAR_NQUSERINFOHACK, "_cl_playermodel", "", "internal storage cvar for current player model in Nexuiz (changed by playermodel command)"};
+cvar_t cl_playermodel = {CVAR_SAVE | CVAR_NQUSERINFOHACK, "_cl_playermodel", "", "internal storage cvar for current player model in Nexuiz/Xonotic (changed by playermodel command)"};
 // the old cl_playermodel in cl_main has been renamed to __cl_playermodel
 void Host_Playermodel_f (void)
 {
@@ -1256,7 +1267,7 @@ void Host_Playermodel_f (void)
 Host_Playerskin_f
 ======================
 */
-cvar_t cl_playerskin = {CVAR_SAVE | CVAR_NQUSERINFOHACK, "_cl_playerskin", "", "internal storage cvar for current player skin in Nexuiz (changed by playerskin command)"};
+cvar_t cl_playerskin = {CVAR_SAVE | CVAR_NQUSERINFOHACK, "_cl_playerskin", "", "internal storage cvar for current player skin in Nexuiz/Xonotic (changed by playerskin command)"};
 void Host_Playerskin_f (void)
 {
 	int i, j;
@@ -1926,7 +1937,7 @@ Kicks a user off of the server
 */
 void Host_Kick_f (void)
 {
-	char *who;
+	const char *who;
 	const char *message = NULL;
 	client_t *save;
 	int i;
@@ -2480,7 +2491,8 @@ void Host_PQRcon_f (void)
 		SZ_Clear(&net_message);
 		MSG_WriteLong (&net_message, 0);
 		MSG_WriteByte (&net_message, CCREQ_RCON);
-		SZ_Write(&net_message, (void*)rcon_password.string, n);
+		SZ_Write(&net_message, (const unsigned char*)rcon_password.string, n);
+		MSG_WriteByte (&net_message, 0); // terminate the (possibly partial) string
 		MSG_WriteString (&net_message, Cmd_Args());
 		StoreBigLong(net_message.data, NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 		NetConn_Write(mysocket, net_message.data, net_message.cursize, &to);

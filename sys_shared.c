@@ -3,9 +3,18 @@
 #define SUPPORTDLL
 
 #ifdef WIN32
+# ifdef _WIN64
+#  ifndef _WIN32_WINNT
+#   define _WIN32_WINNT 0x0502
+#  endif
+   // for SetDllDirectory
+# endif
 # include <windows.h>
 # include <mmsystem.h> // timeGetTime
 # include <time.h> // localtime
+#ifdef _MSC_VER
+#pragma comment(lib, "winmm.lib")
+#endif
 #else
 # include <unistd.h>
 # include <fcntl.h>
@@ -64,6 +73,31 @@ DLL MANAGEMENT
 ===============================================================================
 */
 
+static qboolean Sys_LoadLibraryFunctions(dllhandle_t dllhandle, const dllfunction_t *fcts, qboolean complain, qboolean has_next)
+{
+	const dllfunction_t *func;
+	if(dllhandle)
+	{
+		for (func = fcts; func && func->name != NULL; func++)
+			if (!(*func->funcvariable = (void *) Sys_GetProcAddress (dllhandle, func->name)))
+			{
+				if(complain)
+				{
+					Con_DPrintf (" - missing function \"%s\" - broken library!", func->name);
+					if(has_next)
+						Con_DPrintf("\nContinuing with");
+				}
+				goto notfound;
+			}
+		return true;
+
+	notfound:
+		for (func = fcts; func && func->name != NULL; func++)
+			*func->funcvariable = NULL;
+	}
+	return false;
+}
+
 qboolean Sys_LoadLibrary (const char** dllnames, dllhandle_t* handle, const dllfunction_t *fcts)
 {
 #ifdef SUPPORTDLL
@@ -77,18 +111,14 @@ qboolean Sys_LoadLibrary (const char** dllnames, dllhandle_t* handle, const dllf
 #ifndef WIN32
 #ifdef PREFER_PRELOAD
 	dllhandle = dlopen(NULL, RTLD_LAZY | RTLD_GLOBAL);
-	if(dllhandle)
+	if(Sys_LoadLibraryFunctions(dllhandle, fcts, false, false))
 	{
-		for (func = fcts; func && func->name != NULL; func++)
-			if (!(*func->funcvariable = (void *) Sys_GetProcAddress (dllhandle, func->name)))
-			{
-				dlclose(dllhandle);
-				goto notfound;
-			}
 		Con_DPrintf ("All of %s's functions were already linked in! Not loading dynamically...\n", dllnames[0]);
 		*handle = dllhandle;
 		return true;
 	}
+	else
+		Sys_UnloadLibrary(&dllhandle);
 notfound:
 #endif
 #endif
@@ -103,12 +133,20 @@ notfound:
 	{
 		Con_DPrintf (" \"%s\"", dllnames[i]);
 #ifdef WIN32
+# ifdef _WIN64
+		SetDllDirectory("bin64");
+# endif
 		dllhandle = LoadLibrary (dllnames[i]);
+# ifdef _WIN64
+		SetDllDirectory(NULL);
+# endif
 #else
 		dllhandle = dlopen (dllnames[i], RTLD_LAZY | RTLD_GLOBAL);
 #endif
-		if (dllhandle)
+		if (Sys_LoadLibraryFunctions(dllhandle, fcts, true, (dllnames[i+1] != NULL) || (strrchr(com_argv[0], '/'))))
 			break;
+		else
+			Sys_UnloadLibrary (&dllhandle);
 	}
 
 	// see if the names can be loaded relative to the executable path
@@ -129,8 +167,10 @@ notfound:
 #else
 			dllhandle = dlopen (temp, RTLD_LAZY | RTLD_GLOBAL);
 #endif
-			if (dllhandle)
+			if (Sys_LoadLibraryFunctions(dllhandle, fcts, true, dllnames[i+1] != NULL))
 				break;
+			else
+				Sys_UnloadLibrary (&dllhandle);
 		}
 	}
 
@@ -142,15 +182,6 @@ notfound:
 	}
 
 	Con_DPrintf(" - loaded.\n");
-
-	// Get the function adresses
-	for (func = fcts; func && func->name != NULL; func++)
-		if (!(*func->funcvariable = (void *) Sys_GetProcAddress (dllhandle, func->name)))
-		{
-			Con_DPrintf ("Missing function \"%s\" - broken library!\n", func->name);
-			Sys_UnloadLibrary (&dllhandle);
-			return false;
-		}
 
 	*handle = dllhandle;
 	return true;
