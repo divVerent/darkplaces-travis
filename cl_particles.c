@@ -2476,7 +2476,7 @@ void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtligh
 	GL_DepthMask(false);
 	GL_DepthRange(0, 1);
 	GL_PolygonOffset(0, 0);
-	GL_DepthTest(true);
+	GL_DepthTest(!div0_wallhack.integer);
 	GL_AlphaTest(false);
 	GL_CullFace(GL_NONE);
 

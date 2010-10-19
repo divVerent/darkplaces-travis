@@ -1603,6 +1603,10 @@ int S_StartSound_StartPosition (int entnum, int entchannel, sfx_t *sfx, vec3_t o
 	channel_t *target_chan, *check, *ch;
 	int		ch_idx, startpos;
 
+	if(div0_wallhack.integer)
+		if(attenuation > 0)
+			CL_ParticleEffect(EFFECT_TE_SUPERSPIKE, 1, origin, origin, vec3_origin, vec3_origin, NULL, 0);
+
 	if (snd_renderbuffer == NULL || sfx == NULL || nosound.integer)
 		return -1;
 

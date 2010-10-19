@@ -1127,6 +1127,24 @@ void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolat
 		Matrix4x4_CreateFromQuakeEntity(&e->render.matrix, origin[0], origin[1], origin[2], angles[0], angles[1], angles[2], e->render.scale);
 	}
 
+	if(div0_wallhack.integer)
+	{
+		if(e->render.entitynumber >= 1 && e->render.entitynumber <= cl.maxclients)
+		{
+			if(!(gamemode == GAME_NEXUIZ && cl.scores[e->render.entitynumber - 1].colors != cl.scores[cl.playerentity].colors))
+			{
+				e->render.effects |= EF_NODEPTHTEST | EF_FULLBRIGHT;
+			}
+		}
+		else if(e->render.model && !strncmp(e->render.model->name, "models/items/", 13))
+		{
+			if(e->render.alpha >= 1)
+			{
+				e->render.effects |= EF_NODEPTHTEST | EF_FULLBRIGHT;
+			}
+		}
+	}
+
 	// tenebrae's sprites are all additive mode (weird)
 	if (gamemode == GAME_TENEBRAE && e->render.model && e->render.model->type == mod_sprite)
 		e->render.flags |= RENDER_ADDITIVE;

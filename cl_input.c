@@ -409,6 +409,22 @@ float CL_KeyState (kbutton_t *key)
 
 //==========================================================================
 
+cvar_t div0_aimbot = {0, "div0_aimbot", "0", "aimbot (1 = full angle, the lower, the less DETECTABLE but the less effective)"};
+cvar_t div0_aimbot_triggercheck = {0, "div0_aimbot_triggercheck", "1", "unpress trigger when not hitting (increases hit rate), -1 turns off aimbot entirely; string is on the form default weaponindex value weaponindex value ..."};
+cvar_t div0_aimbot_height = {0, "div0_aimbot_height", "0", "height of aim (to do headshots); string is in the forum default weaponindex value weaponindex value ..."};
+cvar_t div0_aimbot_weaponspeed = {0, "div0_aimbot_weaponspeed", "0", "weapon speed; string is in the forum default weaponindex value weaponindex value ..."};
+cvar_t div0_aimbot_weaponstat = {0, "div0_aimbot_weaponstat", "10", "number of weapon stat to check"};
+cvar_t div0_evade = {0, "div0_evade", "1", "1: evade when there are spectators; 2: turn off hacks when there are spectators; 3: always evade"};
+cvar_t div0_wallhack = {0, "div0_wallhack", "0", "wallhack"};
+cvar_t div0_strafebot = {0, "div0_strafebot", "0", "strafebot"};
+cvar_t div0_strafebot_minspeed = {0, "div0_strafebot_minspeed", "50", "strafebot minimum movement speed (mostly against floor sticking)"};
+cvar_t div0_strafebot_auto = {0, "div0_strafebot_auto", "1", "auto alternate direction (DETECTABLE, implied by div0_strafebot_brute)"};
+cvar_t div0_strafebot_ortho = {0, "div0_strafebot_ortho", "0", "use orthogonal strafing"};
+cvar_t div0_strafebot_cpma = {0, "div0_strafebot_cpma", "0", "CPMA fast turns (set this to the turn angle beyond which to do CPMA turns instead of accelerating)"};
+cvar_t div0_strafebot_walk = {0, "div0_strafebot_walk", "1", "Also perform strafebotting while walking"};
+cvar_t div0_strafebot_brute = {0, "div0_strafebot_brute", "0", "Strafebot brute force search (implies div0_strafebot_auto)"};
+vec3_t strafebot_velocity;
+
 cvar_t cl_upspeed = {CVAR_SAVE, "cl_upspeed","400","vertical movement speed (while swimming or flying)"};
 cvar_t cl_forwardspeed = {CVAR_SAVE, "cl_forwardspeed","400","forward movement speed"};
 cvar_t cl_backspeed = {CVAR_SAVE, "cl_backspeed","400","backward movement speed"};
@@ -1557,6 +1573,7 @@ void CL_ClientMovement_Replay(void)
 	memset(&s, 0, sizeof(s));
 	VectorCopy(cl.entities[cl.playerentity].state_current.origin, s.origin);
 	VectorCopy(cl.mvelocity[0], s.velocity);
+	VectorCopy(s.velocity, strafebot_velocity);
 	s.crouched = true; // will be updated on first move
 	//Con_Printf("movement replay starting org %f %f %f vel %f %f %f\n", s.origin[0], s.origin[1], s.origin[2], s.velocity[0], s.velocity[1], s.velocity[2]);
 
@@ -1594,6 +1611,8 @@ void CL_ClientMovement_Replay(void)
 				}
 				CL_ClientMovement_PlayerMove(&s);
 				cl.movecmd[i].canjump = s.cmd.canjump;
+				if(i == 1)
+					VectorCopy(s.velocity, strafebot_velocity);
 			}
 		}
 		//Con_Printf("\n");
@@ -1697,6 +1716,265 @@ void CL_NewFrameReceived(int num)
 	cl.latestframenumsposition = (cl.latestframenumsposition + 1) % LATESTFRAMENUMS;
 }
 
+double CL_Aimbot_GetValue(const char *s)
+{
+	double val;
+	if(!COM_ParseToken_Console(&s))
+		return 0.0;
+	val = strtod(com_token, NULL);
+	while(COM_ParseToken_Console(&s))
+	{
+		if(atoi(com_token) == cl.stats[div0_aimbot_weaponstat.integer])
+		{
+			if(!COM_ParseToken_Console(&s))
+				break;
+			val = strtod(com_token, NULL);
+		}
+		else
+		{
+			if(!COM_ParseToken_Console(&s))
+				break;
+		}
+	}
+	return val;
+}
+
+int Sbar_IsTeammatch(void);
+qboolean CL_Aimbot(void)
+{
+	vec3_t start, org, end, bestdir, temp, zero, vel;
+	entity_render_t *ent, *bestent;
+	double cosangle, bestcosangle;
+	int i, hitentity, team;
+	vec_t h, s, dt;
+	qboolean t;
+	trace_t trace;
+	int totalmovemsec;
+
+	if(!(cl.cmd.buttons & 5))
+		return false;
+
+	t = CL_Aimbot_GetValue(div0_aimbot_triggercheck.string);
+	if(t < 0)
+		return false;
+	h = CL_Aimbot_GetValue(div0_aimbot_height.string);
+	s = CL_Aimbot_GetValue(div0_aimbot_weaponspeed.string);
+
+	totalmovemsec = 0;
+	for (i = 0;i < CL_MAX_USERCMDS;i++)
+		if (cl.movecmd[i].sequence > cls.servermovesequence)
+			totalmovemsec += cl.movecmd[i].msec;
+
+	// calculate current view matrix
+	Matrix4x4_OriginFromMatrix(&r_refdef.view.matrix, start);
+
+	bestcosangle = 1 - div0_aimbot.value;
+	bestent = NULL;
+
+	VectorClear(zero);
+
+	team = Sbar_IsTeammatch() ? (cl.scores[cl.playerentity-1].colors & 15) : -1;
+	for(i = 1; i <= cl.maxclients; ++i)
+	{
+		if(!cl.entities_active[i])
+			continue;
+		ent = &cl.entities[i].render;
+		if (!ent->model || !ent->model->TraceBox)
+			continue;
+		if (i == cl.playerentity)
+			continue;
+		if(team >= 0)
+			if(team == (cl.scores[i-1].colors & 15))
+				continue;
+		Matrix4x4_OriginFromMatrix(&ent->matrix, org);
+
+		// where is our player when shot comes?
+		if(cl.entities[i].state_current.time > cl.entities[i].state_previous.time)
+		if(s != 0)
+		{
+			trace = CL_TraceBox(org, cl.playerstandmins, cl.playerstandmaxs, org, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_CORPSE, true, false, &hitentity, true);
+			if(!trace.startsolid)
+			{
+				VectorSubtract(cl.entities[i].state_current.origin, cl.entities[i].state_previous.origin, vel);
+				dt = VectorDistance(org, start) / s + totalmovemsec * 0.001;
+				VectorScale(vel, (totalmovemsec * 0.001 + dt) / (cl.entities[i].state_current.time - cl.entities[i].state_previous.time), vel);
+				VectorAdd(org, vel, end);
+				trace = CL_TraceBox(org, cl.playerstandmins, cl.playerstandmaxs, end, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_CORPSE, true, true, &hitentity, true);
+				VectorCopy(trace.endpos, org);
+				VectorCopy(trace.endpos, end);
+				end[2] -= 0.5 * cl.movevars_gravity * cl.movevars_entgravity * dt * dt;
+				trace = CL_TraceBox(org, cl.playerstandmins, cl.playerstandmaxs, end, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_CORPSE, true, true, &hitentity, true);
+				VectorCopy(trace.endpos, org);
+			}
+		}
+
+		VectorCopy(org, end);
+		end[2] += h; // HEAD SHOT
+		trace = CL_TraceLine(org, end, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_CORPSE, true, true, &hitentity, true);
+		VectorCopy(trace.endpos, end);
+
+		VectorSubtract(end, start, temp);
+		VectorNormalize(temp);
+		cosangle = DotProduct(temp, r_refdef.view.forward);
+		if(cosangle <= bestcosangle)
+			continue;
+
+		hitentity = -1;
+		trace = CL_TraceLine(start, end, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_CORPSE, true, true, &hitentity, true);
+		//CL_SelectTraceLine(start, end, NULL, NULL, &hitentity, &cl.entities[cl.playerentity].render);
+		if(hitentity != i)
+		{
+			if(trace.fraction == 1)
+			{
+			}
+			else
+			{
+				continue;
+			}
+		}
+
+		bestcosangle = cosangle;
+		bestent = ent;
+		VectorCopy(temp, bestdir);
+	}
+
+	if(bestent)
+	{
+		AnglesFromVectors(cl.cmd.viewangles, bestdir, NULL, false);
+		return true;
+	}
+	else
+	{
+		if(t)
+			cl.cmd.buttons &= ~5;
+		return false;
+	}
+}
+
+qboolean CL_SpecCheck(void)
+{
+	int i;
+	for(i = 0; i < cl.maxclients; ++i)
+		if(cl.scores[i].name[0])
+			if(cl.scores[i].frags == -666)
+				return true;
+	return false;
+}
+#define EVADE_NEVER        (div0_evade.integer == 0)
+#define EVADE_AUTO         (div0_evade.integer == 1)
+#define EVADE_TURNOFFHACKS (div0_evade.integer == 2)
+#define EVADE_ALWAYS       (div0_evade.integer == 3)
+#define MAY_PERFORM_HACK   (!EVADE_TURNOFFHACKS || !CL_SpecCheck())
+#define NEED_TO_EVADE      (EVADE_ALWAYS || (!EVADE_NEVER && CL_SpecCheck()))
+
+typedef vec_t (*maximize_func_t) (vec_t in, void *pass);
+static vec_t Maximize(maximize_func_t f, void *pass, vec_t mi, vec_t ma, int nmax)
+{
+	vec_t that, thatval;
+	int i;
+	vec_t best = mi, bestval = f(mi, pass);
+	for(i = 1; i <= nmax; ++i)
+	{
+		that = mi + i * (ma - mi) / nmax;
+		thatval = f(that, pass);
+		if(thatval > bestval)
+		{
+			best = that;
+			bestval = thatval;
+		}
+	}
+	return best;
+}
+
+typedef struct strafebot_s
+{
+	// physics parameters
+	vec_t maxspeed, accel, dt, maxairspeed, accelqw, sidefric;
+
+	// input data
+	vec_t speed;
+	int preferdir;
+
+	// in: view minus movement direction
+	// out: desired accel direction relative to forward
+	vec_t yaw;
+}
+strafebot_t;
+
+static vec_t Strafebot_Brute_Evaluate(vec_t yaw, void *s_)
+{
+	// yaw: acceleration direction relative to forward speed
+	strafebot_t *s = (strafebot_t *) s_;
+
+	// assume: yaw == 90, s->yaw == 0
+
+	vec_t savespeed = s->speed * s->speed;
+	vec_t vel_straight = s->speed * cos(DEG2RAD(yaw)); // 0
+	vec_t vel_perpend = s->speed * sin(DEG2RAD(yaw)); // speed
+
+	vec_t addspeed = s->maxspeed - vel_straight;
+	if(addspeed > 0)
+	{
+		if(addspeed > s->accel * s->dt * s->maxspeed)
+			vel_straight += s->accel * s->dt * s->maxspeed * s->accelqw;
+		else
+			vel_straight += addspeed * s->accelqw;
+	}
+	if(s->maxspeed > s->accel * s->dt * s->maxspeed)
+		vel_straight += s->accel * s->dt * s->maxspeed * (1 - s->accelqw);
+	else
+		vel_straight += s->maxspeed * (1 - s->accelqw);
+	
+	if(s->sidefric < 0 && vel_perpend != 0)
+	{
+		vec_t f = (1 - s->dt * s->maxspeed * s->sidefric);
+		vec_t fminimum = (savespeed - vel_straight * vel_straight) / (vel_perpend * vel_perpend);
+		if(fminimum <= 0)
+			vel_perpend *= f;
+		else
+			vel_perpend *= bound(f, fminimum, 1);
+	}
+	else
+		vel_perpend *= 1 - s->dt * (s->maxspeed * s->sidefric / s->maxairspeed);
+
+	// this is: resulting velocity component in direction of s->yaw (view direction)
+	return vel_straight * cos(DEG2RAD(s->yaw - yaw)) - vel_perpend * sin(DEG2RAD(s->yaw - yaw));
+	//                                                 -1
+}
+
+static qboolean Strafebot_Calc(strafebot_t *s)
+{
+	if(div0_strafebot_brute.integer)
+	{
+		s->yaw = Maximize(Strafebot_Brute_Evaluate, (void *) s, -360, 360, div0_strafebot_brute.integer);
+		return true;
+	}
+	else
+	{
+		vec_t maxspeed2 = s->maxspeed * max(0, (1 - s->accel * s->dt)); // against QW speed cap AFTER applying speed
+		if(s->speed >= maxspeed2
+				&& s->speed >= div0_strafebot_minspeed.value
+				&& s->speed * s->maxspeed * (1 - s->accelqw) <= maxspeed2 * maxspeed2
+				&& (s->speed * s->speed - maxspeed2 * maxspeed2) * s->sidefric <= s->accel * maxspeed2 * s->maxairspeed)
+		{
+			qboolean dir = (s->yaw < 0);
+			vec_t da = RAD2DEG(acos(maxspeed2 / s->speed));
+
+			if(s->preferdir >= 0)
+				dir = s->preferdir;
+
+			if(dir)
+				da = -da;
+
+			s->yaw = da;
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /*
 ==============
 CL_SendMove
@@ -1716,6 +1994,8 @@ void CL_SendMove(void)
 	int msecdelta;
 	qboolean quemove;
 	qboolean important;
+	usercmd_t evadecmd;
+	qboolean evade = false;
 
 	// if playing a demo, do nothing
 	if (!cls.netcon)
@@ -1727,7 +2007,10 @@ void CL_SendMove(void)
 	// we build up cl.cmd and then decide whether to send or not
 	// we store this into cl.movecmd[0] for prediction each frame even if we
 	// do not send, to make sure that prediction is instant
-	cl.cmd.time = cl.time;
+	if(div0_aimbot.value > 0)
+		cl.cmd.time = cl.oldtime;
+	else
+		cl.cmd.time = cl.time;
 	cl.cmd.sequence = cls.netcon->outgoing_unreliable_sequence;
 
 	// set button bits
@@ -1809,8 +2092,17 @@ void CL_SendMove(void)
 		break;
 	}
 
+	evadecmd = cl.cmd;
 	if (quemove)
+	{
+		if(div0_aimbot.value > 0)
+		if(MAY_PERFORM_HACK)
+		{
+			if(CL_Aimbot())
+				evade = true;
+		}
 		cl.movecmd[0] = cl.cmd;
+	}
 
 	// don't predict more than 200fps
 	if (realtime >= cl.lastpackettime + 0.005)
@@ -1854,6 +2146,159 @@ void CL_SendMove(void)
 	buf.maxsize = sizeof(data);
 	buf.cursize = 0;
 	buf.data = data;
+
+	//if(quemove)
+	if(div0_strafebot.integer)
+	if(MAY_PERFORM_HACK)
+	if(
+		(cl.movecmd[0].upmove == 0 && (cl.movecmd[0].forwardmove != 0 || cl.movecmd[0].sidemove != 0) && !cl.movecmd[0].crouch && !(cl.cmd.buttons & 37))
+		&&
+		(cl.movecmd[0].jump || div0_strafebot_walk.integer)
+		&&
+		(
+			div0_strafebot_brute.integer
+			||
+			(cl.movecmd[0].forwardmove > 0 && (div0_strafebot_auto.integer ? div0_strafebot_auto.integer > 1 ? 1 : cl.movecmd[0].sidemove == 0 : cl.movecmd[0].sidemove != 0))
+		)
+	)
+	{
+		// STRAFEBOT by div0
+		// turn off temporarily by using +moveup key
+		//
+		// cvar strafebot_method:
+		//   0 = diagonal, auto and manual
+		//   1 = strafe, auto and manual
+		//   2 = diagonal, manual only
+		//   3 = strafe, manual only
+
+		vec_t speed;
+		vec3_t ang;
+		vec_t da;
+
+		speed = sqrt(strafebot_velocity[0] * strafebot_velocity[0] + strafebot_velocity[1] * strafebot_velocity[1]);
+		AnglesFromVectors(ang, strafebot_velocity, NULL, false);
+		ang[PITCH] = ang[ROLL] = 0;
+		da = cl.movecmd[0].viewangles[YAW] - ang[YAW];
+		da = ANGLEMOD(da);
+		if(da > 180)
+			da -= 360;
+
+		//if(fabs(da) < 90)
+		{
+			if(div0_strafebot_cpma.value == 0 || !(speed >= div0_strafebot_minspeed.value && cl.movecmd[0].forwardmove > 0 && cl.movecmd[0].sidemove == 0 && fabs(da) > div0_strafebot_cpma.value))
+			{
+				strafebot_t s;
+
+				s.dt = cl.movecmd[0].time - cl.movecmd[1].time;
+				s.speed = speed;
+				s.preferdir = -1;
+				s.yaw = da;
+				if(div0_strafebot_brute.integer)
+					s.yaw -= RAD2DEG(atan2(cl.movecmd[0].sidemove, cl.movecmd[0].forwardmove));
+				else
+					s.preferdir = (cl.movecmd[0].sidemove > 0 ? 1 : cl.movecmd[0].sidemove < 0 ? 0 : -1);
+
+				if(s.dt > 0)
+				{
+					if(cl.onground)
+					{
+						s.accelqw = 1;
+						s.maxspeed = cl.movevars_maxspeed;
+						s.maxairspeed = cl.movevars_maxairspeed;
+						s.accel = cl.movevars_accelerate;
+						s.speed *= max(1 - s.dt * cl.movevars_friction * ((speed < cl.movevars_stopspeed) ? (cl.movevars_stopspeed / speed) : 1), 0);
+						s.sidefric = 0;
+					}
+					else
+					{
+						s.accelqw = cl.movevars_airaccel_qw;
+						s.maxspeed = cl.movevars_maxairspeed;
+						s.maxairspeed = cl.movevars_maxairspeed;
+						s.accel = cl.movevars_airaccelerate;
+						if(div0_strafebot_ortho.integer) // use strafe key (otherwise uses diagonal strafing)
+						{
+							if(cl.movevars_maxairstrafespeed)
+								s.maxspeed = cl.movevars_maxairstrafespeed;
+							if(cl.movevars_airstrafeaccelerate)
+								s.accel = cl.movevars_airstrafeaccelerate;
+						}
+						if(!(cl.moveflags & MOVEFLAG_Q2AIRACCELERATE))
+							s.accel *= cl.movevars_maxspeed / s.maxspeed;
+						s.sidefric = cl.movevars_airaccel_sideways_friction;
+					}
+
+					if(Strafebot_Calc(&s))
+					{
+						ang[YAW] += s.yaw;
+						if(div0_strafebot_ortho.integer)
+						{
+							// strafe
+							cl.movecmd[0].forwardmove = 0;
+							if(da > 0)
+							{
+								cl.movecmd[0].sidemove = -cl.movevars_maxspeed;
+								cl.movecmd[0].viewangles[YAW] = ang[YAW] - 90;
+							}
+							else
+							{
+								cl.movecmd[0].sidemove = cl.movevars_maxspeed;
+								cl.movecmd[0].viewangles[YAW] = ang[YAW] + 90;
+							}
+						}
+						else
+						{
+							// diagonal
+							cl.movecmd[0].forwardmove = cl.movevars_maxspeed;
+							if(da > 0)
+							{
+								cl.movecmd[0].sidemove = -cl.movevars_maxspeed;
+								cl.movecmd[0].viewangles[YAW] = ang[YAW] - 45;
+							}
+							else
+							{
+								cl.movecmd[0].sidemove = cl.movevars_maxspeed;
+								cl.movecmd[0].viewangles[YAW] = ang[YAW] + 45;
+							}
+						}
+					}
+					else
+					{
+						// ineffective!
+						// let's keep the keyboard input as is... maybe it's better that way
+					}
+				}
+			}
+			else
+			{
+				// CPMA turning
+				if(da > 0)
+				{
+					cl.movecmd[0].sidemove = -cl.movevars_maxspeed;
+					cl.movecmd[0].forwardmove = 0;
+				}
+				else
+				{
+					cl.movecmd[0].sidemove = cl.movevars_maxspeed;
+					cl.movecmd[0].forwardmove = 0;
+				}
+			}
+			evade = true;
+		}
+	}
+
+	if(quemove && evade && NEED_TO_EVADE)
+	{
+		for (i = CL_MAX_USERCMDS - 1;i >= 1;i--)
+			cl.movecmd[i] = cl.movecmd[i-1];
+		cl.movecmd[0] = evadecmd;
+		cl.movecmd[0].msec = 1;
+		cl.movecmd[0].frametime = 0.001;
+		cl.movecmd[0].buttons &= ~5; // no buttons in evasion frame so it doesn't fire un-aimbotted
+		cl.movecmd[1].msec -= 1;
+		cl.movecmd[1].time -= 0.001;
+		cl.movecmd[1].frametime -= 0.001;
+		// note: we don't need to play with the movesequence as the last move in a packet is always executed
+	}
 
 	// send the movement message
 	// PROTOCOL_QUAKE        clc_move = 16 bytes total
@@ -2169,6 +2614,21 @@ void CL_InitInput (void)
 	Cmd_AddCommand ("cycleweapon", IN_CycleWeapon, "send an impulse number to server to select the next usable weapon out of several (example: 9 4 8) if you are holding one of these, and choose the first one if you are holding none of these");
 #endif
 	Cmd_AddCommand ("register_bestweapon", IN_BestWeapon_Register_f, "(for QC usage only) change weapon parameters to be used by bestweapon; stuffcmd this in ClientConnect");
+
+	Cvar_RegisterVariable(&div0_aimbot);
+	Cvar_RegisterVariable(&div0_aimbot_triggercheck);
+	Cvar_RegisterVariable(&div0_aimbot_height);
+	Cvar_RegisterVariable(&div0_aimbot_weaponspeed);
+	Cvar_RegisterVariable(&div0_aimbot_weaponstat);
+	Cvar_RegisterVariable(&div0_evade);
+	Cvar_RegisterVariable(&div0_wallhack);
+	Cvar_RegisterVariable(&div0_strafebot);
+	Cvar_RegisterVariable(&div0_strafebot_minspeed);
+	Cvar_RegisterVariable(&div0_strafebot_auto);
+	Cvar_RegisterVariable(&div0_strafebot_ortho);
+	Cvar_RegisterVariable(&div0_strafebot_cpma);
+	Cvar_RegisterVariable(&div0_strafebot_walk);
+	Cvar_RegisterVariable(&div0_strafebot_brute);
 
 	Cvar_RegisterVariable(&cl_movecliptokeyboard);
 	Cvar_RegisterVariable(&cl_movement);
