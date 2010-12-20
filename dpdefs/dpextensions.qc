@@ -968,6 +968,7 @@ string(string format, ...) sprintf = #627;
 //    ouxXc take a float if no length is specified or h is, and an int/entity if l is specified as length, and cast it to an unsigned int
 //    eEfFgG take a float if no length is specified or h is, and an int/entity if l is specified as length, and cast it to a double
 //    s takes a string
+//    vV takes a vector, and processes the three components as if it were a gG for all three components, separated by space
 //    For conversions s and c, the flag # makes precision and width interpreted
 //      as byte count, by default it is interpreted as character count in UTF-8
 //      enabled engines. No other conversions can create wide characters, and #
@@ -1138,6 +1139,15 @@ string(string in) uri_unescape = #511;
 //  the HTTP response code on server error (e.g. 404)
 //if 1 is returned by uri_get, the callback will be called in the future
 float(string url, float id) uri_get = #513;
+
+//DP_QC_URI_POST
+//idea: divVerent
+//darkplaces implementation: divVerent
+//loads text from an URL into a string after POSTing via HTTP
+//works like uri_get, but uri_post sends data with Content-Type: content_type to the server
+//and uri_post sends the string buffer buf, joined using the delimiter delim
+float(string url, float id, string content_type, string data) uri_post = #513;
+float(string url, float id, string content_type, string delim, float buf) uri_postbuf = #513;
 
 //DP_SKELETONOBJECTS
 //idea: LordHavoc
@@ -1375,6 +1385,17 @@ float(entity clent) clienttype = #455; // returns one of the CLIENTTYPE_* consta
 //implementation notes:
 //entity customization is done before per-client culling (visibility for instance) because the entity may be doing setorigin to display itself in different locations on different clients, may be altering its .modelindex, .effects and other fields important to culling, so customized entities increase cpu usage (non-customized entities can use all the early culling they want however, as they are not changing on a per client basis).
 
+//DP_SV_DISCARDABLEDEMO
+//idea: parasti
+//darkplaces implementation: parasti
+//field definitions:
+.float discardabledemo;
+//description:
+//when this field is set to a non-zero value on a player entity, a possibly recorded server-side demo for the player is discarded
+//Note that this extension only works if:
+//  auto demos are enabled (the cvar sv_autodemo_perclient is set)
+//  discarding demos is enabled (the cvar sv_autodemo_perclient_discardable is set)
+
 //DP_SV_DRAWONLYTOCLIENT
 //idea: LordHavoc
 //darkplaces implementation: LordHavoc
@@ -1550,6 +1571,38 @@ void(float effectnum, vector org, vector vel, float howmany) pointparticles = #3
 //void() SV_PlayerPhysics;
 //description:
 //.movement vector contains the movement input from the player, allowing QC to do as it wishs with the input, and SV_PlayerPhysics will completely replace the player physics if present (works for all MOVETYPE's), see darkplaces mod source for example of this function (in playermovement.qc, adds HalfLife ladders support, as well as acceleration/deceleration while airborn (rather than the quake sudden-stop while airborn), and simplifies the physics a bit)
+
+//DP_PHYSICS_ODE
+//idea: LordHavoc
+//darkplaces implementation: LordHavoc
+//globals:
+//new movetypes:
+const float MOVETYPE_PHYSICS = 32; // need to be set before any physics_* builtins applied
+//new solid types:
+const float SOLID_PHYSICS_BOX = 32;
+const float SOLID_PHYSICS_SPHERE = 33;
+const float SOLID_PHYSICS_CAPSULE = 34;
+//SOLID_BSP;
+//joint types:
+const float JOINTTYPE_POINT = 1;
+const float JOINTTYPE_HINGE = 2;
+const float JOINTTYPE_SLIDER = 3;
+const float JOINTTYPE_UNIVERSAL = 4;
+const float JOINTTYPE_HINGE2 = 5;
+const float JOINTTYPE_FIXED = -1;
+//field definitions:
+.float mass; // ODE mass, standart value is 1
+.float bouncefactor;
+.float bouncestop;
+.float jointtype;
+//builtin definitions:
+void(entity e, float physics_enabled) physics_enable = #540; // enable or disable physics on object
+void(entity e, vector force, vector force_pos) physics_addforce = #541; // apply a force from certain origin, length of force vector is power of force
+void(entity e, vector torque) physics_addtorque = #542; // add relative torque
+//description: provides Open Dynamics Engine support, requires extenal dll to be present or engine compiled with statical link option
+//be sure to checkextension for it to know if library i loaded and ready, also to enable physics set "physice_ode" cvar to 1
+//note: this extension is highly experimental and may be unstable
+//note: use SOLID_BSP on entities to get a trimesh collision models on them
 
 //DP_SV_PRINT
 //idea: id Software (QuakeWorld Server)
@@ -1866,14 +1919,14 @@ float Q3SURFACEFLAG_LADDER = 8; // climbable surface
 float Q3SURFACEFLAG_NOIMPACT = 16; // projectiles should remove themselves on impact (this is set on sky)
 float Q3SURFACEFLAG_NOMARKS = 32; // projectiles should not leave marks, such as decals (this is set on sky)
 float Q3SURFACEFLAG_FLESH = 64; // projectiles should do a fleshy effect (blood?) on impact
-//float Q3SURFACEFLAG_NODRAW = 128; // compiler hint (not important to qc)
+float Q3SURFACEFLAG_NODRAW = 128; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_HINT = 256; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_SKIP = 512; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_NOLIGHTMAP = 1024; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_POINTLIGHT = 2048; // compiler hint (not important to qc)
 float Q3SURFACEFLAG_METALSTEPS = 4096; // walking on this surface should make metal step sounds
 float Q3SURFACEFLAG_NOSTEPS = 8192; // walking on this surface should not make footstep sounds
-//float Q3SURFACEFLAG_NONSOLID = 16384; // compiler hint (not important to qc)
+float Q3SURFACEFLAG_NONSOLID = 16384; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_LIGHTFILTER = 32768; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_ALPHASHADOW = 65536; // compiler hint (not important to qc)
 //float Q3SURFACEFLAG_NODLIGHT = 131072; // compiler hint (not important to qc)
@@ -2380,4 +2433,7 @@ float JOINTTYPE_HINGE2 = 5; // hinge2; uses origin (anchor), angles (axis1), vel
 .string crypto_encryptmethod; // the string "AES128" if encrypting, and string_null if plaintext
 .string crypto_signmethod; // the string "HMAC-SHA256" if signing, and string_null if plaintext
 // there is no field crypto_myidfp, as that info contains no additional information the QC may have a use for
+//builtin definitions: (SVQC)
+float(string url, float id, string content_type, string delim, float buf, float keyid) crypto_uri_postbuf = #513;
 //description:
+//use -1 as buffer handle to justs end delim as postdata

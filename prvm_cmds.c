@@ -272,7 +272,18 @@ static qboolean checkextension(const char *name)
 		while (*e && *e != ' ')
 			e++;
 		if ((e - start) == len && !strncasecmp(start, name, len))
+		{
+			// special sheck for ODE
+			if (!strncasecmp("DP_PHYSICS_ODE", name, 14))
+			{
+#ifdef USEODE
+				return ode_dll ? true : false;
+#else
+				return false;
+#endif
+			}
 			return true;
+		}
 	}
 	return false;
 }
@@ -5801,6 +5812,10 @@ typedef struct
 	double starttime;
 	float id;
 	char buffer[MAX_INPUTLINE];
+	unsigned char *postdata; // free when uri_to_prog_t is freed
+	size_t postlen;
+	char *sigdata; // free when uri_to_prog_t is freed
+	size_t siglen;
 }
 uri_to_prog_t;
 
@@ -5811,6 +5826,10 @@ static void uri_to_string_callback(int status, size_t length_received, unsigned 
 	if(!PRVM_ProgLoaded(handle->prognr))
 	{
 		// curl reply came too late... so just drop it
+		if(handle->postdata)
+			Z_Free(handle->postdata);
+		if(handle->sigdata)
+			Z_Free(handle->sigdata);
 		Z_Free(handle);
 		return;
 	}
@@ -5830,6 +5849,10 @@ static void uri_to_string_callback(int status, size_t length_received, unsigned 
 		}
 	PRVM_End;
 	
+	if(handle->postdata)
+		Z_Free(handle->postdata);
+	if(handle->sigdata)
+		Z_Free(handle->sigdata);
 	Z_Free(handle);
 }
 
@@ -5841,26 +5864,157 @@ void VM_uri_get (void)
 	float id;
 	qboolean ret;
 	uri_to_prog_t *handle;
+	const char *posttype = NULL;
+	const char *postseparator = NULL;
+	int poststringbuffer = -1;
+	int postkeyid = -1;
+	const char *query_string = NULL;
+	size_t lq;
 
 	if(!prog->funcoffsets.URI_Get_Callback)
 		PRVM_ERROR("uri_get called by %s without URI_Get_Callback defined", PRVM_NAME);
 
-	VM_SAFEPARMCOUNT(2, VM_uri_get);
+	VM_SAFEPARMCOUNTRANGE(2, 6, VM_uri_get);
 
 	url = PRVM_G_STRING(OFS_PARM0);
 	id = PRVM_G_FLOAT(OFS_PARM1);
+	if(prog->argc >= 3)
+		posttype = PRVM_G_STRING(OFS_PARM2);
+	if(prog->argc >= 4)
+		postseparator = PRVM_G_STRING(OFS_PARM3);
+	if(prog->argc >= 5)
+		poststringbuffer = PRVM_G_FLOAT(OFS_PARM4);
+	if(prog->argc >= 6)
+		postkeyid = PRVM_G_FLOAT(OFS_PARM5);
 	handle = (uri_to_prog_t *) Z_Malloc(sizeof(*handle)); // this can't be the prog's mem pool, as curl may call the callback later!
+
+	query_string = strchr(url, '?');
+	if(query_string)
+		++query_string;
+	lq = query_string ? strlen(query_string) : 0;
 
 	handle->prognr = PRVM_GetProgNr();
 	handle->starttime = prog->starttime;
 	handle->id = id;
-	ret = Curl_Begin_ToMemory(url, 0, (unsigned char *) handle->buffer, sizeof(handle->buffer), uri_to_string_callback, handle);
+	if(postseparator)
+	{
+		size_t l = strlen(postseparator);
+		if(poststringbuffer >= 0)
+		{
+			size_t ltotal;
+			int i;
+			// "implode"
+			prvm_stringbuffer_t *stringbuffer;
+			stringbuffer = (prvm_stringbuffer_t *)Mem_ExpandableArray_RecordAtIndex(&prog->stringbuffersarray, poststringbuffer);
+			if(!stringbuffer)
+			{
+				VM_Warning("uri_get: invalid buffer %i used in %s\n", (int)PRVM_G_FLOAT(OFS_PARM0), PRVM_NAME);
+				return;
+			}
+			ltotal = 0;
+			for(i = 0;i < stringbuffer->num_strings;i++)
+			{
+				if(i > 0)
+					ltotal += l;
+				if(stringbuffer->strings[i])
+					ltotal += strlen(stringbuffer->strings[i]);
+			}
+			handle->postdata = (unsigned char *)Z_Malloc(ltotal + 1 + lq);
+			handle->postlen = ltotal;
+			ltotal = 0;
+			for(i = 0;i < stringbuffer->num_strings;i++)
+			{
+				if(i > 0)
+				{
+					memcpy(handle->postdata + ltotal, postseparator, l);
+					ltotal += l;
+				}
+				if(stringbuffer->strings[i])
+				{
+					memcpy(handle->postdata + ltotal, stringbuffer->strings[i], strlen(stringbuffer->strings[i]));
+					ltotal += strlen(stringbuffer->strings[i]);
+				}
+			}
+			if(ltotal != handle->postlen)
+				PRVM_ERROR ("%s: string buffer content size mismatch, possible overrun", PRVM_NAME);
+		}
+		else
+		{
+			handle->postdata = (unsigned char *)Z_Malloc(l + 1 + lq);
+			handle->postlen = l;
+			memcpy(handle->postdata, postseparator, l);
+		}
+		handle->postdata[handle->postlen] = 0;
+		if(query_string)
+			memcpy(handle->postdata + handle->postlen + 1, query_string, lq);
+		if(postkeyid >= 0)
+		{
+			// POST: we sign postdata \0 query string
+			size_t ll;
+			handle->sigdata = (char *)Z_Malloc(8192);
+			strlcpy(handle->sigdata, "X-D0-Blind-ID-Detached-Signature: ", 8192);
+			l = strlen(handle->sigdata);
+			handle->siglen = Crypto_SignDataDetached(handle->postdata, handle->postlen + 1 + lq, postkeyid, handle->sigdata + l, 8192 - l);
+			if(!handle->siglen)
+			{
+				Z_Free(handle->sigdata);
+				handle->sigdata = NULL;
+				goto out1;
+			}
+			ll = base64_encode((unsigned char *) (handle->sigdata + l), handle->siglen, 8192 - l - 1);
+			if(!ll)
+			{
+				Z_Free(handle->sigdata);
+				handle->sigdata = NULL;
+				goto out1;
+			}
+			handle->siglen = l + ll;
+			handle->sigdata[handle->siglen] = 0;
+		}
+out1:
+		ret = Curl_Begin_ToMemory_POST(url, handle->sigdata, 0, posttype, handle->postdata, handle->postlen, (unsigned char *) handle->buffer, sizeof(handle->buffer), uri_to_string_callback, handle);
+	}
+	else
+	{
+		if(postkeyid >= 0 && query_string)
+		{
+			// GET: we sign JUST the query string
+			size_t l, ll;
+			handle->sigdata = (char *)Z_Malloc(8192);
+			strlcpy(handle->sigdata, "X-D0-Blind-ID-Detached-Signature: ", 8192);
+			l = strlen(handle->sigdata);
+			handle->siglen = Crypto_SignDataDetached(query_string, lq, postkeyid, handle->sigdata + l, 8192 - l);
+			if(!handle->siglen)
+			{
+				Z_Free(handle->sigdata);
+				handle->sigdata = NULL;
+				goto out2;
+			}
+			ll = base64_encode((unsigned char *) (handle->sigdata + l), handle->siglen, 8192 - l - 1);
+			if(!ll)
+			{
+				Z_Free(handle->sigdata);
+				handle->sigdata = NULL;
+				goto out2;
+			}
+			handle->siglen = l + ll;
+			handle->sigdata[handle->siglen] = 0;
+		}
+out2:
+		handle->postdata = NULL;
+		handle->postlen = 0;
+		ret = Curl_Begin_ToMemory(url, 0, (unsigned char *) handle->buffer, sizeof(handle->buffer), uri_to_string_callback, handle);
+	}
 	if(ret)
 	{
 		PRVM_G_INT(OFS_RETURN) = 1;
 	}
 	else
 	{
+		if(handle->postdata)
+			Z_Free(handle->postdata);
+		if(handle->sigdata)
+			Z_Free(handle->sigdata);
 		Z_Free(handle);
 		PRVM_G_INT(OFS_RETURN) = 0;
 	}
@@ -6721,4 +6875,104 @@ void VM_getsurfacetriangle(void)
                return;
        // FIXME: implement rotation/scaling
        VectorMA(&(model->surfmesh.data_element3i + 3 * surface->num_firsttriangle)[trinum * 3], surface->num_firstvertex, d, PRVM_G_VECTOR(OFS_RETURN));
+}
+
+//
+// physics builtins
+//
+
+void World_Physics_ApplyCmd(prvm_edict_t *ed, edict_odefunc_t *f);
+
+#define VM_physics_ApplyCmd(ed,f) if (!ed->priv.server->ode_body) VM_physics_newstackfunction(ed, f); else World_Physics_ApplyCmd(ed, f)
+
+edict_odefunc_t *VM_physics_newstackfunction(prvm_edict_t *ed, edict_odefunc_t *f)
+{
+	edict_odefunc_t *newfunc, *func;
+
+	newfunc = (edict_odefunc_t *)Mem_Alloc(prog->progs_mempool, sizeof(edict_odefunc_t));
+	memcpy(newfunc, f, sizeof(edict_odefunc_t));
+	newfunc->next = NULL;
+	if (!ed->priv.server->ode_func)
+		ed->priv.server->ode_func = newfunc;
+	else
+	{
+		for (func = ed->priv.server->ode_func; func->next; func = func->next);
+		func->next = newfunc;
+	}
+	return newfunc;
+}
+
+// void(entity e, float physics_enabled) physics_enable = #;
+void VM_physics_enable(void)
+{
+	prvm_edict_t *ed;
+	edict_odefunc_t f;
+	
+	VM_SAFEPARMCOUNT(2, VM_physics_enable);
+	ed = PRVM_G_EDICT(OFS_PARM0);
+	if (!ed)
+	{
+		if (developer.integer > 0)
+			VM_Warning("VM_physics_enable: null entity!\n");
+		return;
+	}
+	// entity should have MOVETYPE_PHYSICS already set, this can damage memory (making leaked allocation) so warn about this even if non-developer
+	if (ed->fields.server->movetype != MOVETYPE_PHYSICS)
+	{
+		VM_Warning("VM_physics_enable: entity is not MOVETYPE_PHYSICS!\n");
+		return;
+	}
+	f.type = PRVM_G_FLOAT(OFS_PARM1) == 0 ? ODEFUNC_DISABLE : ODEFUNC_ENABLE;
+	VM_physics_ApplyCmd(ed, &f);
+}
+
+// void(entity e, vector force, vector relative_ofs) physics_addforce = #;
+void VM_physics_addforce(void)
+{
+	prvm_edict_t *ed;
+	edict_odefunc_t f;
+	
+	VM_SAFEPARMCOUNT(3, VM_physics_addforce);
+	ed = PRVM_G_EDICT(OFS_PARM0);
+	if (!ed)
+	{
+		if (developer.integer > 0)
+			VM_Warning("VM_physics_addforce: null entity!\n");
+		return;
+	}
+	// entity should have MOVETYPE_PHYSICS already set, this can damage memory (making leaked allocation) so warn about this even if non-developer
+	if (ed->fields.server->movetype != MOVETYPE_PHYSICS)
+	{
+		VM_Warning("VM_physics_addforce: entity is not MOVETYPE_PHYSICS!\n");
+		return;
+	}
+	f.type = ODEFUNC_RELFORCEATPOS;
+	VectorCopy(PRVM_G_VECTOR(OFS_PARM1), f.v1);
+	VectorSubtract(ed->fields.server->origin, PRVM_G_VECTOR(OFS_PARM2), f.v2);
+	VM_physics_ApplyCmd(ed, &f);
+}
+
+// void(entity e, vector torque) physics_addtorque = #;
+void VM_physics_addtorque(void)
+{
+	prvm_edict_t *ed;
+	edict_odefunc_t f;
+	
+	VM_SAFEPARMCOUNT(2, VM_physics_addtorque);
+	ed = PRVM_G_EDICT(OFS_PARM0);
+	if (!ed)
+	{
+		if (developer.integer > 0)
+			VM_Warning("VM_physics_addtorque: null entity!\n");
+		return;
+	}
+	// entity should have MOVETYPE_PHYSICS already set, this can damage memory (making leaked allocation) so warn about this even if non-developer
+	if (ed->fields.server->movetype != MOVETYPE_PHYSICS)
+	{
+		VM_Warning("VM_physics_addtorque: entity is not MOVETYPE_PHYSICS!\n");
+		return;
+	}
+	f.type = ODEFUNC_RELTORQUE;
+	VectorCopy(PRVM_G_VECTOR(OFS_PARM1), f.v1);
+	VM_physics_ApplyCmd(ed, &f);
 }

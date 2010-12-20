@@ -216,7 +216,13 @@ char	*va(const char *format, ...) DP_FUNC_PRINTF(1);
 
 
 // snprintf and vsnprintf are NOT portable. Use their DP counterparts instead
+#ifdef snprintf
+# undef snprintf
+#endif
 #define snprintf DO_NOT_USE_SNPRINTF__USE_DPSNPRINTF
+#ifdef vsnprintf
+# undef vsnprintf
+#endif
 #define vsnprintf DO_NOT_USE_VSNPRINTF__USE_DPVSNPRINTF
 
 // dpsnprintf and dpvsnprintf
@@ -274,6 +280,7 @@ typedef enum gamemode_e
 	GAME_BLOODOMNICIDE,
 	GAME_STEELSTORM, // added by motorsep
 	GAME_STRAPBOMB, // added by motorsep for Urre
+	GAME_MOONHELM,
 	GAME_COUNT
 }
 gamemode_t;
@@ -351,6 +358,8 @@ void FindFraction(double val, int *num, int *denom, int denomMax);
 
 // decodes XPM file to XPM array (as if #include'd)
 char **XPM_DecodeString(const char *in);
+
+size_t base64_encode(unsigned char *buf, size_t buflen, size_t outbuflen);
 
 #endif
 

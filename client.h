@@ -718,6 +718,11 @@ typedef struct client_static_s
 
 	// crypto channel
 	crypto_t crypto;
+
+	// ProQuake compatibility stuff
+	int proquake_servermod; // 0 = not proquake, 1 = proquake
+	int proquake_serverversion; // actual proquake server version * 10 (3.40 = 34, etc)
+	int proquake_serverflags; // 0 (PQF_CHEATFREE not supported)
 }
 client_static_t;
 
@@ -1548,8 +1553,9 @@ typedef struct r_refdef_stats_s
 	int particles;
 	int drawndecals;
 	int totaldecals;
-	int meshes;
-	int meshes_elements;
+	int draws;
+	int draws_vertices;
+	int draws_elements;
 	int lights;
 	int lights_clears;
 	int lights_scissored;

@@ -394,9 +394,16 @@ string(string s) precache_file2 = #77;
 
 float(string s) stof = #81;
 
+
 void(vector v1, vector min, vector max, vector v2, float nomonsters, entity forent) tracebox = #90;
 vector() randomvec = #91;
 vector(vector org) getlight = #92;
+vector(vector org, float lpflags) getlight2 = #92;
+const float LP_LIGHTMAP	= 1;
+const float LP_RTWORLD = 2;
+const float LP_DYNLIGHT = 4;
+const float LP_COMPLETE = 7;
+
 float(string name, string value) registercvar = #93;
 float( float a, ... ) min = #94;
 float( float b, ... ) max = #95;
@@ -852,3 +859,11 @@ string(string command, float bindmap) findkeysforcommand = #610;
 //<already in EXT_CSQC> string(float keynum) keynumtostring = #340;
 //description: key bind setting/getting including support for switchable
 //bindmaps.
+
+//DP_CRYPTO
+//idea: divVerent
+//darkplaces implementation: divVerent
+//builtin definitions: (CSQC)
+float(string url, float id, string content_type, string delim, float buf, float keyid) crypto_uri_postbuf = #513;
+//description:
+//use -1 as buffer handle to justs end delim as postdata

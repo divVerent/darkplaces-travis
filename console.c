@@ -93,6 +93,7 @@ lhnetsocket_t *rcon_redirect_sock = NULL;
 lhnetaddress_t *rcon_redirect_dest = NULL;
 int rcon_redirect_bufferpos = 0;
 char rcon_redirect_buffer[1400];
+qboolean rcon_redirect_proquakeprotocol = false;
 
 // generic functions for console buffers
 
@@ -125,8 +126,10 @@ ConBuffer_Shutdown
 void ConBuffer_Shutdown(conbuffer_t *buf)
 {
 	buf->active = false;
-	Mem_Free(buf->text);
-	Mem_Free(buf->lines);
+	if (buf->text)
+		Mem_Free(buf->text);
+	if (buf->lines)
+		Mem_Free(buf->lines);
 	buf->text = NULL;
 	buf->lines = NULL;
 }
@@ -885,20 +888,38 @@ static char qfont_table[256] = {
 	'x',  'y',  'z',  '{',  '|',  '}',  '~',  '<'
 };
 
-void Con_Rcon_Redirect_Init(lhnetsocket_t *sock, lhnetaddress_t *dest)
+void Con_Rcon_Redirect_Init(lhnetsocket_t *sock, lhnetaddress_t *dest, qboolean proquakeprotocol)
 {
 	rcon_redirect_sock = sock;
 	rcon_redirect_dest = dest;
-	memcpy(rcon_redirect_buffer, "\377\377\377\377n", 5); // QW rcon print
+	rcon_redirect_proquakeprotocol = proquakeprotocol;
+	if (rcon_redirect_proquakeprotocol)
+	{
+		// reserve space for the packet header
+		rcon_redirect_buffer[0] = 0;
+		rcon_redirect_buffer[1] = 0;
+		rcon_redirect_buffer[2] = 0;
+		rcon_redirect_buffer[3] = 0;
+		// this is a reply to a CCREQ_RCON
+		rcon_redirect_buffer[4] = CCREP_RCON;
+	}
+	else
+		memcpy(rcon_redirect_buffer, "\377\377\377\377n", 5); // QW rcon print
 	rcon_redirect_bufferpos = 5;
 }
 
 void Con_Rcon_Redirect_Flush(void)
 {
 	rcon_redirect_buffer[rcon_redirect_bufferpos] = 0;
-	NetConn_WriteString(rcon_redirect_sock, rcon_redirect_buffer, rcon_redirect_dest);
+	if (rcon_redirect_proquakeprotocol)
+	{
+		// update the length in the packet header
+		StoreBigLong((unsigned char *)rcon_redirect_buffer, NETFLAG_CTL | (rcon_redirect_bufferpos & NETFLAG_LENGTH_MASK));
+	}
+	NetConn_Write(rcon_redirect_sock, rcon_redirect_buffer, rcon_redirect_bufferpos, rcon_redirect_dest);
 	memcpy(rcon_redirect_buffer, "\377\377\377\377n", 5); // QW rcon print
 	rcon_redirect_bufferpos = 5;
+	rcon_redirect_proquakeprotocol = false;
 }
 
 void Con_Rcon_Redirect_End(void)
@@ -1094,11 +1115,24 @@ void Con_MaskPrint(int additionalmask, const char *msg)
 			// send to terminal or dedicated server window
 			if (!sys_nostdout)
 			{
-				unsigned char *p;
 				if(sys_specialcharactertranslation.integer)
 				{
-					for (p = (unsigned char *) line;*p; p++)
-						*p = qfont_table[*p];
+					char *p;
+					const char *q;
+					p = line;
+					while(*p)
+					{
+						int ch = u8_getchar(p, &q);
+						if(ch >= 0xE000 && ch <= 0xE0FF)
+						{
+							*p = qfont_table[ch - 0xE000];
+							if(q > p+1)
+								memmove(p+1, q, strlen(q));
+							p = p + 1;
+						}
+						else
+							p = p + (q - p);
+					}
 				}
 
 				if(sys_colortranslation.integer == 1) // ANSI

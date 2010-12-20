@@ -35,6 +35,9 @@ cvar_t scr_showpause = {CVAR_SAVE, "showpause","1", "show pause icon when game i
 cvar_t scr_showbrand = {0, "showbrand","0", "shows gfx/brand.tga in a corner of the screen (different values select different positions, including centered)"};
 cvar_t scr_printspeed = {0, "scr_printspeed","0", "speed of intermission printing (episode end texts), a value of 0 disables the slow printing"};
 cvar_t scr_loadingscreen_background = {0, "scr_loadingscreen_background","0", "show the last visible background during loading screen (costs one screenful of video memory)"};
+cvar_t scr_loadingscreen_scale = {0, "scr_loadingscreen_scale","1", "scale factor of the background"};
+cvar_t scr_loadingscreen_scale_base = {0, "scr_loadingscreen_scale_base","0", "0 = console pixels, 1 = video pixels"};
+cvar_t scr_loadingscreen_scale_limit = {0, "scr_loadingscreen_scale_limit","0", "0 = no limit, 1 = until first edge hits screen edge, 2 = until last edge hits screen edge, 3 = until width hits screen width, 4 = until height hits screen height"};
 cvar_t scr_loadingscreen_count = {0, "scr_loadingscreen_count","1", "number of loading screen files to use randomly (named loading.tga, loading2.tga, loading3.tga, ...)"};
 cvar_t scr_loadingscreen_barcolor = {0, "scr_loadingscreen_barcolor", "0 0 1", "rgb color of loadingscreen progress bar"};
 cvar_t scr_loadingscreen_barheight = {0, "scr_loadingscreen_barheight", "8", "a height loadingscreen progress bar"};
@@ -219,12 +222,16 @@ void SCR_CheckDrawCenterString (void)
 void SCR_DrawNetGraph_DrawGraph (int graphx, int graphy, int graphwidth, int graphheight, float graphscale, const char *label, float textsize, int packetcounter, netgraphitem_t *netgraph)
 {
 	netgraphitem_t *graph;
-	int j, x, y;
+	int j, x, y, numlines;
 	int totalbytes = 0;
 	char bytesstring[128];
 	float g[NETGRAPH_PACKETS][6];
 	float *a;
 	float *b;
+	float vertex3f[(NETGRAPH_PACKETS+2)*5*2*3];
+	float color4f[(NETGRAPH_PACKETS+2)*5*2*4];
+	float *v;
+	float *c;
 	DrawQ_Fill(graphx, graphy, graphwidth, graphheight + textsize * 2, 0, 0, 0, 0.5, 0);
 	// draw the bar graph itself
 	// advance the packet counter because it is the latest packet column being
@@ -260,18 +267,34 @@ void SCR_DrawNetGraph_DrawGraph (int graphx, int graphy, int graphwidth, int gra
 		g[j][5] = bound(0.0f, g[j][5], 1.0f);
 	}
 	// render the lines for the graph
+	numlines = 0;
+	v = vertex3f;
+	c = color4f;
 	for (j = 0;j < NETGRAPH_PACKETS;j++)
 	{
 		a = g[j];
 		b = g[(j+1)%NETGRAPH_PACKETS];
 		if (a[0] < 0.0f || b[0] > 1.0f || b[0] < a[0])
 			continue;
-		DrawQ_Line(0.0f, graphx + graphwidth * a[0], graphy + graphheight * a[2], graphx + graphwidth * b[0], graphy + graphheight * b[2], 1.0f, 1.0f, 0.0f, 1.0f, 0);
-		DrawQ_Line(0.0f, graphx + graphwidth * a[0], graphy + graphheight * a[1], graphx + graphwidth * b[0], graphy + graphheight * b[1], 1.0f, 0.0f, 0.0f, 1.0f, 0);
-		DrawQ_Line(0.0f, graphx + graphwidth * a[0], graphy + graphheight * a[5], graphx + graphwidth * b[0], graphy + graphheight * b[5], 0.0f, 1.0f, 0.0f, 1.0f, 0);
-		DrawQ_Line(0.0f, graphx + graphwidth * a[0], graphy + graphheight * a[4], graphx + graphwidth * b[0], graphy + graphheight * b[4], 1.0f, 1.0f, 1.0f, 1.0f, 0);
-		DrawQ_Line(0.0f, graphx + graphwidth * a[0], graphy + graphheight * a[3], graphx + graphwidth * b[0], graphy + graphheight * b[3], 1.0f, 0.5f, 0.0f, 1.0f, 0);
+		VectorSet(v, graphx + graphwidth * a[0], graphy + graphheight * a[2], 0.0f);v += 3;Vector4Set(c, 1.0f, 1.0f, 0.0f, 1.0f);c += 4;
+		VectorSet(v, graphx + graphwidth * b[0], graphy + graphheight * b[2], 0.0f);v += 3;Vector4Set(c, 1.0f, 1.0f, 0.0f, 1.0f);c += 4;
+
+		VectorSet(v, graphx + graphwidth * a[0], graphy + graphheight * a[1], 0.0f);v += 3;Vector4Set(c, 1.0f, 0.0f, 0.0f, 1.0f);c += 4;
+		VectorSet(v, graphx + graphwidth * b[0], graphy + graphheight * b[1], 0.0f);v += 3;Vector4Set(c, 1.0f, 0.0f, 0.0f, 1.0f);c += 4;
+
+		VectorSet(v, graphx + graphwidth * a[0], graphy + graphheight * a[5], 0.0f);v += 3;Vector4Set(c, 0.0f, 1.0f, 0.0f, 1.0f);c += 4;
+		VectorSet(v, graphx + graphwidth * b[0], graphy + graphheight * b[5], 0.0f);v += 3;Vector4Set(c, 0.0f, 1.0f, 0.0f, 1.0f);c += 4;
+
+		VectorSet(v, graphx + graphwidth * a[0], graphy + graphheight * a[4], 0.0f);v += 3;Vector4Set(c, 1.0f, 1.0f, 1.0f, 1.0f);c += 4;
+		VectorSet(v, graphx + graphwidth * b[0], graphy + graphheight * b[4], 0.0f);v += 3;Vector4Set(c, 1.0f, 1.0f, 1.0f, 1.0f);c += 4;
+
+		VectorSet(v, graphx + graphwidth * a[0], graphy + graphheight * a[3], 0.0f);v += 3;Vector4Set(c, 1.0f, 0.5f, 0.0f, 1.0f);c += 4;
+		VectorSet(v, graphx + graphwidth * b[0], graphy + graphheight * b[3], 0.0f);v += 3;Vector4Set(c, 1.0f, 0.5f, 0.0f, 1.0f);c += 4;
+
+		numlines += 5;
 	}
+	if (numlines > 0)
+		DrawQ_Lines(0.0f, numlines, vertex3f, color4f, 0);
 	x = graphx;
 	y = graphy + graphheight;
 	dpsnprintf(bytesstring, sizeof(bytesstring), "%i", totalbytes);
@@ -481,9 +504,9 @@ static int SCR_DrawQWDownload(int offset)
 		cls.qw_downloadspeedcount = 0;
 	}
 	if (cls.protocol == PROTOCOL_QUAKEWORLD)
-		dpsnprintf(temp, sizeof(temp), "Downloading %s %3i%% (%i) at %i bytes/s\n", cls.qw_downloadname, cls.qw_downloadpercent, cls.qw_downloadmemorycursize, cls.qw_downloadspeedrate);
+		dpsnprintf(temp, sizeof(temp), "Downloading %s %3i%% (%i) at %i bytes/s", cls.qw_downloadname, cls.qw_downloadpercent, cls.qw_downloadmemorycursize, cls.qw_downloadspeedrate);
 	else
-		dpsnprintf(temp, sizeof(temp), "Downloading %s %3i%% (%i/%i) at %i bytes/s\n", cls.qw_downloadname, cls.qw_downloadpercent, cls.qw_downloadmemorycursize, cls.qw_downloadmemorymaxsize, cls.qw_downloadspeedrate);
+		dpsnprintf(temp, sizeof(temp), "Downloading %s %3i%% (%i/%i) at %i bytes/s", cls.qw_downloadname, cls.qw_downloadpercent, cls.qw_downloadmemorycursize, cls.qw_downloadmemorymaxsize, cls.qw_downloadspeedrate);
 	len = (int)strlen(temp);
 	x = (vid_conwidth.integer - DrawQ_TextWidth(temp, len, size, size, true, FONT_INFOBAR)) / 2;
 	y = vid_conheight.integer - size - offset;
@@ -544,11 +567,11 @@ static int SCR_DrawCurlDownload(int offset)
 	for(i = 0; i != nDownloads; ++i)
 	{
 		if(downinfo[i].queued)
-			dpsnprintf(temp, sizeof(temp), "Still in queue: %s\n", downinfo[i].filename);
+			dpsnprintf(temp, sizeof(temp), "Still in queue: %s", downinfo[i].filename);
 		else if(downinfo[i].progress <= 0)
-			dpsnprintf(temp, sizeof(temp), "Downloading %s ...  ???.?%% @ %.1f KiB/s\n", downinfo[i].filename, downinfo[i].speed / 1024.0);
+			dpsnprintf(temp, sizeof(temp), "Downloading %s ...  ???.?%% @ %.1f KiB/s", downinfo[i].filename, downinfo[i].speed / 1024.0);
 		else
-			dpsnprintf(temp, sizeof(temp), "Downloading %s ...  %5.1f%% @ %.1f KiB/s\n", downinfo[i].filename, 100.0 * downinfo[i].progress, downinfo[i].speed / 1024.0);
+			dpsnprintf(temp, sizeof(temp), "Downloading %s ...  %5.1f%% @ %.1f KiB/s", downinfo[i].filename, 100.0 * downinfo[i].progress, downinfo[i].speed / 1024.0);
 		len = (int)strlen(temp);
 		x = (vid_conwidth.integer - DrawQ_TextWidth(temp, len, size, size, true, FONT_INFOBAR)) / 2;
 		DrawQ_Fill(0, y + i * size, vid_conwidth.integer, size, 0, 0, 0, cls.signon == SIGNONS ? 0.5 : 1, 0);
@@ -776,7 +799,7 @@ void R_TimeReport_EndFrame(void)
 "%5i leafs%5i portals%6i/%6i particles%6i/%6i decals %3i%% quality\n"
 "%7i lightmap updates (%7i pixels)\n"
 "%4i lights%4i clears%4i scissored%7i light%7i shadow%7i dynamic\n"
-"rendered%6i meshes%8i triangles bloompixels%8i copied%8i drawn\n"
+"%6i draws%8i vertices%8i triangles bloompixels%8i copied%8i drawn\n"
 "updated%5i indexbuffers%8i bytes%5i vertexbuffers%8i bytes\n"
 "%s"
 , loc ? "Location: " : "", loc ? loc->name : ""
@@ -786,7 +809,7 @@ void R_TimeReport_EndFrame(void)
 , r_refdef.stats.world_leafs, r_refdef.stats.world_portals, r_refdef.stats.particles, cl.num_particles, r_refdef.stats.drawndecals, r_refdef.stats.totaldecals, (int)(100 * r_refdef.view.quality)
 , r_refdef.stats.lightmapupdates, r_refdef.stats.lightmapupdatepixels
 , r_refdef.stats.lights, r_refdef.stats.lights_clears, r_refdef.stats.lights_scissored, r_refdef.stats.lights_lighttriangles, r_refdef.stats.lights_shadowtriangles, r_refdef.stats.lights_dynamicshadowtriangles
-, r_refdef.stats.meshes, r_refdef.stats.meshes_elements / 3, r_refdef.stats.bloom_copypixels, r_refdef.stats.bloom_drawpixels
+, r_refdef.stats.draws, r_refdef.stats.draws_vertices, r_refdef.stats.draws_elements / 3, r_refdef.stats.bloom_copypixels, r_refdef.stats.bloom_drawpixels
 , r_refdef.stats.indexbufferuploadcount, r_refdef.stats.indexbufferuploadsize, r_refdef.stats.vertexbufferuploadcount, r_refdef.stats.vertexbufferuploadsize
 , r_speeds_timestring);
 
@@ -879,6 +902,9 @@ void CL_Screen_Init(void)
 	Cvar_RegisterVariable (&scr_conforcewhiledisconnected);
 	Cvar_RegisterVariable (&scr_menuforcewhiledisconnected);
 	Cvar_RegisterVariable (&scr_loadingscreen_background);
+	Cvar_RegisterVariable (&scr_loadingscreen_scale);
+	Cvar_RegisterVariable (&scr_loadingscreen_scale_base);
+	Cvar_RegisterVariable (&scr_loadingscreen_scale_limit);
 	Cvar_RegisterVariable (&scr_loadingscreen_count);
 	Cvar_RegisterVariable (&scr_loadingscreen_barcolor);
 	Cvar_RegisterVariable (&scr_loadingscreen_barheight);
@@ -1767,7 +1793,7 @@ typedef struct loadingscreenstack_s
 }
 loadingscreenstack_t;
 static loadingscreenstack_t *loadingscreenstack = NULL;
-static double loadingscreentime = -1;
+static qboolean loadingscreendone = false;
 static qboolean loadingscreencleared = false;
 static float loadingscreenheight = 0;
 rtexture_t *loadingscreentexture = NULL;
@@ -1819,7 +1845,7 @@ static void SCR_SetLoadingScreenTexture(void)
 
 void SCR_UpdateLoadingScreenIfShown(void)
 {
-	if(realtime == loadingscreentime)
+	if(loadingscreendone)
 		SCR_UpdateLoadingScreen(loadingscreencleared);
 }
 
@@ -1923,7 +1949,7 @@ static void SCR_DrawLoadingStack(void)
 		GL_DepthRange(0, 1);
 		GL_PolygonOffset(0, 0);
 		GL_DepthTest(false);
-		R_Mesh_ResetTextureState();
+//		R_Mesh_ResetTextureState();
 		verts[2] = verts[5] = verts[8] = verts[11] = 0;
 		verts[0] = verts[9] = 0;
 		verts[1] = verts[4] = vid_conheight.integer - scr_loadingscreen_barheight.value;
@@ -1958,7 +1984,7 @@ static float loadingscreenpic_texcoord2f[8];
 static void SCR_DrawLoadingScreen_SharedSetup (qboolean clear)
 {
 	r_viewport_t viewport;
-	float x, y;
+	float x, y, w, h, sw, sh, f;
 	// release mouse grab while loading
 	if (!vid.fullscreen)
 		VID_SetMouse(false, false, false);
@@ -1968,20 +1994,60 @@ static void SCR_DrawLoadingScreen_SharedSetup (qboolean clear)
 	R_SetViewport(&viewport);
 	GL_ColorMask(1,1,1,1);
 	// when starting up a new video mode, make sure the screen is cleared to black
-	if (clear)
+	if (clear || loadingscreentexture)
 		GL_Clear(GL_COLOR_BUFFER_BIT, NULL, 1.0f, 0);
 	R_Textures_Frame();
 	R_Mesh_Start();
 	R_EntityMatrix(&identitymatrix);
 	// draw the loading plaque
 	loadingscreenpic = Draw_CachePic (loadingscreenpic_number ? va("gfx/loading%d", loadingscreenpic_number+1) : "gfx/loading");
-	x = (vid_conwidth.integer - loadingscreenpic->width)/2;
-	y = (vid_conheight.integer - loadingscreenpic->height)/2;
+
+	w = loadingscreenpic->width;
+	h = loadingscreenpic->height;
+
+	// apply scale
+	w *= scr_loadingscreen_scale.value;
+	h *= scr_loadingscreen_scale.value;
+
+	// apply scale base
+	if(scr_loadingscreen_scale_base.integer)
+	{
+		w *= vid_conwidth.integer / (float) vid.width;
+		h *= vid_conheight.integer / (float) vid.height;
+	}
+
+	// apply scale limit
+	sw = w / vid_conwidth.integer;
+	sh = h / vid_conheight.integer;
+	f = 1;
+	switch(scr_loadingscreen_scale_limit.integer)
+	{
+		case 1:
+			f = max(sw, sh);
+			break;
+		case 2:
+			f = min(sw, sh);
+			break;
+		case 3:
+			f = sw;
+			break;
+		case 4:
+			f = sh;
+			break;
+	}
+	if(f > 1)
+	{
+		w /= f;
+		h /= f;
+	}
+
+	x = (vid_conwidth.integer - w)/2;
+	y = (vid_conheight.integer - h)/2;
 	loadingscreenpic_vertex3f[2] = loadingscreenpic_vertex3f[5] = loadingscreenpic_vertex3f[8] = loadingscreenpic_vertex3f[11] = 0;
 	loadingscreenpic_vertex3f[0] = loadingscreenpic_vertex3f[9] = x;
 	loadingscreenpic_vertex3f[1] = loadingscreenpic_vertex3f[4] = y;
-	loadingscreenpic_vertex3f[3] = loadingscreenpic_vertex3f[6] = x + loadingscreenpic->width;
-	loadingscreenpic_vertex3f[7] = loadingscreenpic_vertex3f[10] = y + loadingscreenpic->height;
+	loadingscreenpic_vertex3f[3] = loadingscreenpic_vertex3f[6] = x + w;
+	loadingscreenpic_vertex3f[7] = loadingscreenpic_vertex3f[10] = y + h;
 	loadingscreenpic_texcoord2f[0] = 0;loadingscreenpic_texcoord2f[1] = 0;
 	loadingscreenpic_texcoord2f[2] = 1;loadingscreenpic_texcoord2f[3] = 0;
 	loadingscreenpic_texcoord2f[4] = 1;loadingscreenpic_texcoord2f[5] = 1;
@@ -1995,7 +2061,7 @@ static void SCR_DrawLoadingScreen (qboolean clear)
 	GL_DepthRange(0, 1);
 	GL_PolygonOffset(0, 0);
 	GL_DepthTest(false);
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	GL_Color(1,1,1,1);
 	if(loadingscreentexture)
 	{
@@ -2028,24 +2094,26 @@ void SCR_UpdateLoadingScreen (qboolean clear)
 	if(!scr_loadingscreen_background.integer)
 		clear = true;
 	
-	if(loadingscreentime == realtime)
+	if(loadingscreendone)
 		clear |= loadingscreencleared;
 
-	if(loadingscreentime != realtime)
+	if(!loadingscreendone)
 		loadingscreenpic_number = rand() % (scr_loadingscreen_count.integer > 1 ? scr_loadingscreen_count.integer : 1);
 
 	if(clear)
 	        SCR_ClearLoadingScreenTexture();
-	else if(loadingscreentime != realtime)
+	else if(!loadingscreendone)
 	        SCR_SetLoadingScreenTexture();
 
-	if(loadingscreentime != realtime)
+	if(!loadingscreendone)
 	{
-		loadingscreentime = realtime;
+		loadingscreendone = true;
 		loadingscreenheight = 0;
 	}
 	loadingscreencleared = clear;
 
+	if (qglDrawBuffer)
+		qglDrawBuffer(GL_BACK);
 	SCR_DrawLoadingScreen_SharedSetup(clear);
 	if (vid.stereobuffer)
 	{
@@ -2102,6 +2170,8 @@ void CL_UpdateScreen(void)
 
 	if (!scr_initialized || !con_initialized || !scr_refresh.integer)
 		return;				// not initialized yet
+
+	loadingscreendone = false;
 
 	if(gamemode == GAME_NEXUIZ || gamemode == GAME_XONOTIC)
 	{
@@ -2218,11 +2288,6 @@ void CL_UpdateScreen(void)
 
 	if (R_Stereo_Active())
 	{
-		matrix4x4_t originalmatrix = r_refdef.view.matrix;
-		matrix4x4_t offsetmatrix;
-		Matrix4x4_CreateFromQuakeEntity(&offsetmatrix, 0, r_stereo_separation.value * 0.5f, 0, 0, r_stereo_angle.value * 0.5f, 0, 1);
-		Matrix4x4_Concat(&r_refdef.view.matrix, &originalmatrix, &offsetmatrix);
-
 		r_stereo_side = 0;
 
 		if (r_stereo_redblue.integer || r_stereo_redgreen.integer || r_stereo_redcyan.integer)
@@ -2237,9 +2302,6 @@ void CL_UpdateScreen(void)
 
 		SCR_DrawScreen();
 
-		Matrix4x4_CreateFromQuakeEntity(&offsetmatrix, 0, r_stereo_separation.value * -0.5f, 0, 0, r_stereo_angle.value * -0.5f, 0, 1);
-		Matrix4x4_Concat(&r_refdef.view.matrix, &originalmatrix, &offsetmatrix);
-
 		r_stereo_side = 1;
 
 		if (r_stereo_redblue.integer || r_stereo_redgreen.integer || r_stereo_redcyan.integer)
@@ -2253,8 +2315,6 @@ void CL_UpdateScreen(void)
 			qglDrawBuffer(GL_BACK_LEFT);
 
 		SCR_DrawScreen();
-
-		r_refdef.view.matrix = originalmatrix;
 	}
 	else
 		SCR_DrawScreen();

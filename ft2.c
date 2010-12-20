@@ -387,9 +387,13 @@ qboolean Font_LoadFont(const char *name, dp_font_t *dpfnt)
 
 		if (!Font_LoadFile(dpfnt->fallbacks[i], dpfnt->fallback_faces[i], &dpfnt->settings, fb))
 		{
-			Con_Printf("Failed to allocate font for fallback %i of font %s\n", i, name);
+			if(!FS_FileExists(va("%s.tga", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va("%s.png", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va("%s.jpg", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va("%s.pcx", dpfnt->fallbacks[i])))
+				Con_Printf("Failed to load font %s for fallback %i of font %s\n", dpfnt->fallbacks[i], i, name);
 			Mem_Free(fb);
-			break;
+			continue;
 		}
 		count = 0;
 		for (s = 0; s < MAX_FONT_SIZES && dpfnt->req_sizes[s] >= 0; ++s)
@@ -510,6 +514,7 @@ static qboolean Font_LoadFile(const char *name, int _face, ft2_settings_t *setti
 		_face = 0;
 		status = qFT_New_Memory_Face(font_ft2lib, (FT_Bytes)data, datasize, 0, (FT_Face*)&font->face);
 	}
+	font->data = data;
 	if (status)
 	{
 		Con_Printf("ERROR: can't create face for %s\n"
@@ -955,8 +960,17 @@ static void UnloadMapRec(ft2_font_map_t *map)
 void Font_UnloadFont(ft2_font_t *font)
 {
 	int i;
+
+	// unload fallbacks
+	if(font->next)
+		Font_UnloadFont(font->next);
+
 	if (font->attachments && font->attachmentcount)
 	{
+		for (i = 0; i < (int)font->attachmentcount; ++i) {
+			if (font->attachments[i].data)
+				Mem_Free(font->attachments[i].data);
+		}
 		Mem_Free(font->attachments);
 		font->attachmentcount = 0;
 		font->attachments = NULL;
@@ -976,6 +990,10 @@ void Font_UnloadFont(ft2_font_t *font)
 			qFT_Done_Face((FT_Face)font->face);
 			font->face = NULL;
 		}
+	}
+	if (font->data) {
+	    Mem_Free(font->data);
+	    font->data = NULL;
 	}
 }
 

@@ -1751,6 +1751,7 @@ void PRVM_FindOffsets(void)
 	prog->funcoffsets.m_keyup                         = PRVM_ED_FindFunctionOffset("m_keyup");
 	prog->funcoffsets.m_shutdown                      = PRVM_ED_FindFunctionOffset("m_shutdown");
 	prog->funcoffsets.m_toggle                        = PRVM_ED_FindFunctionOffset("m_toggle");
+	prog->funcoffsets.m_newmap                        = PRVM_ED_FindFunctionOffset("m_newmap");
 }
 
 // not used
@@ -2416,7 +2417,7 @@ void PRVM_LoadProgs (const char * filename, int numrequiredfunc, const char **re
 			{
 				const char *value;
 				char buf[64];
-				Con_Printf("PRVM_LoadProgs: no cvar for autocvar global %s in %s, creating...\n", name, PRVM_NAME);
+				Con_DPrintf("PRVM_LoadProgs: no cvar for autocvar global %s in %s, creating...\n", name, PRVM_NAME);
 				switch(prog->globaldefs[i].type & ~DEF_SAVEGLOBAL)
 				{
 					case ev_float:

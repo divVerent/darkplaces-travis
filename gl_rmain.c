@@ -148,6 +148,10 @@ cvar_t r_glsl_postprocess_uservec1 = {CVAR_SAVE, "r_glsl_postprocess_uservec1", 
 cvar_t r_glsl_postprocess_uservec2 = {CVAR_SAVE, "r_glsl_postprocess_uservec2", "0 0 0 0", "a 4-component vector to pass as uservec2 to the postprocessing shader (only useful if default.glsl has been customized)"};
 cvar_t r_glsl_postprocess_uservec3 = {CVAR_SAVE, "r_glsl_postprocess_uservec3", "0 0 0 0", "a 4-component vector to pass as uservec3 to the postprocessing shader (only useful if default.glsl has been customized)"};
 cvar_t r_glsl_postprocess_uservec4 = {CVAR_SAVE, "r_glsl_postprocess_uservec4", "0 0 0 0", "a 4-component vector to pass as uservec4 to the postprocessing shader (only useful if default.glsl has been customized)"};
+cvar_t r_glsl_postprocess_uservec1_enable = {CVAR_SAVE, "r_glsl_postprocess_uservec1_enable", "1", "enables postprocessing uservec1 usage, creates USERVEC1 define (only useful if default.glsl has been customized)"};
+cvar_t r_glsl_postprocess_uservec2_enable = {CVAR_SAVE, "r_glsl_postprocess_uservec2_enable", "1", "enables postprocessing uservec2 usage, creates USERVEC1 define (only useful if default.glsl has been customized)"};
+cvar_t r_glsl_postprocess_uservec3_enable = {CVAR_SAVE, "r_glsl_postprocess_uservec3_enable", "1", "enables postprocessing uservec3 usage, creates USERVEC1 define (only useful if default.glsl has been customized)"};
+cvar_t r_glsl_postprocess_uservec4_enable = {CVAR_SAVE, "r_glsl_postprocess_uservec4_enable", "1", "enables postprocessing uservec4 usage, creates USERVEC1 define (only useful if default.glsl has been customized)"};
 
 cvar_t r_water = {CVAR_SAVE, "r_water", "0", "whether to use reflections and refraction on water surfaces (note: r_wateralpha must be set below 1)"};
 cvar_t r_water_clippingplanebias = {CVAR_SAVE, "r_water_clippingplanebias", "1", "a rather technical setting which avoids black pixels around water edges"};
@@ -805,7 +809,11 @@ static const char *builtinshaderstring =
 "\n"
 "void main(void)\n"
 "{\n"
+"#ifdef USEVIEWTINT\n"
 "	gl_FragColor = gl_Color;\n"
+"#else\n"
+"	gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n"
+"#endif\n"
 "#ifdef USEDIFFUSE\n"
 "	gl_FragColor *= texture2D(Texture_First, TexCoord1);\n"
 "#endif\n"
@@ -966,11 +974,11 @@ static const char *builtinshaderstring =
 "	// content.\n"
 "	// Remove this 'ack once we have a better way to stop this thing from\n"
 "	// 'appening.\n"
-"	float f1 = min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(0.005, 0.01)).rgb) / 0.002);\n"
-"	f1      *= min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(0.005, -0.01)).rgb) / 0.002);\n"
-"	f1      *= min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(-0.005, 0.01)).rgb) / 0.002);\n"
-"	f1      *= min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(-0.005, -0.01)).rgb) / 0.002);\n"
-"	ScreenTexCoord.xy = mix(SafeScreenTexCoord.xy, ScreenTexCoord.xy, f1);\n"
+"	float f  = min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(0.005, 0.01)).rgb) / 0.002);\n"
+"	f       *= min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(0.005, -0.01)).rgb) / 0.002);\n"
+"	f       *= min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(-0.005, 0.01)).rgb) / 0.002);\n"
+"	f       *= min(1.0, length(texture2D(Texture_Refraction, ScreenTexCoord.xy + vec2(-0.005, -0.01)).rgb) / 0.002);\n"
+"	ScreenTexCoord.xy = mix(SafeScreenTexCoord.xy, ScreenTexCoord.xy, f);\n"
 "	float f = min(1.0, length(texture2D(Texture_Reflection, ScreenTexCoord.zw + vec2(0.005, 0.005)).rgb) / 0.002);\n"
 "	f      *= min(1.0, length(texture2D(Texture_Reflection, ScreenTexCoord.zw + vec2(0.005, -0.005)).rgb) / 0.002);\n"
 "	f      *= min(1.0, length(texture2D(Texture_Reflection, ScreenTexCoord.zw + vec2(-0.005, 0.005)).rgb) / 0.002);\n"
@@ -978,7 +986,6 @@ static const char *builtinshaderstring =
 "	ScreenTexCoord.zw = mix(SafeScreenTexCoord.zw, ScreenTexCoord.zw, f);\n"
 "	float Fresnel = pow(min(1.0, 1.0 - float(normalize(EyeVector).z)), 2.0) * ReflectFactor + ReflectOffset;\n"
 "	gl_FragColor = mix(vec4(texture2D(Texture_Refraction, ScreenTexCoord.xy).rgb, 1) * RefractColor, vec4(texture2D(Texture_Reflection, ScreenTexCoord.zw).rgb, 1) * ReflectColor, Fresnel);\n"
-"	gl_FragColor.a = f1 + 0.5;\n"
 "}\n"
 "#endif\n"
 "#else // !MODE_WATER\n"
@@ -1148,15 +1155,14 @@ static const char *builtinshaderstring =
 "	RT += OffsetVector * (step(texture2D(Texture_Normal, RT.xy).a, RT.z) * 0.0625 - 0.03125);\n"
 "	return RT.xy;\n"
 "#else\n"
-"	// 3 sample offset mapping (only 3 samples because of ATI Radeon 9500-9800/X300 limits)\n"
+"	// 2 sample offset mapping (only 2 samples because of ATI Radeon 9500-9800/X300 limits)\n"
 "	// this basically moves forward the full distance, and then backs up based\n"
 "	// on height of samples\n"
 "	//vec2 OffsetVector = vec2(EyeVector.xy * ((1.0 / EyeVector.z) * OffsetMapping_Scale) * vec2(-1, 1));\n"
 "	//vec2 OffsetVector = vec2(normalize(EyeVector.xy) * OffsetMapping_Scale * vec2(-1, 1));\n"
 "	vec2 OffsetVector = vec2(normalize(EyeVector).xy * OffsetMapping_Scale * vec2(-1, 1));\n"
 "	TexCoord += OffsetVector;\n"
-"	OffsetVector *= 0.333;\n"
-"	TexCoord -= OffsetVector * texture2D(Texture_Normal, TexCoord).a;\n"
+"	OffsetVector *= 0.5;\n"
 "	TexCoord -= OffsetVector * texture2D(Texture_Normal, TexCoord).a;\n"
 "	TexCoord -= OffsetVector * texture2D(Texture_Normal, TexCoord).a;\n"
 "	return TexCoord;\n"
@@ -1670,6 +1676,7 @@ static const char *builtinshaderstring =
 "	lightnormal.x = dot(lightnormal_modelspace, myhalf3(VectorS));\n"
 "	lightnormal.y = dot(lightnormal_modelspace, myhalf3(VectorT));\n"
 "	lightnormal.z = dot(lightnormal_modelspace, myhalf3(VectorR));\n"
+"	lightnormal = normalize(lightnormal); // VectorS/T/R are not always perfectly normalized, and EXACTSPECULARMATH is very picky about this\n"
 "	// calculate directional shading (and undoing the existing angle attenuation on the lightmap by the division)\n"
 "	// note that q3map2 is too stupid to calculate proper surface normals when q3map_nonplanar\n"
 "	// is used (the lightmap and deluxemap coords correspond to virtually random coordinates\n"
@@ -1868,7 +1875,7 @@ const char *builtincgshaderstring =
 "out float4 gl_FragColor : COLOR\n"
 ")\n"
 "{\n"
-"//	float3 temp = float3(Depth,Depth*(65536.0/255.0),Depth*(16777216.0/255.0));\n"
+"//	float4 temp = float4(Depth,Depth*(65536.0/255.0),Depth*(16777216.0/255.0),0.0);\n"
 "	float4 temp = float4(Depth,Depth*256.0,Depth*65536.0,0.0);\n"
 "	temp.yz -= floor(temp.yz);\n"
 "	gl_FragColor = temp;\n"
@@ -2086,7 +2093,11 @@ const char *builtincgshaderstring =
 "out float4 gl_FragColor : COLOR\n"
 ")\n"
 "{\n"
+"#ifdef USEVIEWTINT\n"
 "	gl_FragColor = gl_FrontColor;\n"
+"#else\n"
+"	gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n"
+"#endif\n"
 "#ifdef USEDIFFUSE\n"
 "	gl_FragColor *= tex2D(Texture_First, TexCoord1);\n"
 "#endif\n"
@@ -2189,7 +2200,7 @@ const char *builtincgshaderstring =
 "	float2 ScreenScaleRefractReflectIW = ScreenScaleRefractReflect.xy * (1.0 / ModelViewProjectionPosition.w);\n"
 "	//float2 ScreenTexCoord = (ModelViewProjectionPosition.xy + normalize(tex2D(Texture_Normal, TexCoord).rgb - float3(0.5,0.5,0.5)).xy * DistortScaleRefractReflect.xy * 100) * ScreenScaleRefractReflectIW + ScreenCenterRefractReflect.xy;\n"
 "	float2 SafeScreenTexCoord = ModelViewProjectionPosition.xy * ScreenScaleRefractReflectIW + ScreenCenterRefractReflect.xy;\n"
-"	float2 ScreenTexCoord = SafeScreenTexCoord + float2(normalize(tex2D(Texture_Normal, TexCoord).rgb - float3(0.5,0.5,0.5))).xy * DistortScaleRefractReflect.xy;\n"
+"	float2 ScreenTexCoord = SafeScreenTexCoord + normalize(tex2D(Texture_Normal, TexCoord).rgb - float3(0.5,0.5,0.5)).xy * DistortScaleRefractReflect.xy;\n"
 "	// FIXME temporary hack to detect the case that the reflection\n"
 "	// gets blackened at edges due to leaving the area that contains actual\n"
 "	// content.\n"
@@ -3210,7 +3221,7 @@ const char *builtincgshaderstring =
 "#ifdef MODE_FAKELIGHT\n"
 "#define SHADING\n"
 "half3 lightnormal = half3(normalize(EyeVector));\n"
-"half3 lightcolor = half3(1.0);\n"
+"half3 lightcolor = half3(1.0,1.0,1.0);\n"
 "#endif // MODE_FAKELIGHT\n"
 "\n"
 "\n"
@@ -3333,7 +3344,7 @@ typedef enum shaderpermutation_e
 {
 	SHADERPERMUTATION_DIFFUSE = 1<<0, ///< (lightsource) whether to use directional shading
 	SHADERPERMUTATION_VERTEXTEXTUREBLEND = 1<<1, ///< indicates this is a two-layer material blend based on vertex alpha (q3bsp)
-	SHADERPERMUTATION_VIEWTINT = 1<<2, ///< view tint (postprocessing only)
+	SHADERPERMUTATION_VIEWTINT = 1<<2, ///< view tint (postprocessing only), use vertex colors (generic only)
 	SHADERPERMUTATION_COLORMAPPING = 1<<3, ///< indicates this is a colormapped skin
 	SHADERPERMUTATION_SATURATION = 1<<4, ///< saturation (postprocessing only)
 	SHADERPERMUTATION_FOGINSIDE = 1<<5, ///< tint the color by fog color or black if using additive blend mode
@@ -3395,7 +3406,7 @@ shaderpermutationinfo_t shaderpermutationinfo[SHADERPERMUTATION_COUNT] =
 	{"#define USENORMALMAPSCROLLBLEND\n", " normalmapscrollblend"},
 };
 
-/// this enum is multiplied by SHADERPERMUTATION_MODEBASE
+// this enum selects which of the glslshadermodeinfo entries should be used
 typedef enum shadermode_e
 {
 	SHADERMODE_GENERIC, ///< (particles/HUD/etc) vertex color, optionally multiplied by one texture
@@ -3444,7 +3455,7 @@ shadermodeinfo_t cgshadermodeinfo[SHADERMODE_COUNT] =
 {
 	{"cg/default.cg", NULL, "cg/default.cg", "#define MODE_GENERIC\n", " generic"},
 	{"cg/default.cg", NULL, "cg/default.cg", "#define MODE_POSTPROCESS\n", " postprocess"},
-	{"cg/default.cg", NULL, NULL           , "#define MODE_DEPTH_OR_SHADOW\n", " depth"},
+	{"cg/default.cg", NULL, "cg/default.cg", "#define MODE_DEPTH_OR_SHADOW\n", " depth/shadow"},
 	{"cg/default.cg", NULL, "cg/default.cg", "#define MODE_FLATCOLOR\n", " flatcolor"},
 	{"cg/default.cg", NULL, "cg/default.cg", "#define MODE_VERTEXCOLOR\n", " vertexcolor"},
 	{"cg/default.cg", NULL, "cg/default.cg", "#define MODE_LIGHTMAP\n", " lightmap"},
@@ -3466,10 +3477,11 @@ shadermodeinfo_t hlslshadermodeinfo[SHADERMODE_COUNT] =
 {
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_GENERIC\n", " generic"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_POSTPROCESS\n", " postprocess"},
-	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_DEPTH_OR_SHADOW\n", " depth"},
+	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_DEPTH_OR_SHADOW\n", " depth/shadow"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_FLATCOLOR\n", " flatcolor"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_VERTEXCOLOR\n", " vertexcolor"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_LIGHTMAP\n", " lightmap"},
+	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_FAKELIGHT\n", " fakelight"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_LIGHTDIRECTIONMAP_MODELSPACE\n", " lightdirectionmap_modelspace"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_LIGHTDIRECTIONMAP_TANGENTSPACE\n", " lightdirectionmap_tangentspace"},
 	{"hlsl/default.hlsl", NULL, "hlsl/default.hlsl", "#define MODE_LIGHTDIRECTION\n", " lightdirection"},
@@ -3589,8 +3601,12 @@ enum
 {
 	SHADERSTATICPARM_SATURATION_REDCOMPENSATE = 0, ///< red compensation filter for saturation
 	SHADERSTATICPARM_EXACTSPECULARMATH = 1, ///< (lightsource or deluxemapping) use exact reflection map for specular effects, as opposed to the usual OpenGL approximation
+	SHADERSTATICPARM_POSTPROCESS_USERVEC1 = 2, ///< postprocess uservec1 is enabled
+	SHADERSTATICPARM_POSTPROCESS_USERVEC2 = 3, ///< postprocess uservec2 is enabled
+	SHADERSTATICPARM_POSTPROCESS_USERVEC3 = 4, ///< postprocess uservec3 is enabled
+	SHADERSTATICPARM_POSTPROCESS_USERVEC4 = 5  ///< postprocess uservec4 is enabled
 };
-#define SHADERSTATICPARMS_COUNT 2
+#define SHADERSTATICPARMS_COUNT 6
 
 static const char *shaderstaticparmstrings_list[SHADERSTATICPARMS_COUNT];
 static int shaderstaticparms_count = 0;
@@ -3606,10 +3622,20 @@ qboolean R_CompileShader_CheckStaticParms(void)
 	// detect all
 	if (r_glsl_saturation_redcompensate.integer)
 		R_COMPILESHADER_STATICPARM_ENABLE(SHADERSTATICPARM_SATURATION_REDCOMPENSATE);
-	if(r_shadow_glossexact.integer)
+	if (r_shadow_glossexact.integer)
 		R_COMPILESHADER_STATICPARM_ENABLE(SHADERSTATICPARM_EXACTSPECULARMATH);
-
-	return memcmp(r_compileshader_staticparms, r_compileshader_staticparms_save, sizeof(r_compileshader_staticparms));
+	if (r_glsl_postprocess.integer)
+	{
+		if (r_glsl_postprocess_uservec1_enable.integer)
+			R_COMPILESHADER_STATICPARM_ENABLE(SHADERSTATICPARM_POSTPROCESS_USERVEC1);
+		if (r_glsl_postprocess_uservec2_enable.integer)
+			R_COMPILESHADER_STATICPARM_ENABLE(SHADERSTATICPARM_POSTPROCESS_USERVEC2);
+		if (r_glsl_postprocess_uservec3_enable.integer)
+			R_COMPILESHADER_STATICPARM_ENABLE(SHADERSTATICPARM_POSTPROCESS_USERVEC3);
+		if (r_glsl_postprocess_uservec4_enable.integer)
+			R_COMPILESHADER_STATICPARM_ENABLE(SHADERSTATICPARM_POSTPROCESS_USERVEC4);
+	}
+	return memcmp(r_compileshader_staticparms, r_compileshader_staticparms_save, sizeof(r_compileshader_staticparms)) != 0;
 }
 
 #define R_COMPILESHADER_STATICPARM_EMIT(p, n) \
@@ -3624,8 +3650,11 @@ void R_CompileShader_AddStaticParms(unsigned int mode, unsigned int permutation)
 	// emit all
 	R_COMPILESHADER_STATICPARM_EMIT(SHADERSTATICPARM_SATURATION_REDCOMPENSATE, "SATURATION_REDCOMPENSATE");
 	R_COMPILESHADER_STATICPARM_EMIT(SHADERSTATICPARM_EXACTSPECULARMATH, "USEEXACTSPECULARMATH");
+	R_COMPILESHADER_STATICPARM_EMIT(SHADERSTATICPARM_POSTPROCESS_USERVEC1, "USERVEC1");
+	R_COMPILESHADER_STATICPARM_EMIT(SHADERSTATICPARM_POSTPROCESS_USERVEC2, "USERVEC2");
+	R_COMPILESHADER_STATICPARM_EMIT(SHADERSTATICPARM_POSTPROCESS_USERVEC3, "USERVEC3");
+	R_COMPILESHADER_STATICPARM_EMIT(SHADERSTATICPARM_POSTPROCESS_USERVEC4, "USERVEC4");
 }
-
 
 /// information about each possible shader permutation
 r_glsl_permutation_t *r_glsl_permutationhash[SHADERMODE_COUNT][SHADERPERMUTATION_HASHSIZE];
@@ -3746,11 +3775,11 @@ static void R_GLSL_CompilePermutation(r_glsl_permutation_t *p, unsigned int mode
 
 	// add static parms
 	R_CompileShader_AddStaticParms(mode, permutation);
-	memcpy(vertstrings_list + vertstrings_count, shaderstaticparmstrings_list, sizeof(*vertstrings_list) * shaderstaticparms_count);
+	memcpy((char *)(vertstrings_list + vertstrings_count), shaderstaticparmstrings_list, sizeof(*vertstrings_list) * shaderstaticparms_count);
 	vertstrings_count += shaderstaticparms_count;
-	memcpy(geomstrings_list + geomstrings_count, shaderstaticparmstrings_list, sizeof(*vertstrings_list) * shaderstaticparms_count);
+	memcpy((char *)(geomstrings_list + geomstrings_count), shaderstaticparmstrings_list, sizeof(*vertstrings_list) * shaderstaticparms_count);
 	geomstrings_count += shaderstaticparms_count;
-	memcpy(fragstrings_list + fragstrings_count, shaderstaticparmstrings_list, sizeof(*vertstrings_list) * shaderstaticparms_count);
+	memcpy((char *)(fragstrings_list + fragstrings_count), shaderstaticparmstrings_list, sizeof(*vertstrings_list) * shaderstaticparms_count);
 	fragstrings_count += shaderstaticparms_count;
 
 	// now append the shader text itself
@@ -5120,7 +5149,7 @@ void R_SetupShader_Generic(rtexture_t *first, rtexture_t *second, int texturemod
 	{
 	case RENDERPATH_D3D9:
 #ifdef SUPPORTD3D
-		R_SetupShader_SetPermutationHLSL(SHADERMODE_GENERIC, (first ? SHADERPERMUTATION_DIFFUSE : 0) | (second ? SHADERPERMUTATION_SPECULAR : 0) | (texturemode == GL_MODULATE ? SHADERPERMUTATION_COLORMAPPING : (texturemode == GL_ADD ? SHADERPERMUTATION_GLOW : (texturemode == GL_DECAL ? SHADERPERMUTATION_VERTEXTEXTUREBLEND : 0))));
+		R_SetupShader_SetPermutationHLSL(SHADERMODE_GENERIC, SHADERPERMUTATION_VIEWTINT | (first ? SHADERPERMUTATION_DIFFUSE : 0) | (second ? SHADERPERMUTATION_SPECULAR : 0) | (texturemode == GL_MODULATE ? SHADERPERMUTATION_COLORMAPPING : (texturemode == GL_ADD ? SHADERPERMUTATION_GLOW : (texturemode == GL_DECAL ? SHADERPERMUTATION_VERTEXTEXTUREBLEND : 0))));
 		R_Mesh_TexBind(GL20TU_FIRST , first );
 		R_Mesh_TexBind(GL20TU_SECOND, second);
 #endif
@@ -5132,14 +5161,14 @@ void R_SetupShader_Generic(rtexture_t *first, rtexture_t *second, int texturemod
 		Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
 		break;
 	case RENDERPATH_GL20:
-		R_SetupShader_SetPermutationGLSL(SHADERMODE_GENERIC, (first ? SHADERPERMUTATION_DIFFUSE : 0) | (second ? SHADERPERMUTATION_SPECULAR : 0) | (texturemode == GL_MODULATE ? SHADERPERMUTATION_COLORMAPPING : (texturemode == GL_ADD ? SHADERPERMUTATION_GLOW : (texturemode == GL_DECAL ? SHADERPERMUTATION_VERTEXTEXTUREBLEND : 0))));
+		R_SetupShader_SetPermutationGLSL(SHADERMODE_GENERIC, SHADERPERMUTATION_VIEWTINT | (first ? SHADERPERMUTATION_DIFFUSE : 0) | (second ? SHADERPERMUTATION_SPECULAR : 0) | (texturemode == GL_MODULATE ? SHADERPERMUTATION_COLORMAPPING : (texturemode == GL_ADD ? SHADERPERMUTATION_GLOW : (texturemode == GL_DECAL ? SHADERPERMUTATION_VERTEXTEXTUREBLEND : 0))));
 		R_Mesh_TexBind(GL20TU_FIRST , first );
 		R_Mesh_TexBind(GL20TU_SECOND, second);
 		break;
 	case RENDERPATH_CGGL:
 #ifdef SUPPORTCG
 		CHECKCGERROR
-		R_SetupShader_SetPermutationCG(SHADERMODE_GENERIC, (first ? SHADERPERMUTATION_DIFFUSE : 0) | (second ? SHADERPERMUTATION_SPECULAR : 0) | (texturemode == GL_MODULATE ? SHADERPERMUTATION_COLORMAPPING : (texturemode == GL_ADD ? SHADERPERMUTATION_GLOW : (texturemode == GL_DECAL ? SHADERPERMUTATION_VERTEXTEXTUREBLEND : 0))));
+		R_SetupShader_SetPermutationCG(SHADERMODE_GENERIC, SHADERPERMUTATION_VIEWTINT | (first ? SHADERPERMUTATION_DIFFUSE : 0) | (second ? SHADERPERMUTATION_SPECULAR : 0) | (texturemode == GL_MODULATE ? SHADERPERMUTATION_COLORMAPPING : (texturemode == GL_ADD ? SHADERPERMUTATION_GLOW : (texturemode == GL_DECAL ? SHADERPERMUTATION_VERTEXTEXTUREBLEND : 0))));
 		if (r_cg_permutation->fp_Texture_First ) CG_BindTexture(r_cg_permutation->fp_Texture_First , first );CHECKCGERROR
 		if (r_cg_permutation->fp_Texture_Second) CG_BindTexture(r_cg_permutation->fp_Texture_Second, second);CHECKCGERROR
 #endif
@@ -5872,12 +5901,12 @@ void R_SetupShader_Surface(const vec3_t lightcolorbase, qboolean modellighting, 
 			}
 			else if (mode == SHADERMODE_LIGHTDIRECTION)
 			{
-				if (r_glsl_permutation->loc_Color_Ambient >= 0) qglUniform3fARB(r_glsl_permutation->loc_Color_Ambient, (r_refdef.scene.ambient + rsurface.modellight_ambient[0] * r_refdef.lightmapintensity) * colormod[0], (r_refdef.scene.ambient + rsurface.modellight_ambient[1] * r_refdef.lightmapintensity) * colormod[1], (r_refdef.scene.ambient + rsurface.modellight_ambient[2] * r_refdef.lightmapintensity) * colormod[2]);
+				if (r_glsl_permutation->loc_Color_Ambient >= 0) qglUniform3fARB(r_glsl_permutation->loc_Color_Ambient, (r_refdef.scene.ambient + rsurface.modellight_ambient[0] * r_refdef.lightmapintensity * r_refdef.scene.rtlightstylevalue[0]) * colormod[0], (r_refdef.scene.ambient + rsurface.modellight_ambient[1] * r_refdef.lightmapintensity * r_refdef.scene.rtlightstylevalue[0]) * colormod[1], (r_refdef.scene.ambient + rsurface.modellight_ambient[2] * r_refdef.lightmapintensity * r_refdef.scene.rtlightstylevalue[0]) * colormod[2]);
 				if (r_glsl_permutation->loc_Color_Diffuse >= 0) qglUniform3fARB(r_glsl_permutation->loc_Color_Diffuse, r_refdef.lightmapintensity * colormod[0], r_refdef.lightmapintensity * colormod[1], r_refdef.lightmapintensity * colormod[2]);
 				if (r_glsl_permutation->loc_Color_Specular >= 0) qglUniform3fARB(r_glsl_permutation->loc_Color_Specular, r_refdef.lightmapintensity * r_refdef.view.colorscale * specularscale, r_refdef.lightmapintensity * r_refdef.view.colorscale * specularscale, r_refdef.lightmapintensity * r_refdef.view.colorscale * specularscale);
 				if (r_glsl_permutation->loc_DeferredMod_Diffuse >= 0) qglUniform3fARB(r_glsl_permutation->loc_DeferredMod_Diffuse, colormod[0] * r_shadow_deferred_8bitrange.value, colormod[1] * r_shadow_deferred_8bitrange.value, colormod[2] * r_shadow_deferred_8bitrange.value);
 				if (r_glsl_permutation->loc_DeferredMod_Specular >= 0) qglUniform3fARB(r_glsl_permutation->loc_DeferredMod_Specular, specularscale * r_shadow_deferred_8bitrange.value, specularscale * r_shadow_deferred_8bitrange.value, specularscale * r_shadow_deferred_8bitrange.value);
-				if (r_glsl_permutation->loc_LightColor >= 0) qglUniform3fARB(r_glsl_permutation->loc_LightColor, rsurface.modellight_diffuse[0], rsurface.modellight_diffuse[1], rsurface.modellight_diffuse[2]);
+				if (r_glsl_permutation->loc_LightColor >= 0) qglUniform3fARB(r_glsl_permutation->loc_LightColor, rsurface.modellight_diffuse[0] * r_refdef.scene.rtlightstylevalue[0], rsurface.modellight_diffuse[1] * r_refdef.scene.rtlightstylevalue[0], rsurface.modellight_diffuse[2] * r_refdef.scene.rtlightstylevalue[0]);
 				if (r_glsl_permutation->loc_LightDir >= 0) qglUniform3fARB(r_glsl_permutation->loc_LightDir, rsurface.modellight_lightdir[0], rsurface.modellight_lightdir[1], rsurface.modellight_lightdir[2]);
 			}
 			else
@@ -7378,6 +7407,11 @@ void GL_Main_Init(void)
 	Cvar_RegisterVariable(&r_glsl_postprocess_uservec2);
 	Cvar_RegisterVariable(&r_glsl_postprocess_uservec3);
 	Cvar_RegisterVariable(&r_glsl_postprocess_uservec4);
+	Cvar_RegisterVariable(&r_glsl_postprocess_uservec1_enable);
+	Cvar_RegisterVariable(&r_glsl_postprocess_uservec2_enable);
+	Cvar_RegisterVariable(&r_glsl_postprocess_uservec3_enable);
+	Cvar_RegisterVariable(&r_glsl_postprocess_uservec4_enable);
+
 	Cvar_RegisterVariable(&r_water);
 	Cvar_RegisterVariable(&r_water_resolutionmultiplier);
 	Cvar_RegisterVariable(&r_water_clippingplanebias);
@@ -7875,7 +7909,7 @@ static void R_View_UpdateEntityLighting (void)
 			{
 				if (ent->model->sprite.sprnum_type == SPR_OVERHEAD) // apply offset for overhead sprites
 					org[2] = org[2] + r_overheadsprites_pushback.value;
-				R_CompleteLightPoint(ent->modellight_ambient, ent->modellight_diffuse, ent->modellight_lightdir, org, true, true);
+				R_CompleteLightPoint(ent->modellight_ambient, ent->modellight_diffuse, ent->modellight_lightdir, org, LP_LIGHTMAP | LP_RTWORLD | LP_DYNLIGHT);
 			}
 			else
 				r_refdef.scene.worldmodel->brush.LightPoint(r_refdef.scene.worldmodel, org, ent->modellight_ambient, ent->modellight_diffuse, tempdiffusenormal);
@@ -7911,13 +7945,16 @@ static void R_View_UpdateEntityLighting (void)
 
 				if(r_equalize_entities_to.value > 0 && r_equalize_entities_by.value != 0)
 				{
-					VectorMA(ent->modellight_ambient, 0.25f, ent->modellight_diffuse, avg);
-					f = 0.299f * avg[0] + 0.587f * avg[1] + 0.114f * avg[2];
+					fa = 0.299f * ent->modellight_ambient[0] + 0.587f * ent->modellight_ambient[1] + 0.114f * ent->modellight_ambient[2];
+					fd = 0.299f * ent->modellight_diffuse[0] + 0.587f * ent->modellight_diffuse[1] + 0.114f * ent->modellight_diffuse[2];
+					f = fa + 0.25 * fd;
 					if(f > 0)
 					{
-						f = pow(f / r_equalize_entities_to.value, -r_equalize_entities_by.value);
-						VectorScale(ent->modellight_ambient, f, ent->modellight_ambient);
-						VectorScale(ent->modellight_diffuse, f, ent->modellight_diffuse);
+						// adjust brightness and saturation to target
+						avg[0] = avg[1] = avg[2] = fa / f;
+						VectorLerp(ent->modellight_ambient, r_equalize_entities_by.value, avg, ent->modellight_ambient);
+						avg[0] = avg[1] = avg[2] = fd / f;
+						VectorLerp(ent->modellight_diffuse, r_equalize_entities_by.value, avg, ent->modellight_diffuse);
 					}
 				}
 			}
@@ -9133,12 +9170,17 @@ void R_HDR_RenderBloomTexture(void)
 {
 	int oldwidth, oldheight;
 	float oldcolorscale;
+	int oldwaterstate;
 
+	oldwaterstate = r_waterstate.enabled;
 	oldcolorscale = r_refdef.view.colorscale;
 	oldwidth = r_refdef.view.width;
 	oldheight = r_refdef.view.height;
 	r_refdef.view.width = r_bloomstate.bloomwidth;
 	r_refdef.view.height = r_bloomstate.bloomheight;
+
+	if(r_hdr.integer < 2)
+		r_waterstate.enabled = false;
 
 	// TODO: support GL_EXT_framebuffer_object rather than reusing the framebuffer?  it might improve SLI performance.
 	// TODO: add exposure compensation features
@@ -9159,7 +9201,7 @@ void R_HDR_RenderBloomTexture(void)
 
 	// only do secondary renders with HDR if r_hdr is 2 or higher
 	r_waterstate.numwaterplanes = 0;
-	if (r_waterstate.enabled && r_hdr.integer >= 2)
+	if (r_waterstate.enabled)
 		R_RenderWaterPlanes();
 
 	r_refdef.view.showdebug = true;
@@ -9172,6 +9214,7 @@ void R_HDR_RenderBloomTexture(void)
 	R_Bloom_MakeTexture();
 
 	// restore the view settings
+	r_waterstate.enabled = oldwaterstate;
 	r_refdef.view.width = oldwidth;
 	r_refdef.view.height = oldheight;
 	r_refdef.view.colorscale = oldcolorscale;
@@ -9295,10 +9338,14 @@ static void R_BlendView(void)
 #define sscanf sscanf_s
 #endif
 		memset(uservecs, 0, sizeof(uservecs));
-		sscanf(r_glsl_postprocess_uservec1.string, "%f %f %f %f", &uservecs[0][0], &uservecs[0][1], &uservecs[0][2], &uservecs[0][3]);
-		sscanf(r_glsl_postprocess_uservec2.string, "%f %f %f %f", &uservecs[1][0], &uservecs[1][1], &uservecs[1][2], &uservecs[1][3]);
-		sscanf(r_glsl_postprocess_uservec3.string, "%f %f %f %f", &uservecs[2][0], &uservecs[2][1], &uservecs[2][2], &uservecs[2][3]);
-		sscanf(r_glsl_postprocess_uservec4.string, "%f %f %f %f", &uservecs[3][0], &uservecs[3][1], &uservecs[3][2], &uservecs[3][3]);
+		if (r_glsl_postprocess_uservec1_enable.integer)
+			sscanf(r_glsl_postprocess_uservec1.string, "%f %f %f %f", &uservecs[0][0], &uservecs[0][1], &uservecs[0][2], &uservecs[0][3]);
+		if (r_glsl_postprocess_uservec2_enable.integer)
+			sscanf(r_glsl_postprocess_uservec2.string, "%f %f %f %f", &uservecs[1][0], &uservecs[1][1], &uservecs[1][2], &uservecs[1][3]);
+		if (r_glsl_postprocess_uservec3_enable.integer)
+			sscanf(r_glsl_postprocess_uservec3.string, "%f %f %f %f", &uservecs[2][0], &uservecs[2][1], &uservecs[2][2], &uservecs[2][3]);
+		if (r_glsl_postprocess_uservec4_enable.integer)
+			sscanf(r_glsl_postprocess_uservec4.string, "%f %f %f %f", &uservecs[3][0], &uservecs[3][1], &uservecs[3][2], &uservecs[3][3]);
 
 		R_ResetViewRendering2D();
 		GL_Color(1, 1, 1, 1);
@@ -9434,7 +9481,7 @@ void R_UpdateVariables(void)
 
 	r_refdef.scene.rtworld = r_shadow_realtime_world.integer != 0;
 	r_refdef.scene.rtworldshadows = r_shadow_realtime_world_shadows.integer && vid.stencil;
-	r_refdef.scene.rtdlight = (r_shadow_realtime_world.integer || r_shadow_realtime_dlight.integer) && !gl_flashblend.integer && r_dynamic.integer;
+	r_refdef.scene.rtdlight = r_shadow_realtime_dlight.integer != 0 && !gl_flashblend.integer && r_dynamic.integer;
 	r_refdef.scene.rtdlightshadows = r_refdef.scene.rtdlight && r_shadow_realtime_dlight_shadows.integer && vid.stencil;
 	r_refdef.lightmapintensity = r_refdef.scene.rtworld ? r_shadow_realtime_world_lightmaps.value : 1;
 	if (FAKELIGHT_ENABLED)
@@ -9598,6 +9645,7 @@ R_RenderView
 */
 void R_RenderView(void)
 {
+	matrix4x4_t originalmatrix = r_refdef.view.matrix, offsetmatrix;
 	if (r_timereport_active)
 		R_TimeReport("start");
 	r_textureframe++; // used only by R_GetCurrentTexture
@@ -9612,6 +9660,13 @@ void R_RenderView(void)
 	R_AnimCache_ClearCache();
 	R_FrameData_NewFrame();
 
+	/* adjust for stereo display */
+	if(R_Stereo_Active())
+	{
+		Matrix4x4_CreateFromQuakeEntity(&offsetmatrix, 0, r_stereo_separation.value * (0.5f - r_stereo_side), 0, 0, r_stereo_angle.value * (0.5f - r_stereo_side), 0, 1);
+		Matrix4x4_Concat(&r_refdef.view.matrix, &originalmatrix, &offsetmatrix);
+	}
+
 	if (r_refdef.view.isoverlay)
 	{
 		// TODO: FIXME: move this into its own backend function maybe? [2/5/2008 Andreas]
@@ -9625,12 +9680,17 @@ void R_RenderView(void)
 
 		R_RenderScene();
 
+		r_refdef.view.matrix = originalmatrix;
+
 		CHECKGLERROR
 		return;
 	}
 
 	if (!r_refdef.scene.entities || r_refdef.view.width * r_refdef.view.height == 0 || !r_renderview.integer || cl_videoplaying/* || !r_refdef.scene.worldmodel*/)
+	{
+		r_refdef.view.matrix = originalmatrix;
 		return; //Host_Error ("R_RenderView: NULL worldmodel");
+	}
 
 	r_refdef.view.colorscale = r_hdr_scenebrightness.value;
 
@@ -9682,6 +9742,8 @@ void R_RenderView(void)
 
 	GL_Scissor(0, 0, vid.width, vid.height);
 	GL_ScissorTest(false);
+
+	r_refdef.view.matrix = originalmatrix;
 
 	CHECKGLERROR
 }
@@ -9983,7 +10045,7 @@ void R_DrawBBoxMesh(vec3_t mins, vec3_t maxs, float cr, float cg, float cb, floa
 	GL_DepthMask(false);
 	GL_DepthRange(0, 1);
 	GL_PolygonOffset(r_refdef.polygonfactor, r_refdef.polygonoffset);
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 
 	vertex3f[ 0] = mins[0];vertex3f[ 1] = mins[1];vertex3f[ 2] = mins[2]; //
 	vertex3f[ 3] = maxs[0];vertex3f[ 4] = mins[1];vertex3f[ 5] = mins[2];
@@ -10153,7 +10215,6 @@ void R_DrawNoModel_TransparentCallback(const entity_render_t *ent, const rtlight
 	GL_PolygonOffset(rsurface.basepolygonfactor, rsurface.basepolygonoffset);
 	GL_DepthTest(!(rsurface.ent_flags & RENDER_NODEPTHTEST));
 	GL_CullFace((rsurface.ent_flags & RENDER_DOUBLESIDED) ? GL_NONE : r_refdef.view.cullface_back);
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 	memcpy(color4f, nomodelcolor4f, sizeof(float[6*4]));
 	for (i = 0, c = color4f;i < 6;i++, c += 4)
 	{
@@ -10173,7 +10234,8 @@ void R_DrawNoModel_TransparentCallback(const entity_render_t *ent, const rtlight
 			c[2] = (c[2] * f1 + r_refdef.fogcolor[2] * f2);
 		}
 	}
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
+	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 	R_Mesh_PrepareVertices_Generic_Arrays(6, nomodelvertex3f, color4f, NULL);
 	R_Mesh_Draw(0, 6, 0, 8, nomodelelement3i, NULL, 0, nomodelelement3s, NULL, 0);
 }
@@ -10830,6 +10892,7 @@ void R_Mesh_ResizeArrays(int newvertices)
 
 void RSurf_ActiveWorldEntity(void)
 {
+	int newvertices;
 	dp_model_t *model = r_refdef.scene.worldmodel;
 	//if (rsurface.entity == r_refdef.scene.worldentity)
 	//	return;
@@ -10840,7 +10903,9 @@ void RSurf_ActiveWorldEntity(void)
 	rsurface.ent_qwskin = -1;
 	rsurface.ent_shadertime = 0;
 	rsurface.ent_flags = r_refdef.scene.worldentity->flags;
-	R_Mesh_ResizeArrays(max(model->surfmesh.num_vertices, model->surfmesh.num_triangles));
+	newvertices = max(model->surfmesh.num_vertices, model->surfmesh.num_triangles);
+	if (rsurface.array_size < newvertices)
+		R_Mesh_ResizeArrays(newvertices);
 	rsurface.matrix = identitymatrix;
 	rsurface.inversematrix = identitymatrix;
 	rsurface.matrixscale = 1;
@@ -10944,6 +11009,7 @@ void RSurf_ActiveWorldEntity(void)
 
 void RSurf_ActiveModelEntity(const entity_render_t *ent, qboolean wantnormals, qboolean wanttangents, qboolean prepass)
 {
+	int newvertices;
 	dp_model_t *model = ent->model;
 	//if (rsurface.entity == ent && (!model->surfmesh.isanimated || (!wantnormals && !wanttangents)))
 	//	return;
@@ -10954,7 +11020,9 @@ void RSurf_ActiveModelEntity(const entity_render_t *ent, qboolean wantnormals, q
 	rsurface.ent_qwskin = (ent->entitynumber <= cl.maxclients && ent->entitynumber >= 1 && cls.protocol == PROTOCOL_QUAKEWORLD && cl.scores[ent->entitynumber - 1].qw_skin[0] && !strcmp(ent->model->name, "progs/player.mdl")) ? (ent->entitynumber - 1) : -1;
 	rsurface.ent_shadertime = ent->shadertime;
 	rsurface.ent_flags = ent->flags;
-	R_Mesh_ResizeArrays(max(model->surfmesh.num_vertices, model->surfmesh.num_triangles));
+	newvertices = max(model->surfmesh.num_vertices, model->surfmesh.num_triangles);
+	if (rsurface.array_size < newvertices)
+		R_Mesh_ResizeArrays(newvertices);
 	rsurface.matrix = ent->matrix;
 	rsurface.inversematrix = ent->inversematrix;
 	rsurface.matrixscale = Matrix4x4_ScaleFromMatrix(&rsurface.matrix);
@@ -11124,7 +11192,7 @@ void RSurf_ActiveModelEntity(const entity_render_t *ent, qboolean wantnormals, q
 
 void RSurf_ActiveCustomEntity(const matrix4x4_t *matrix, const matrix4x4_t *inversematrix, int entflags, double shadertime, float r, float g, float b, float a, int numvertices, const float *vertex3f, const float *texcoord2f, const float *normal3f, const float *svector3f, const float *tvector3f, const float *color4f, int numtriangles, const int *element3i, const unsigned short *element3s, qboolean wantnormals, qboolean wanttangents)
 {
-	int i;
+	int newvertices;
 
 	rsurface.entity = r_refdef.scene.worldentity;
 	rsurface.skeleton = NULL;
@@ -11134,7 +11202,9 @@ void RSurf_ActiveCustomEntity(const matrix4x4_t *matrix, const matrix4x4_t *inve
 	rsurface.ent_flags = entflags;
 	rsurface.modelnumvertices = numvertices;
 	rsurface.modelnumtriangles = numtriangles;
-	R_Mesh_ResizeArrays(max(rsurface.modelnumvertices, rsurface.modelnumtriangles));
+	newvertices = max(rsurface.modelnumvertices, rsurface.modelnumtriangles);
+	if (rsurface.array_size < newvertices)
+		R_Mesh_ResizeArrays(newvertices);
 	rsurface.matrix = *matrix;
 	rsurface.inversematrix = *inversematrix;
 	rsurface.matrixscale = Matrix4x4_ScaleFromMatrix(&rsurface.matrix);
@@ -11263,25 +11333,6 @@ void RSurf_ActiveCustomEntity(const matrix4x4_t *matrix, const matrix4x4_t *inve
 			rsurface.modeltvector3f = rsurface.array_modeltvector3f;
 		}
 	}
-
-	// now convert arrays into vertexmesh structs
-	for (i = 0;i < numvertices;i++)
-	{
-		VectorCopy(rsurface.modelvertex3f + 3*i, rsurface.array_modelvertexposition[i].vertex3f);
-		VectorCopy(rsurface.modelvertex3f + 3*i, rsurface.array_modelvertexmesh[i].vertex3f);
-		if (rsurface.modelsvector3f)
-			VectorCopy(rsurface.modelsvector3f + 3*i, rsurface.array_modelvertexmesh[i].svector3f);
-		if (rsurface.modeltvector3f)
-			VectorCopy(rsurface.modeltvector3f + 3*i, rsurface.array_modelvertexmesh[i].tvector3f);
-		if (rsurface.modelnormal3f)
-			VectorCopy(rsurface.modelnormal3f + 3*i, rsurface.array_modelvertexmesh[i].normal3f);
-		if (rsurface.modellightmapcolor4f)
-			Vector4Scale(rsurface.modellightmapcolor4f + 4*i, 255.0f, rsurface.array_modelvertexmesh[i].color4ub);
-		if (rsurface.modeltexcoordtexture2f)
-			Vector2Copy(rsurface.modeltexcoordtexture2f + 2*i, rsurface.array_modelvertexmesh[i].texcoordtexture2f);
-		if (rsurface.modeltexcoordlightmap2f)
-			Vector2Copy(rsurface.modeltexcoordlightmap2f + 2*i, rsurface.array_modelvertexmesh[i].texcoordlightmap2f);
-	}
 }
 
 float RSurf_FogPoint(const float *v)
@@ -11373,8 +11424,6 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 			endvertex = surfaceendvertex;
 		numtriangles += surfacenumtriangles;
 	}
-	if (!numtriangles)
-		return;
 
 	// we now know the vertex range used, and if there are any gaps in it
 	rsurface.batchfirstvertex = firstvertex;
@@ -11818,8 +11867,8 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 				}
 			}
 			// if we get here, BATCHNEED_ARRAY_NORMAL and BATCHNEED_ARRAY_VECTOR are in batchneed, so no need to check
-			Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, true);
-			Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, true);
+			Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, r_smoothnormals_areaweighting.integer != 0);
+			Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, r_smoothnormals_areaweighting.integer != 0);
 			rsurface.batchvertex3f = rsurface.array_batchvertex3f;
 			rsurface.batchvertex3f_vertexbuffer = NULL;
 			rsurface.batchvertex3f_bufferoffset = 0;
@@ -11923,14 +11972,14 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 			rsurface.batchvertex3f_bufferoffset = 0;
 			if(batchneed & (BATCHNEED_ARRAY_NORMAL | BATCHNEED_ARRAY_VECTOR)) // otherwise these can stay NULL
 			{
-				Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, true);
+				Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, r_smoothnormals_areaweighting.integer != 0);
 				rsurface.batchnormal3f = rsurface.array_batchnormal3f;
 				rsurface.batchnormal3f_vertexbuffer = NULL;
 				rsurface.batchnormal3f_bufferoffset = 0;
 			}
 			if(batchneed & BATCHNEED_ARRAY_VECTOR) // otherwise these can stay NULL
 			{
-				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, true);
+				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, r_smoothnormals_areaweighting.integer != 0);
 				rsurface.batchsvector3f = rsurface.array_batchsvector3f;
 				rsurface.batchsvector3f_vertexbuffer = NULL;
 				rsurface.batchsvector3f_bufferoffset = 0;
@@ -11956,7 +12005,7 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 			rsurface.batchnormal3f_bufferoffset = 0;
 			if(batchneed & BATCHNEED_ARRAY_VECTOR) // otherwise these can stay NULL
 			{
-				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, true);
+				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, r_smoothnormals_areaweighting.integer != 0);
 				rsurface.batchsvector3f = rsurface.array_batchsvector3f;
 				rsurface.batchsvector3f_vertexbuffer = NULL;
 				rsurface.batchsvector3f_bufferoffset = 0;
@@ -11987,7 +12036,7 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 				VectorMA(rsurface.batchvertex3f + 3*j, scale, rsurface.batchnormal3f + 3*j, rsurface.array_batchvertex3f + 3*j);
 			}
 			// if we get here, BATCHNEED_ARRAY_NORMAL is in batchneed, so no need to check
-			Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, true);
+			Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, r_smoothnormals_areaweighting.integer != 0);
 			rsurface.batchvertex3f = rsurface.array_batchvertex3f;
 			rsurface.batchvertex3f_vertexbuffer = NULL;
 			rsurface.batchvertex3f_bufferoffset = 0;
@@ -11996,7 +12045,7 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 			rsurface.batchnormal3f_bufferoffset = 0;
 			if(batchneed & BATCHNEED_ARRAY_VECTOR) // otherwise these can stay NULL
 			{
-				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, true);
+				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, r_smoothnormals_areaweighting.integer != 0);
 				rsurface.batchsvector3f = rsurface.array_batchsvector3f;
 				rsurface.batchsvector3f_vertexbuffer = NULL;
 				rsurface.batchsvector3f_bufferoffset = 0;
@@ -12013,7 +12062,7 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 				VectorMA(rsurface.batchvertex3f + 3*j, scale, rsurface.batchnormal3f + 3*j, rsurface.array_batchvertex3f + 3*j);
 			}
 			// if we get here, BATCHNEED_ARRAY_NORMAL is in batchneed, so no need to check
-			Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, true);
+			Mod_BuildNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchnormal3f, r_smoothnormals_areaweighting.integer != 0);
 			rsurface.batchvertex3f = rsurface.array_batchvertex3f;
 			rsurface.batchvertex3f_vertexbuffer = NULL;
 			rsurface.batchvertex3f_bufferoffset = 0;
@@ -12022,7 +12071,7 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 			rsurface.batchnormal3f_bufferoffset = 0;
 			if(batchneed & BATCHNEED_ARRAY_VECTOR) // otherwise these can stay NULL
 			{
-				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, true);
+				Mod_BuildTextureVectorsFromNormals(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchnumtriangles, rsurface.array_batchvertex3f, rsurface.batchtexcoordtexture2f, rsurface.array_batchnormal3f, rsurface.batchelement3i + 3 * rsurface.batchfirsttriangle, rsurface.array_batchsvector3f, rsurface.array_batchtvector3f, r_smoothnormals_areaweighting.integer != 0);
 				rsurface.batchsvector3f = rsurface.array_batchsvector3f;
 				rsurface.batchsvector3f_vertexbuffer = NULL;
 				rsurface.batchsvector3f_bufferoffset = 0;
@@ -12165,6 +12214,36 @@ void RSurf_PrepareVerticesForBatch(int batchneed, int texturenumsurfaces, const 
 
 void RSurf_DrawBatch(void)
 {
+	// sometimes a zero triangle surface (usually a degenerate patch) makes it
+	// through the pipeline, killing it earlier in the pipeline would have
+	// per-surface overhead rather than per-batch overhead, so it's best to
+	// reject it here, before it hits glDraw.
+	if (rsurface.batchnumtriangles == 0)
+		return;
+#if 0
+	// batch debugging code
+	if (r_test.integer && rsurface.entity == r_refdef.scene.worldentity && rsurface.batchvertex3f == r_refdef.scene.worldentity->model->surfmesh.data_vertex3f)
+	{
+		int i;
+		int j;
+		int c;
+		const int *e;
+		e = rsurface.batchelement3i + rsurface.batchfirsttriangle*3;
+		for (i = 0;i < rsurface.batchnumtriangles*3;i++)
+		{
+			c = e[i];
+			for (j = 0;j < rsurface.entity->model->num_surfaces;j++)
+			{
+				if (c >= rsurface.modelsurfaces[j].num_firstvertex && c < (rsurface.modelsurfaces[j].num_firstvertex + rsurface.modelsurfaces[j].num_vertices))
+				{
+					if (rsurface.modelsurfaces[j].texture != rsurface.texture)
+						Sys_Error("RSurf_DrawBatch: index %i uses different texture (%s) than surface %i which it belongs to (which uses %s)\n", c, rsurface.texture->name, j, rsurface.modelsurfaces[j].texture->name);
+					break;
+				}
+			}
+		}
+	}
+#endif
 	R_Mesh_Draw(rsurface.batchfirstvertex, rsurface.batchnumvertices, rsurface.batchfirsttriangle, rsurface.batchnumtriangles, rsurface.batchelement3i, rsurface.batchelement3i_indexbuffer, rsurface.batchelement3i_bufferoffset, rsurface.batchelement3s, rsurface.batchelement3s_indexbuffer, rsurface.batchelement3s_bufferoffset);
 }
 
@@ -12176,13 +12255,20 @@ static int RSurf_FindWaterPlaneForSurface(const msurface_t *surface)
 	vec3_t vert;
 	const float *v;
 	r_waterstate_waterplane_t *p;
+	qboolean prepared = false;
 	bestd = 0;
 	for (planeindex = 0, p = r_waterstate.waterplanes;planeindex < r_waterstate.numwaterplanes;planeindex++, p++)
 	{
 		if(p->camera_entity != rsurface.texture->camera_entity)
 			continue;
 		d = 0;
-		RSurf_PrepareVerticesForBatch(BATCHNEED_ARRAY_VERTEX, 1, &surface);
+		if(!prepared)
+		{
+			RSurf_PrepareVerticesForBatch(BATCHNEED_ARRAY_VERTEX, 1, &surface);
+			prepared = true;
+			if(rsurface.batchnumvertices == 0)
+				break;
+		}
 		for (vertexindex = 0, v = rsurface.batchvertex3f + rsurface.batchfirstvertex * 3;vertexindex < rsurface.batchnumvertices;vertexindex++, v += 3)
 		{
 			Matrix4x4_Transform(&rsurface.matrix, v, vert);
@@ -12195,6 +12281,10 @@ static int RSurf_FindWaterPlaneForSurface(const msurface_t *surface)
 		}
 	}
 	return bestplaneindex;
+	// NOTE: this MAY return a totally unrelated water plane; we can ignore
+	// this situation though, as it might be better to render single larger
+	// batches with useless stuff (backface culled for example) than to
+	// render multiple smaller batches
 }
 
 static void RSurf_DrawBatch_GL11_MakeFullbrightLightmapColorArray(void)
@@ -12547,16 +12637,23 @@ static void R_DrawTextureSurfaceList_GL20(int texturenumsurfaces, const msurface
 	// bind lightmap texture
 
 	// water/refraction/reflection/camera surfaces have to be handled specially
-	if ((rsurface.texture->currentmaterialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_CAMERA | MATERIALFLAG_REFLECTION)) && !r_waterstate.renderingscene)
+	if ((rsurface.texture->currentmaterialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_CAMERA | MATERIALFLAG_REFLECTION)))
 	{
 		int start, end, startplaneindex;
 		for (start = 0;start < texturenumsurfaces;start = end)
 		{
 			startplaneindex = RSurf_FindWaterPlaneForSurface(texturesurfacelist[start]);
+			if(startplaneindex < 0)
+			{
+				// this happens if the plane e.g. got backface culled and thus didn't get a water plane. We can just ignore this.
+				// Con_Printf("No matching water plane for surface with material flags 0x%08x - PLEASE DEBUG THIS\n", rsurface.texture->currentmaterialflags);
+				end = start + 1;
+				continue;
+			}
 			for (end = start + 1;end < texturenumsurfaces && startplaneindex == RSurf_FindWaterPlaneForSurface(texturesurfacelist[end]);end++)
 				;
 			// now that we have a batch using the same planeindex, render it
-			if ((rsurface.texture->currentmaterialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_CAMERA)) && !r_waterstate.renderingscene)
+			if ((rsurface.texture->currentmaterialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_CAMERA)))
 			{
 				// render water or distortion background
 				GL_DepthMask(true);
@@ -12567,7 +12664,7 @@ static void R_DrawTextureSurfaceList_GL20(int texturenumsurfaces, const msurface
 				R_SetupShader_Surface(vec3_origin, (rsurface.texture->currentmaterialflags & MATERIALFLAG_MODELLIGHT) != 0, 1, 1, rsurface.texture->specularscale, RSURFPASS_BASE, end-start, texturesurfacelist + start, NULL);
 				RSurf_DrawBatch();
 			}
-			else if ((rsurface.texture->currentmaterialflags & MATERIALFLAG_REFLECTION) && !r_waterstate.renderingscene)
+			else if ((rsurface.texture->currentmaterialflags & MATERIALFLAG_REFLECTION))
 			{
 				// render surface with reflection texture as input
 				GL_DepthMask(writedepth && !(rsurface.texture->currentmaterialflags & MATERIALFLAG_BLENDED));
@@ -12803,7 +12900,7 @@ static void R_DrawTextureSurfaceList_ShowSurfaces(int texturenumsurfaces, const 
 	float c[4];
 
 	GL_AlphaTest(false);
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 
 	if(rsurface.texture && rsurface.texture->currentskinframe)
@@ -13107,7 +13204,7 @@ static void R_DrawSurface_TransparentCallback(const entity_render_t *ent, const 
 				GL_BlendFunc(GL_ONE, GL_ZERO);
 				GL_DepthMask(true);
 				GL_AlphaTest(false);
-				R_Mesh_ResetTextureState();
+//				R_Mesh_ResetTextureState();
 				R_SetupShader_DepthOrShadow();
 			}
 			RSurf_SetupDepthAndCulling();
@@ -13388,7 +13485,7 @@ void R_DrawLoc_Callback(const entity_render_t *ent, const rtlight_t *rtlight, in
 	GL_CullFace(GL_NONE);
 	R_EntityMatrix(&identitymatrix);
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 
 	i = surfacelist[0];
 	GL_Color(((i & 0x0007) >> 0) * (1.0f / 7.0f) * r_refdef.view.colorscale,
@@ -13979,9 +14076,9 @@ static void R_DrawModelDecals_Entity(entity_render_t *ent)
 		if (decal->triangleindex >= 0 && decal->triangleindex < rsurface.modelnumtriangles)
 		{
 			e = rsurface.modelelement3i + 3*decal->triangleindex;
-			VectorCopy(rsurface.modelvertexposition[e[0]].vertex3f, v3f);
-			VectorCopy(rsurface.modelvertexposition[e[1]].vertex3f, v3f + 3);
-			VectorCopy(rsurface.modelvertexposition[e[2]].vertex3f, v3f + 6);
+			VectorCopy(rsurface.modelvertex3f + 3*e[0], v3f);
+			VectorCopy(rsurface.modelvertex3f + 3*e[1], v3f + 3);
+			VectorCopy(rsurface.modelvertex3f + 3*e[2], v3f + 6);
 		}
 		else
 		{
@@ -14013,7 +14110,7 @@ static void R_DrawModelDecals_Entity(entity_render_t *ent)
 		// now render the decals all at once
 		// (this assumes they all use one particle font texture!)
 		RSurf_ActiveCustomEntity(&rsurface.matrix, &rsurface.inversematrix, rsurface.ent_flags, rsurface.ent_shadertime, 1, 1, 1, 1, numdecals*3, decalsystem->vertex3f, decalsystem->texcoord2f, NULL, NULL, NULL, decalsystem->color4f, numtris, decalsystem->element3i, decalsystem->element3s, false, false);
-		R_Mesh_ResetTextureState();
+//		R_Mesh_ResetTextureState();
 		R_Mesh_PrepareVertices_Generic_Arrays(numtris * 3, decalsystem->vertex3f, decalsystem->color4f, decalsystem->texcoord2f);
 		GL_DepthMask(false);
 		GL_DepthRange(0, 1);
@@ -14091,7 +14188,7 @@ void R_DrawDebugModel(void)
 
 	flagsmask = MATERIALFLAG_SKY | MATERIALFLAG_WALL;
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 	GL_DepthRange(0, 1);
 	GL_DepthTest(!r_showdisabledepthtest.integer);
@@ -14148,7 +14245,7 @@ void R_DrawDebugModel(void)
 
 	GL_PolygonOffset(r_refdef.polygonfactor, r_refdef.polygonoffset);
 
-	if (r_showtris.integer || r_shownormals.integer)
+	if (r_showtris.integer || (r_shownormals.value != 0))
 	{
 		if (r_showdisabledepthtest.integer)
 		{
@@ -14185,13 +14282,13 @@ void R_DrawDebugModel(void)
 				if (r_shownormals.value < 0)
 				{
 					qglBegin(GL_LINES);
-					for (k = 0, l = surface->num_firstvertex;k < surface->num_vertices;k++, l++)
+					for (k = 0, l = rsurface.batchfirstvertex;k < rsurface.batchnumvertices;k++, l++)
 					{
 						VectorCopy(rsurface.batchvertex3f + l * 3, v);
-						GL_Color(r_refdef.view.colorscale, 0, 0, 1);
+						GL_Color(0, 0, r_refdef.view.colorscale, 1);
 						qglVertex3f(v[0], v[1], v[2]);
-						VectorMA(v, -r_shownormals.value, rsurface.batchsvector3f + l * 3, v);
-						GL_Color(r_refdef.view.colorscale, 1, 1, 1);
+						VectorMA(v, -r_shownormals.value, rsurface.batchnormal3f + l * 3, v);
+						GL_Color(r_refdef.view.colorscale, r_refdef.view.colorscale, r_refdef.view.colorscale, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 					}
 					qglEnd();
@@ -14200,37 +14297,37 @@ void R_DrawDebugModel(void)
 				if (r_shownormals.value > 0 && rsurface.batchsvector3f)
 				{
 					qglBegin(GL_LINES);
-					for (k = 0, l = surface->num_firstvertex;k < surface->num_vertices;k++, l++)
+					for (k = 0, l = rsurface.batchfirstvertex;k < rsurface.batchnumvertices;k++, l++)
 					{
 						VectorCopy(rsurface.batchvertex3f + l * 3, v);
 						GL_Color(r_refdef.view.colorscale, 0, 0, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 						VectorMA(v, r_shownormals.value, rsurface.batchsvector3f + l * 3, v);
-						GL_Color(r_refdef.view.colorscale, 1, 1, 1);
+						GL_Color(r_refdef.view.colorscale, r_refdef.view.colorscale, r_refdef.view.colorscale, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 					}
 					qglEnd();
 					CHECKGLERROR
 					qglBegin(GL_LINES);
-					for (k = 0, l = surface->num_firstvertex;k < surface->num_vertices;k++, l++)
+					for (k = 0, l = rsurface.batchfirstvertex;k < rsurface.batchnumvertices;k++, l++)
 					{
 						VectorCopy(rsurface.batchvertex3f + l * 3, v);
 						GL_Color(0, r_refdef.view.colorscale, 0, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 						VectorMA(v, r_shownormals.value, rsurface.batchtvector3f + l * 3, v);
-						GL_Color(r_refdef.view.colorscale, 1, 1, 1);
+						GL_Color(r_refdef.view.colorscale, r_refdef.view.colorscale, r_refdef.view.colorscale, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 					}
 					qglEnd();
 					CHECKGLERROR
 					qglBegin(GL_LINES);
-					for (k = 0, l = surface->num_firstvertex;k < surface->num_vertices;k++, l++)
+					for (k = 0, l = rsurface.batchfirstvertex;k < rsurface.batchnumvertices;k++, l++)
 					{
 						VectorCopy(rsurface.batchvertex3f + l * 3, v);
 						GL_Color(0, 0, r_refdef.view.colorscale, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 						VectorMA(v, r_shownormals.value, rsurface.batchnormal3f + l * 3, v);
-						GL_Color(r_refdef.view.colorscale, 1, 1, 1);
+						GL_Color(r_refdef.view.colorscale, r_refdef.view.colorscale, r_refdef.view.colorscale, 1);
 						qglVertex3f(v[0], v[1], v[2]);
 					}
 					qglEnd();

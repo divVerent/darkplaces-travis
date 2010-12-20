@@ -126,6 +126,7 @@ const char *vm_sv_extensions =
 "DP_QC_UNLIMITEDTEMPSTRINGS "
 "DP_QC_URI_ESCAPE "
 "DP_QC_URI_GET "
+"DP_QC_URI_POST "
 "DP_QC_VECTOANGLES_WITH_ROLL "
 "DP_QC_VECTORVECTORS "
 "DP_QC_WHICHPACK "
@@ -166,6 +167,7 @@ const char *vm_sv_extensions =
 "DP_SV_PING "
 "DP_SV_PING_PACKETLOSS "
 "DP_SV_PLAYERPHYSICS "
+"DP_PHYSICS_ODE "
 "DP_SV_POINTPARTICLES "
 "DP_SV_POINTSOUND "
 "DP_SV_PRECACHEANYTIME "
@@ -3651,7 +3653,7 @@ NULL,							// #509
 VM_uri_escape,					// #510 string(string in) uri_escape = #510;
 VM_uri_unescape,				// #511 string(string in) uri_unescape = #511;
 VM_etof,					// #512 float(entity ent) num_for_edict = #512 (DP_QC_NUM_FOR_EDICT)
-VM_uri_get,						// #513 float(string uril, float id) uri_get = #513; (DP_QC_URI_GET)
+VM_uri_get,						// #513 float(string uri, float id, [string post_contenttype, string post_delim, [float buf]]) uri_get = #513; (DP_QC_URI_GET, DP_QC_URI_POST)
 VM_tokenize_console,					// #514 float(string str) tokenize_console = #514; (DP_QC_TOKENIZE_CONSOLE)
 VM_argv_start_index,					// #515 float(float idx) argv_start_index = #515; (DP_QC_TOKENIZE_CONSOLE)
 VM_argv_end_index,						// #516 float(float idx) argv_end_index = #516; (DP_QC_TOKENIZE_CONSOLE)
@@ -3678,9 +3680,9 @@ NULL,							// #536
 NULL,							// #537
 NULL,							// #538
 NULL,							// #539
-NULL,							// #540
-NULL,							// #541
-NULL,							// #542
+VM_physics_enable,				// #540 void(entity e, float physics_enabled) physics_enable = #540; (DP_PHYSICS_ODE)
+VM_physics_addforce,			// #541 void(entity e, vector force, vector relative_ofs) physics_addforce = #541; (DP_PHYSICS_ODE)
+VM_physics_addtorque,			// #542 void(entity e, vector torque) physics_addtorque = #542; (DP_PHYSICS_ODE)
 NULL,							// #543
 NULL,							// #544
 NULL,							// #545

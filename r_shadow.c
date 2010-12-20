@@ -273,6 +273,7 @@ cvar_t r_shadow_debuglight = {0, "r_shadow_debuglight", "-1", "renders only one 
 cvar_t r_shadow_deferred = {CVAR_SAVE, "r_shadow_deferred", "0", "uses image-based lighting instead of geometry-based lighting, the method used renders a depth image and a normalmap image, renders lights into separate diffuse and specular images, and then combines this into the normal rendering, requires r_shadow_shadowmapping"};
 cvar_t r_shadow_deferred_8bitrange = {CVAR_SAVE, "r_shadow_deferred_8bitrange", "2", "dynamic range of image-based lighting when using 32bit color (does not apply to fp)"};
 //cvar_t r_shadow_deferred_fp = {CVAR_SAVE, "r_shadow_deferred_fp", "0", "use 16bit (1) or 32bit (2) floating point for accumulation of image-based lighting"};
+cvar_t r_shadow_usebihculling = {0, "r_shadow_usebihculling", "1", "use BIH (Bounding Interval Hierarchy) for culling lit surfaces instead of BSP (Binary Space Partitioning)"};
 cvar_t r_shadow_usenormalmap = {CVAR_SAVE, "r_shadow_usenormalmap", "1", "enables use of directional shading on lights"};
 cvar_t r_shadow_gloss = {CVAR_SAVE, "r_shadow_gloss", "1", "0 disables gloss (specularity) rendering, 1 uses gloss if textures are found, 2 forces a flat metallic specular effect on everything without textures (similar to tenebrae)"};
 cvar_t r_shadow_gloss2intensity = {0, "r_shadow_gloss2intensity", "0.125", "how bright the forced flat gloss should look if r_shadow_gloss is 2"};
@@ -312,6 +313,7 @@ cvar_t r_shadow_shadowmapping_nearclip = {CVAR_SAVE, "r_shadow_shadowmapping_nea
 cvar_t r_shadow_shadowmapping_bias = {CVAR_SAVE, "r_shadow_shadowmapping_bias", "0.03", "shadowmap bias parameter (this is multiplied by nearclip * 1024 / lodsize)"};
 cvar_t r_shadow_shadowmapping_polygonfactor = {CVAR_SAVE, "r_shadow_shadowmapping_polygonfactor", "2", "slope-dependent shadowmapping bias"};
 cvar_t r_shadow_shadowmapping_polygonoffset = {CVAR_SAVE, "r_shadow_shadowmapping_polygonoffset", "0", "constant shadowmapping bias"};
+cvar_t r_shadow_sortsurfaces = {0, "r_shadow_sortsurfaces", "1", "improve performance by sorting illuminated surfaces by texture"};
 cvar_t r_shadow_polygonfactor = {0, "r_shadow_polygonfactor", "0", "how much to enlarge shadow volume polygons when rendering (should be 0!)"};
 cvar_t r_shadow_polygonoffset = {0, "r_shadow_polygonoffset", "1", "how much to push shadow volumes into the distance when rendering, to reduce chances of zfighting artifacts (should not be less than 0)"};
 cvar_t r_shadow_texture3d = {0, "r_shadow_texture3d", "1", "use 3D voxel textures for spherical attenuation rather than cylindrical (does not affect OpenGL 2.0 render path)"};
@@ -625,6 +627,7 @@ void R_Shadow_Init(void)
 {
 	Cvar_RegisterVariable(&r_shadow_bumpscale_basetexture);
 	Cvar_RegisterVariable(&r_shadow_bumpscale_bumpmap);
+	Cvar_RegisterVariable(&r_shadow_usebihculling);
 	Cvar_RegisterVariable(&r_shadow_usenormalmap);
 	Cvar_RegisterVariable(&r_shadow_debuglight);
 	Cvar_RegisterVariable(&r_shadow_deferred);
@@ -668,6 +671,7 @@ void R_Shadow_Init(void)
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_bias);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_polygonfactor);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_polygonoffset);
+	Cvar_RegisterVariable(&r_shadow_sortsurfaces);
 	Cvar_RegisterVariable(&r_shadow_polygonfactor);
 	Cvar_RegisterVariable(&r_shadow_polygonoffset);
 	Cvar_RegisterVariable(&r_shadow_texture3d);
@@ -3818,7 +3822,7 @@ void R_Shadow_DrawPrepass(void)
 	{
 		lightindex = r_shadow_debuglight.integer;
 		light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-		if (light && (light->flags & flag))
+		if (light && (light->flags & flag) && light->rtlight.draw)
 			R_Shadow_DrawLight(&light->rtlight);
 	}
 	else
@@ -3827,13 +3831,14 @@ void R_Shadow_DrawPrepass(void)
 		for (lightindex = 0;lightindex < range;lightindex++)
 		{
 			light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-			if (light && (light->flags & flag))
+			if (light && (light->flags & flag) && light->rtlight.draw)
 				R_Shadow_DrawLight(&light->rtlight);
 		}
 	}
 	if (r_refdef.scene.rtdlight)
 		for (lnum = 0;lnum < r_refdef.scene.numlights;lnum++)
-			R_Shadow_DrawLight(r_refdef.scene.lights[lnum]);
+			if (r_refdef.scene.lights[lnum]->draw)
+				R_Shadow_DrawLight(r_refdef.scene.lights[lnum]);
 
 	R_Mesh_ResetRenderTargets();
 
@@ -6001,56 +6006,70 @@ LIGHT SAMPLING
 =============================================================================
 */
 
-void R_CompleteLightPoint(vec3_t ambientcolor, vec3_t diffusecolor, vec3_t diffusenormal, const vec3_t p, qboolean dynamic, qboolean rtworld)
+void R_CompleteLightPoint(vec3_t ambientcolor, vec3_t diffusecolor, vec3_t diffusenormal, const vec3_t p, const int flags)
 {
+	int i, numlights, flag;
+	float f, relativepoint[3], dist, dist2, lightradius2;
+	rtlight_t *light;
+	dlight_t *dlight;
+
 	VectorClear(diffusecolor);
 	VectorClear(diffusenormal);
 
-	if (!r_fullbright.integer && r_refdef.scene.worldmodel && r_refdef.scene.worldmodel->brush.LightPoint)
+	if (flags & LP_LIGHTMAP)
 	{
-		ambientcolor[0] = ambientcolor[1] = ambientcolor[2] = r_refdef.scene.ambient;
-		r_refdef.scene.worldmodel->brush.LightPoint(r_refdef.scene.worldmodel, p, ambientcolor, diffusecolor, diffusenormal);
-	}
-	else
-		VectorSet(ambientcolor, 1, 1, 1);
-
-	if (dynamic)
-	{
-		int i, numlights, flag;
-		float f, v[3];
-		rtlight_t *light;
-		dlight_t *dlight;
-
-		// sample rtlights
-		if (rtworld)
+		if (!r_fullbright.integer && r_refdef.scene.worldmodel && r_refdef.scene.worldmodel->brush.LightPoint)
 		{
-			flag = r_refdef.scene.rtworld ? LIGHTFLAG_REALTIMEMODE : LIGHTFLAG_NORMALMODE;
-			numlights = Mem_ExpandableArray_IndexRange(&r_shadow_worldlightsarray);
-			for (i = 0; i < numlights; i++)
-			{
-				dlight = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, i);
-				if (!dlight)
-					continue;
-				light = &dlight->rtlight;
-				if (!(light->flags & flag))
-					continue;
-				Matrix4x4_Transform(&light->matrix_worldtolight, p, v);
-				f = 1 - VectorLength2(v);
-				if (f <= 0)
-					continue;
-				if (!light->shadow || CL_TraceLine(p, light->shadoworigin, MOVE_NOMONSTERS, NULL, SUPERCONTENTS_SOLID, true, false, NULL, false).fraction == 1)
-					VectorMA(ambientcolor, f, light->currentcolor, ambientcolor);
-			}
+			ambientcolor[0] = ambientcolor[1] = ambientcolor[2] = r_refdef.scene.ambient;
+			r_refdef.scene.worldmodel->brush.LightPoint(r_refdef.scene.worldmodel, p, ambientcolor, diffusecolor, diffusenormal);
 		}
-
+		else
+			VectorSet(ambientcolor, 1, 1, 1);
+	}
+	if (flags & LP_RTWORLD)
+	{
+		flag = r_refdef.scene.rtworld ? LIGHTFLAG_REALTIMEMODE : LIGHTFLAG_NORMALMODE;
+		numlights = Mem_ExpandableArray_IndexRange(&r_shadow_worldlightsarray);
+		for (i = 0; i < numlights; i++)
+		{
+			dlight = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, i);
+			if (!dlight)
+				continue;
+			light = &dlight->rtlight;
+			if (!(light->flags & flag))
+				continue;
+			// sample
+			lightradius2 = light->radius * light->radius;
+			VectorSubtract(light->shadoworigin, p, relativepoint);
+			dist2 = VectorLength2(relativepoint);
+			if (dist2 >= lightradius2)
+				continue;
+			dist = sqrt(dist2) / light->radius;
+			f = dist < 1 ? (r_shadow_lightintensityscale.value * ((1.0f - dist) * r_shadow_lightattenuationlinearscale.value / (r_shadow_lightattenuationdividebias.value + dist*dist))) : 0;
+			if (f <= 0)
+				continue;
+			// todo: add to both ambient and diffuse
+			if (!light->shadow || CL_TraceLine(p, light->shadoworigin, MOVE_NOMONSTERS, NULL, SUPERCONTENTS_SOLID, true, false, NULL, false).fraction == 1)
+				VectorMA(ambientcolor, f, light->currentcolor, ambientcolor);
+		}
+	}
+	if (flags & LP_DYNLIGHT)
+	{
 		// sample dlights
 		for (i = 0;i < r_refdef.scene.numlights;i++)
 		{
 			light = r_refdef.scene.lights[i];
-			Matrix4x4_Transform(&light->matrix_worldtolight, p, v);
-			f = (1 - VectorLength2(v)) * r_refdef.scene.rtlightstylevalue[light->style];
+			// sample
+			lightradius2 = light->radius * light->radius;
+			VectorSubtract(light->shadoworigin, p, relativepoint);
+			dist2 = VectorLength2(relativepoint);
+			if (dist2 >= lightradius2)
+				continue;
+			dist = sqrt(dist2) / light->radius;
+			f = dist < 1 ? (r_shadow_lightintensityscale.value * ((1.0f - dist) * r_shadow_lightattenuationlinearscale.value / (r_shadow_lightattenuationdividebias.value + dist*dist))) : 0;
 			if (f <= 0)
 				continue;
+			// todo: add to both ambient and diffuse
 			if (!light->shadow || CL_TraceLine(p, light->shadoworigin, MOVE_NOMONSTERS, NULL, SUPERCONTENTS_SOLID, true, false, NULL, false).fraction == 1)
 				VectorMA(ambientcolor, f, light->color, ambientcolor);
 		}

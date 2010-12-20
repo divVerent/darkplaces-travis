@@ -142,6 +142,8 @@ static size_t Crypto_UnParsePack(char *buf, size_t len, unsigned long header, co
 #define qd0_blind_id_INITIALIZE d0_blind_id_INITIALIZE
 #define qd0_blind_id_SHUTDOWN d0_blind_id_SHUTDOWN
 #define qd0_blind_id_util_sha256 d0_blind_id_util_sha256
+#define qd0_blind_id_sign_with_private_id_sign d0_blind_id_sign_with_private_id_sign
+#define qd0_blind_id_sign_with_private_id_sign_detached d0_blind_id_sign_with_private_id_sign_detached
 
 #else
 
@@ -189,6 +191,8 @@ static D0_EXPORT D0_WARN_UNUSED_RESULT D0_BOOL (*qd0_blind_id_sessionkey_public_
 static D0_EXPORT D0_WARN_UNUSED_RESULT D0_BOOL (*qd0_blind_id_INITIALIZE) (void);
 static D0_EXPORT void (*qd0_blind_id_SHUTDOWN) (void);
 static D0_EXPORT void (*qd0_blind_id_util_sha256) (char *out, const char *in, size_t n);
+static D0_EXPORT D0_WARN_UNUSED_RESULT D0_BOOL (*qd0_blind_id_sign_with_private_id_sign) (d0_blind_id_t *ctx, D0_BOOL is_first, D0_BOOL send_modulus, const char *message, size_t msglen, char *outbuf, size_t *outbuflen);
+static D0_EXPORT D0_WARN_UNUSED_RESULT D0_BOOL (*qd0_blind_id_sign_with_private_id_sign_detached) (d0_blind_id_t *ctx, D0_BOOL is_first, D0_BOOL send_modulus, const char *message, size_t msglen, char *outbuf, size_t *outbuflen);
 static dllfunction_t d0_blind_id_funcs[] =
 {
 	{"d0_blind_id_new", (void **) &qd0_blind_id_new},
@@ -224,6 +228,8 @@ static dllfunction_t d0_blind_id_funcs[] =
 	{"d0_blind_id_INITIALIZE", (void **) &qd0_blind_id_INITIALIZE},
 	{"d0_blind_id_SHUTDOWN", (void **) &qd0_blind_id_SHUTDOWN},
 	{"d0_blind_id_util_sha256", (void **) &qd0_blind_id_util_sha256},
+	{"d0_blind_id_sign_with_private_id_sign", (void **) &qd0_blind_id_sign_with_private_id_sign},
+	{"d0_blind_id_sign_with_private_id_sign_detached", (void **) &qd0_blind_id_sign_with_private_id_sign_detached},
 	{NULL, NULL}
 };
 // end of d0_blind_id interface
@@ -349,37 +355,6 @@ static size_t Crypto_LoadFile(const char *path, char *buf, size_t nmax)
 		n = 0;
 	FS_Close(f);
 	return (size_t) n;
-}
-
-static const char base64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-static void base64_3to4(const unsigned char *in, unsigned char *out, int bytes)
-{
-	unsigned char i0 = (bytes > 0) ? in[0] : 0;
-	unsigned char i1 = (bytes > 1) ? in[1] : 0;
-	unsigned char i2 = (bytes > 2) ? in[2] : 0;
-	unsigned char o0 = base64[i0 >> 2];
-	unsigned char o1 = base64[((i0 << 4) | (i1 >> 4)) & 077];
-	unsigned char o2 = base64[((i1 << 2) | (i2 >> 6)) & 077];
-	unsigned char o3 = base64[i2 & 077];
-	out[0] = (bytes > 0) ? o0 : '?';
-	out[1] = (bytes > 0) ? o1 : '?';
-	out[2] = (bytes > 1) ? o2 : '=';
-	out[3] = (bytes > 2) ? o3 : '=';
-}
-
-size_t base64_encode(unsigned char *buf, size_t buflen, size_t outbuflen)
-{
-	size_t blocks, i;
-	// expand the out-buffer
-	blocks = (buflen + 2) / 3;
-	if(blocks*4 > outbuflen)
-		return 0;
-	for(i = blocks; i > 0; )
-	{
-		--i;
-		base64_3to4(buf + 3*i, buf + 4*i, buflen - 3*i);
-	}
-	return blocks * 4;
 }
 
 static qboolean PutWithNul(char **data, size_t *len, const char *str)
@@ -726,7 +701,7 @@ qboolean Crypto_RetrieveHostKey(lhnetaddress_t *peeraddress, int *keyid, char *k
 }
 int Crypto_RetrieveLocalKey(int keyid, char *keyfp, size_t keyfplen, char *idfp, size_t idfplen) // return value: -1 if more to come, +1 if valid, 0 if end of list
 {
-	if(keyid < 0 || keyid > MAX_PUBKEYS)
+	if(keyid < 0 || keyid >= MAX_PUBKEYS)
 		return 0;
 	if(keyfp)
 		*keyfp = 0;
@@ -1210,7 +1185,7 @@ static void Crypto_Keys_f(void)
 		{
 			Con_Printf("%2d: public key key_%d.d0pk (fingerprint: %s)\n", i, i, pubkeys_fp64[i]);
 			if(pubkeys_havepriv[i])
-				Con_Printf("   private key key_%d.d0si (fingerprint: %s)\n", i, pubkeys_priv_fp64[i]);
+				Con_Printf("    private ID key_%d.d0si (fingerprint: %s)\n", i, pubkeys_priv_fp64[i]);
 		}
 	}
 }
@@ -1620,7 +1595,7 @@ static int Crypto_ServerParsePacket_Internal(const char *data_in, size_t len_in,
 			crypto->client_idfp[0] = 0;
 			crypto->server_keyfp[0] = 0;
 			crypto->server_idfp[0] = 0;
-			crypto->use_aes = aes;
+			crypto->use_aes = aes != 0;
 
 			if(CDATA->s >= 0)
 			{
@@ -2201,7 +2176,7 @@ int Crypto_ClientParsePacket(const char *data_in, size_t len_in, char *data_out,
 				CLEAR_CDATA;
 				return Crypto_ClientError(data_out, len_out, "Server insists on plaintext too hard");
 			}
-			crypto->use_aes = aes;
+			crypto->use_aes = aes != 0;
 
 			PutWithNul(&data_out_p, len_out, va("d0pk\\cnt\\2\\id\\%d", CDATA->cdata_id));
 			if(!qd0_blind_id_authenticate_with_private_id_challenge(CDATA->id, true, false, data_in, len_in, data_out_p, len_out, &status))
@@ -2327,7 +2302,7 @@ int Crypto_ClientParsePacket(const char *data_in, size_t len_in, char *data_out,
 					CLEAR_CDATA;
 					return Crypto_ClientError(data_out, len_out, "Server insists on plaintext too hard");
 				}
-				crypto->use_aes = aes;
+				crypto->use_aes = aes != 0;
 			}
 
 			PutWithNul(&data_out_p, len_out, va("d0pk\\cnt\\6\\id\\%d", CDATA->cdata_id));
@@ -2356,4 +2331,26 @@ int Crypto_ClientParsePacket(const char *data_in, size_t len_in, char *data_out,
 	}
 
 	return CRYPTO_NOMATCH;
+}
+
+size_t Crypto_SignData(const void *data, size_t datasize, int keyid, void *signed_data, size_t signed_size)
+{
+	if(keyid < 0 || keyid >= MAX_PUBKEYS)
+		return 0;
+	if(!pubkeys_havepriv[keyid])
+		return 0;
+	if(qd0_blind_id_sign_with_private_id_sign(pubkeys[keyid], true, false, (const char *)data, datasize, (char *)signed_data, &signed_size))
+		return signed_size;
+	return 0;
+}
+
+size_t Crypto_SignDataDetached(const void *data, size_t datasize, int keyid, void *signed_data, size_t signed_size)
+{
+	if(keyid < 0 || keyid >= MAX_PUBKEYS)
+		return 0;
+	if(!pubkeys_havepriv[keyid])
+		return 0;
+	if(qd0_blind_id_sign_with_private_id_sign_detached(pubkeys[keyid], true, false, (const char *)data, datasize, (char *)signed_data, &signed_size))
+		return signed_size;
+	return 0;
 }

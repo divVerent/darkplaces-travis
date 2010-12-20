@@ -721,7 +721,7 @@ void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, 
 extern cvar_t developer_font;
 dp_font_t *FindFont(const char *title, qboolean allocate_new)
 {
-	int i;
+	int i, oldsize;
 
 	// find font
 	for(i = 0; i < dp_fonts.maxsize; ++i)
@@ -740,14 +740,18 @@ dp_font_t *FindFont(const char *title, qboolean allocate_new)
 			}
 		}
 		// if no any 'free' fonts - expand buffer
-		i = dp_fonts.maxsize;
+		oldsize = dp_fonts.maxsize;
 		dp_fonts.maxsize = dp_fonts.maxsize + FONTS_EXPAND;
 		if (developer_font.integer)
-			Con_Printf("FindFont: enlarging fonts buffer (%i -> %i)\n", i, dp_fonts.maxsize);
+			Con_Printf("FindFont: enlarging fonts buffer (%i -> %i)\n", oldsize, dp_fonts.maxsize);
 		dp_fonts.f = (dp_font_t *)Mem_Realloc(fonts_mempool, dp_fonts.f, sizeof(dp_font_t) * dp_fonts.maxsize);
+		// relink ft2 structures
+		for(i = 0; i < oldsize; ++i)
+			if (dp_fonts.f[i].ft2)
+				dp_fonts.f[i].ft2->settings = &dp_fonts.f[i].settings;
 		// register a font in first expanded slot
-		strlcpy(dp_fonts.f[i].title, title, sizeof(dp_fonts.f[i].title));
-		return &dp_fonts.f[i];
+		strlcpy(dp_fonts.f[oldsize].title, title, sizeof(dp_fonts.f[oldsize].title));
+		return &dp_fonts.f[oldsize];
 	}
 	return NULL;
 }
@@ -1076,7 +1080,7 @@ void DrawQ_Pic(float x, float y, cachepic_t *pic, float width, float height, flo
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	floats[12] = 0.0f;floats[13] = 0.0f;
 	floats[14] = 1.0f;floats[15] = 0.0f;
 	floats[16] = 1.0f;floats[17] = 1.0f;
@@ -1133,7 +1137,7 @@ void DrawQ_RotPic(float x, float y, cachepic_t *pic, float width, float height, 
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	if (pic)
 	{
 		if (width == 0)
@@ -1184,7 +1188,7 @@ void DrawQ_Fill(float x, float y, float width, float height, float red, float gr
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 
 	floats[2] = floats[5] = floats[8] = floats[11] = 0;
@@ -1509,7 +1513,7 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return startx + DrawQ_TextWidth_UntilWidth_TrackColors_Scale(text, &maxlen, w, h, sw, sh, NULL, ignorecolorcodes, fnt, 1000000000);
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	if (!fontmap)
 		R_Mesh_TexBind(0, fnt->tex);
 	R_SetupShader_Generic(fnt->tex, NULL, GL_MODULATE, 1);
@@ -1630,10 +1634,10 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 			}
 			if (!fontmap || (ch <= 0xFF && fontmap->glyphs[ch].image) || (ch >= 0xE000 && ch <= 0xE0FF))
 			{
-				if (ch > 0xE000)
+				if (ch >= 0xE000)
 					ch -= 0xE000;
 				if (ch > 0xFF)
-					continue;
+					goto out;
 				if (fontmap)
 				{
 					if (map != ft2_oldstyle_map)
@@ -1765,6 +1769,7 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 				//prevmap = map;
 				prevch = ch;
 			}
+out:
 			if (shadow)
 			{
 				x -= 1.0/pix_x * r_textshadow.value;
@@ -1853,7 +1858,7 @@ void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	if (pic)
 	{
 		if (width == 0)
@@ -1891,7 +1896,7 @@ void DrawQ_Mesh (drawqueuemesh_t *mesh, int flags, qboolean hasalpha)
 		return;
 	DrawQ_ProcessDrawFlag(flags, hasalpha);
 
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(mesh->texture, NULL, GL_MODULATE, 1);
 
 	R_Mesh_PrepareVertices_Generic_Arrays(mesh->num_vertices, mesh->data_vertex3f, mesh->data_color4f, mesh->data_texcoord2f);
@@ -1975,6 +1980,48 @@ void DrawQ_Line (float width, float x1, float y1, float x2, float y2, float r, f
 	}
 }
 
+void DrawQ_Lines (float width, int numlines, const float *vertex3f, const float *color4f, int flags)
+{
+	int i;
+	qboolean hasalpha = false;
+	for (i = 0;i < numlines*2;i++)
+		if (color4f[i*4+3] < 1.0f)
+			hasalpha = true;
+
+	_DrawQ_SetupAndProcessDrawFlag(flags, NULL, hasalpha ? 0.5f : 1.0f);
+
+	if(!r_draw2d.integer && !r_draw2d_force)
+		return;
+
+	switch(vid.renderpath)
+	{
+	case RENDERPATH_GL11:
+	case RENDERPATH_GL13:
+	case RENDERPATH_GL20:
+	case RENDERPATH_CGGL:
+		CHECKGLERROR
+
+		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+
+		//qglLineWidth(width);CHECKGLERROR
+
+		CHECKGLERROR
+		R_Mesh_PrepareVertices_Generic_Arrays(numlines*2, vertex3f, color4f, NULL);
+		qglDrawArrays(GL_LINES, 0, numlines*2);
+		CHECKGLERROR
+		break;
+	case RENDERPATH_D3D9:
+		//Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	case RENDERPATH_D3D10:
+		Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	case RENDERPATH_D3D11:
+		Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
+		break;
+	}
+}
+
 void DrawQ_SetClipArea(float x, float y, float width, float height)
 {
 	int ix, iy, iw, ih;
@@ -2029,7 +2076,7 @@ void R_DrawGamma(void)
 		break;
 	}
 	// all the blends ignore depth
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
 	GL_DepthMask(true);
 	GL_DepthRange(0, 1);

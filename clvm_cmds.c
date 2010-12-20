@@ -667,23 +667,24 @@ static void VM_CL_ambientsound (void)
 	S_StaticSound (s, f, PRVM_G_FLOAT(OFS_PARM2), PRVM_G_FLOAT(OFS_PARM3)*64);
 }
 
-// #92 vector(vector org) getlight (DP_QC_GETLIGHT)
+// #92 vector(vector org[, float lpflag]) getlight (DP_QC_GETLIGHT)
 static void VM_CL_getlight (void)
 {
 	vec3_t ambientcolor, diffusecolor, diffusenormal;
 	vec_t *p;
 
-	VM_SAFEPARMCOUNT(1, VM_CL_getlight);
+	VM_SAFEPARMCOUNTRANGE(1, 2, VM_CL_getlight);
 
 	p = PRVM_G_VECTOR(OFS_PARM0);
 	VectorClear(ambientcolor);
 	VectorClear(diffusecolor);
 	VectorClear(diffusenormal);
-	if (cl.worldmodel && cl.worldmodel->brush.LightPoint)
+	if (prog->argc >= 2)
+		R_CompleteLightPoint(ambientcolor, diffusecolor, diffusenormal, p, PRVM_G_FLOAT(OFS_PARM1));
+	else if (cl.worldmodel && cl.worldmodel->brush.LightPoint)
 		cl.worldmodel->brush.LightPoint(cl.worldmodel, p, ambientcolor, diffusecolor, diffusenormal);
 	VectorMA(ambientcolor, 0.5, diffusecolor, PRVM_G_VECTOR(OFS_RETURN));
 }
-
 
 //============================================================================
 //[515]: SCENE MANAGER builtins
@@ -3075,7 +3076,7 @@ static void VM_DrawPolygonCallback (const entity_render_t *ent, const rtlight_t 
 	vmpolygons_t* polys = vmpolygons + PRVM_GetProgNr();
 	if(polys->progstarttime != prog->starttime) // from other progs? won't draw these (this can cause crashes!)
 		return;
-	R_Mesh_ResetTextureState();
+//	R_Mesh_ResetTextureState();
 	R_EntityMatrix(&identitymatrix);
 	GL_CullFace(GL_NONE);
 	GL_DepthTest(true); // polys in 3D space shall always have depth test
@@ -4516,7 +4517,7 @@ NULL,							// #509
 VM_uri_escape,					// #510 string(string in) uri_escape = #510;
 VM_uri_unescape,				// #511 string(string in) uri_unescape = #511;
 VM_etof,					// #512 float(entity ent) num_for_edict = #512 (DP_QC_NUM_FOR_EDICT)
-VM_uri_get,						// #513 float(string uril, float id) uri_get = #512; (DP_QC_URI_GET)
+VM_uri_get,						// #513 float(string uri, float id, [string post_contenttype, string post_delim, [float buf]]) uri_get = #513; (DP_QC_URI_GET, DP_QC_URI_POST)
 VM_tokenize_console,					// #514 float(string str) tokenize_console = #514; (DP_QC_TOKENIZE_CONSOLE)
 VM_argv_start_index,					// #515 float(float idx) argv_start_index = #515; (DP_QC_TOKENIZE_CONSOLE)
 VM_argv_end_index,						// #516 float(float idx) argv_end_index = #516; (DP_QC_TOKENIZE_CONSOLE)
@@ -4543,9 +4544,9 @@ NULL,							// #536
 NULL,							// #537
 NULL,							// #538
 NULL,							// #539
-NULL,							// #540
-NULL,							// #541
-NULL,							// #542
+VM_physics_enable,				// #540 void(entity e, float physics_enabled) physics_enable = #540; (DP_PHYSICS_ODE)
+VM_physics_addforce,			// #541 void(entity e, vector force, vector relative_ofs) physics_addforce = #541; (DP_PHYSICS_ODE)
+VM_physics_addtorque,			// #542 void(entity e, vector torque) physics_addtorque = #542; (DP_PHYSICS_ODE)
 NULL,							// #543
 NULL,							// #544
 NULL,							// #545

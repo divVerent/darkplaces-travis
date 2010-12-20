@@ -2037,6 +2037,21 @@ static int NetConn_ClientParsePacket(lhnetsocket_t *mysocket, unsigned char *dat
 				lhnetaddress_t clientportaddress;
 				clientportaddress = *peeraddress;
 				LHNETADDRESS_SetPort(&clientportaddress, MSG_ReadLong());
+				// extra ProQuake stuff
+				if (length >= 6)
+					cls.proquake_servermod = MSG_ReadByte(); // MOD_PROQUAKE
+				else
+					cls.proquake_servermod = 0;
+				if (length >= 7)
+					cls.proquake_serverversion = MSG_ReadByte(); // version * 10
+				else
+					cls.proquake_serverversion = 0;
+				if (length >= 8)
+					cls.proquake_serverflags = MSG_ReadByte(); // flags (mainly PQF_CHEATFREE)
+				else
+					cls.proquake_serverflags = 0;
+				if (cls.proquake_servermod == 1)
+					Con_Printf("Connected to ProQuake %.1f server, enabling precise aim\n", cls.proquake_serverversion / 10.0f);
 				// update the server IP in the userinfo (QW servers expect this, and it is used by the reconnect command)
 				InfoString_SetValue(cls.userinfo, sizeof(cls.userinfo), "*ip", addressstring2);
 				M_Update_Return_Reason("Accepted");
@@ -2217,6 +2232,15 @@ void NetConn_ClientFrame(void)
 		MSG_WriteByte(&net_message, CCREQ_CONNECT);
 		MSG_WriteString(&net_message, "QUAKE");
 		MSG_WriteByte(&net_message, NET_PROTOCOL_VERSION);
+		// extended proquake stuff
+		MSG_WriteByte(&net_message, 1); // mod = MOD_PROQUAKE
+		// this version matches ProQuake 3.40, the first version to support
+		// the NAT fix, and it only supports the NAT fix for ProQuake 3.40 or
+		// higher clients, so we pretend we are that version...
+		MSG_WriteByte(&net_message, 34); // version * 10
+		MSG_WriteByte(&net_message, 0); // flags
+		MSG_WriteLong(&net_message, 0); // password
+		// write the packetsize now...
 		StoreBigLong(net_message.data, NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 		NetConn_Write(cls.connect_mysocket, net_message.data, net_message.cursize, &cls.connect_address);
 		SZ_Clear(&net_message);
@@ -2636,7 +2660,7 @@ allow:
 	return va("%srcon", restricted ? "restricted " : "");
 }
 
-void RCon_Execute(lhnetsocket_t *mysocket, lhnetaddress_t *peeraddress, const char *addressstring2, const char *userlevel, const char *s, const char *endpos)
+void RCon_Execute(lhnetsocket_t *mysocket, lhnetaddress_t *peeraddress, const char *addressstring2, const char *userlevel, const char *s, const char *endpos, qboolean proquakeprotocol)
 {
 	if(userlevel)
 	{
@@ -2653,7 +2677,7 @@ void RCon_Execute(lhnetsocket_t *mysocket, lhnetaddress_t *peeraddress, const ch
 		Con_Printf("\n");
 
 		if (!host_client || !host_client->netconnection || LHNETADDRESS_GetAddressType(&host_client->netconnection->peeraddress) != LHNETADDRESSTYPE_LOOP)
-			Con_Rcon_Redirect_Init(mysocket, peeraddress);
+			Con_Rcon_Redirect_Init(mysocket, peeraddress, proquakeprotocol);
 		while(s != endpos)
 		{
 			size_t l = strlen(s);
@@ -2973,7 +2997,7 @@ static int NetConn_ServerParsePacket(lhnetsocket_t *mysocket, unsigned char *dat
 			++s;
 
 			userlevel = RCon_Authenticate(peeraddress, password, s, endpos, hmac_mdfour_time_matching, timeval, endpos - timeval - 1); // not including the appended \0 into the HMAC
-			RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos);
+			RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos, false);
 			return true;
 		}
 		if (length >= 42 && !memcmp(string, "srcon HMAC-MD4 CHALLENGE ", 25))
@@ -2988,7 +3012,7 @@ static int NetConn_ServerParsePacket(lhnetsocket_t *mysocket, unsigned char *dat
 			++s;
 
 			userlevel = RCon_Authenticate(peeraddress, password, s, endpos, hmac_mdfour_challenge_matching, challenge, endpos - challenge - 1); // not including the appended \0 into the HMAC
-			RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos);
+			RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos, false);
 			return true;
 		}
 		if (length >= 5 && !memcmp(string, "rcon ", 5))
@@ -3010,7 +3034,7 @@ static int NetConn_ServerParsePacket(lhnetsocket_t *mysocket, unsigned char *dat
 			if (!ISWHITESPACE(password[0]))
 			{
 				const char *userlevel = RCon_Authenticate(peeraddress, password, s, endpos, plaintext_matching, NULL, 0);
-				RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos);
+				RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos, false);
 			}
 			return true;
 		}
@@ -3258,6 +3282,25 @@ static int NetConn_ServerParsePacket(lhnetsocket_t *mysocket, unsigned char *dat
 				StoreBigLong(net_message.data, NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 				NetConn_Write(mysocket, net_message.data, net_message.cursize, peeraddress);
 				SZ_Clear(&net_message);
+			}
+			break;
+		case CCREQ_RCON:
+			if (developer_extra.integer)
+				Con_DPrintf("Datagram_ParseConnectionless: received CCREQ_RCON from %s.\n", addressstring2);
+			if (sv.active && !rcon_secure.integer)
+			{
+				char password[2048];
+				char cmd[2048];
+				char *s;
+				char *endpos;
+				const char *userlevel;
+				strlcpy(password, MSG_ReadString(), sizeof(password));
+				strlcpy(cmd, MSG_ReadString(), sizeof(cmd));
+				s = cmd;
+				endpos = cmd + strlen(cmd) + 1; // one behind the NUL, so adding strlen+1 will eventually reach it
+				userlevel = RCon_Authenticate(peeraddress, password, s, endpos, plaintext_matching, NULL, 0);
+				RCon_Execute(mysocket, peeraddress, addressstring2, userlevel, s, endpos, true);
+				return true;
 			}
 			break;
 		default:

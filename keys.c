@@ -1203,7 +1203,7 @@ Key_Message (int key, int ascii)
 	}
 
 	// ctrl+key generates an ascii value < 32 and shows a char from the charmap
-	if (ascii < 32 && utf8_enable.integer)
+	if (ascii > 0 && ascii < 32 && utf8_enable.integer)
 		ascii = 0xE000 + ascii;
 
 	if (chat_bufferlen == sizeof (chat_buffer) - 1)
@@ -1887,7 +1887,10 @@ Key_Event (int key, int ascii, qboolean down)
 	// ignore binds while a video is played, let the video system handle the key event
 	if (cl_videoplaying)
 	{
-		CL_Video_KeyEvent (key, ascii, keydown[key] != 0);
+		if (gamemode == GAME_BLOODOMNICIDE) // menu controls key events
+			MR_KeyEvent(key, ascii, down);
+		else
+			CL_Video_KeyEvent (key, ascii, keydown[key] != 0);
 		return;
 	}
 
