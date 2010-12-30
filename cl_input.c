@@ -1995,7 +1995,7 @@ void CL_SendMove(void)
 	qboolean quemove;
 	qboolean important;
 	usercmd_t evadecmd;
-	qboolean evade = false;
+	int evade = 0;
 
 	// if playing a demo, do nothing
 	if (!cls.netcon)
@@ -2099,7 +2099,7 @@ void CL_SendMove(void)
 		if(MAY_PERFORM_HACK)
 		{
 			if(CL_Aimbot())
-				evade = true;
+				evade = 2;
 		}
 		cl.movecmd[0] = cl.cmd;
 	}
@@ -2282,7 +2282,7 @@ void CL_SendMove(void)
 					cl.movecmd[0].forwardmove = 0;
 				}
 			}
-			evade = true;
+			evade = 1;
 		}
 	}
 
@@ -2291,10 +2291,10 @@ void CL_SendMove(void)
 		for (i = CL_MAX_USERCMDS - 1;i >= 1;i--)
 			cl.movecmd[i] = cl.movecmd[i-1];
 		cl.movecmd[0] = evadecmd;
-		cl.movecmd[0].msec = 1;
+		cl.movecmd[0].msec = (evade == 1) ? 1 : (cl.movecmd[0].msec - 1);
 		cl.movecmd[0].frametime = 0.001;
 		cl.movecmd[0].buttons &= ~5; // no buttons in evasion frame so it doesn't fire un-aimbotted
-		cl.movecmd[1].msec -= 1;
+		cl.movecmd[1].msec -= cl.movecmd[0].msec;
 		cl.movecmd[1].time -= 0.001;
 		cl.movecmd[1].frametime -= 0.001;
 		// note: we don't need to play with the movesequence as the last move in a packet is always executed
