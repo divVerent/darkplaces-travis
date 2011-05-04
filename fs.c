@@ -1690,6 +1690,38 @@ static void FS_ListGameDirs(void)
 #endif
 */
 
+static void ParseDarkplacesOpt(const char *buf)
+{
+	char *q;
+	const char *p;
+	const char **new_argv;
+	int i = 0;
+	int args_left = 256;
+	new_argv = (const char **)Mem_Alloc(fs_mempool, sizeof(*com_argv) * (com_argc + args_left + 2));
+	if(com_argc == 0)
+	{
+		new_argv[0] = "dummy";
+		com_argc = 1;
+	}
+	else
+	{
+		memcpy((char *)(&new_argv[0]), &com_argv[0], sizeof(*com_argv) * com_argc);
+	}
+	p = buf;
+	while(COM_ParseToken_Console(&p))
+	{
+		if(i >= args_left)
+			break;
+		q = (char *)Mem_Alloc(fs_mempool, strlen(com_token) + 1);
+		strlcpy(q, com_token, strlen(com_token) + 1);
+		new_argv[com_argc + i] = q;
+		++i;
+	}
+	new_argv[i+com_argc] = NULL;
+	com_argv = new_argv;
+	com_argc = com_argc + i;
+}
+
 /*
 ================
 FS_Init_SelfPack
@@ -1697,47 +1729,92 @@ FS_Init_SelfPack
 */
 void FS_Init_SelfPack (void)
 {
+	int i;
+	qboolean opt_loaded = false;
+	qfile_t *f;
+
+	*fs_basedir = 0;
+	// -basedir <path>
+	// Overrides the system supplied base directory (under GAMENAME)
+// COMMANDLINEOPTION: Filesystem: -basedir <path> chooses what base directory the game data is in, inside this there should be a data directory for the game (for example id1)
+	i = COM_CheckParm ("-basedir");
+	if (i && i < com_argc-1)
+	{
+		strlcpy (fs_basedir, com_argv[i+1], sizeof (fs_basedir));
+		i = (int)strlen (fs_basedir);
+		if (i > 0 && (fs_basedir[i-1] == '\\' || fs_basedir[i-1] == '/'))
+			fs_basedir[i-1] = 0;
+	}
+	else
+	{
+// If the base directory is explicitly defined by the compilation process
+#ifdef DP_FS_BASEDIR
+		strlcpy(fs_basedir, DP_FS_BASEDIR, sizeof(fs_basedir));
+#elif defined(MACOSX)
+		// FIXME: is there a better way to find the directory outside the .app?
+		// FIXME: check if game data is inside .app bundle
+		if (strstr(com_argv[0], ".app/"))
+		{
+			char *split;
+			strlcpy(fs_basedir, com_argv[0], sizeof(fs_basedir));
+			split = strstr(fs_basedir, ".app/");
+			if (split)
+			{
+				while (split > fs_basedir && *split != '/')
+					split--;
+				*split = 0;
+			}
+		}
+#endif
+	}
+
+	// make sure the appending of a path separator won't create an unterminated string
+	memset(fs_basedir + sizeof(fs_basedir) - 2, 0, 2);
+	// add a path separator to the end of the basedir if it lacks one
+	if (fs_basedir[0] && fs_basedir[strlen(fs_basedir) - 1] != '/' && fs_basedir[strlen(fs_basedir) - 1] != '\\')
+		strlcat(fs_basedir, "/", sizeof(fs_basedir));
+
 	PK3_OpenLibrary ();
 	fs_mempool = Mem_AllocPool("file management", 0, NULL);
+
+	// now check for "real" darkplaces.opt file
+	f = FS_SysOpen(va("%sdarkplaces.opt", fs_basedir), "r", false);
+	if(f)
+	{
+		fs_offset_t filesize = f->real_length;
+		if(filesize < 0)
+		{
+			FS_Close(f);
+		}
+		else
+		{
+			char *buf;
+			buf = (char *)Mem_Alloc (fs_mempool, filesize + 1);
+			buf[filesize] = '\0';
+			FS_Read(f, buf, filesize);
+			FS_Close(f);
+			ParseDarkplacesOpt(buf);
+			Mem_Free(buf);
+			opt_loaded = true;
+		}
+	}
+
 	if(com_selffd >= 0)
 	{
 		fs_selfpack = FS_LoadPackPK3FromFD(com_argv[0], com_selffd, true);
 		if(fs_selfpack)
 		{
-			char *buf, *q;
-			const char *p;
+			char *buf;
 			FS_AddSelfPack();
-			buf = (char *) FS_LoadFile("darkplaces.opt", tempmempool, true, NULL);
-			if(buf)
+			if(!opt_loaded)
 			{
-				const char **new_argv;
-				int i = 0;
-				int args_left = 256;
-				new_argv = (const char **)Mem_Alloc(fs_mempool, sizeof(*com_argv) * (com_argc + args_left + 2));
-				if(com_argc == 0)
+				buf = (char *) FS_LoadFile("darkplaces.opt", tempmempool, true, NULL);
+				if(buf)
 				{
-					new_argv[0] = "dummy";
-					com_argc = 1;
+					ParseDarkplacesOpt(buf);
+					Mem_Free(buf);
 				}
-				else
-				{
-					memcpy((char *)(&new_argv[0]), &com_argv[0], sizeof(*com_argv) * com_argc);
-				}
-				p = buf;
-				while(COM_ParseToken_Console(&p))
-				{
-					if(i >= args_left)
-						break;
-					q = (char *)Mem_Alloc(fs_mempool, strlen(com_token) + 1);
-					strlcpy(q, com_token, strlen(com_token) + 1);
-					new_argv[com_argc + i] = q;
-					++i;
-				}
-				new_argv[i+com_argc] = NULL;
-				com_argv = new_argv;
-				com_argc = com_argc + i;
 			}
-			Mem_Free(buf);
 		}
 	}
 }
@@ -1900,49 +1977,8 @@ void FS_Init (void)
 	const char *p;
 	int i;
 
-	*fs_basedir = 0;
 	*fs_userdir = 0;
 	*fs_gamedir = 0;
-
-	// -basedir <path>
-	// Overrides the system supplied base directory (under GAMENAME)
-// COMMANDLINEOPTION: Filesystem: -basedir <path> chooses what base directory the game data is in, inside this there should be a data directory for the game (for example id1)
-	i = COM_CheckParm ("-basedir");
-	if (i && i < com_argc-1)
-	{
-		strlcpy (fs_basedir, com_argv[i+1], sizeof (fs_basedir));
-		i = (int)strlen (fs_basedir);
-		if (i > 0 && (fs_basedir[i-1] == '\\' || fs_basedir[i-1] == '/'))
-			fs_basedir[i-1] = 0;
-	}
-	else
-	{
-// If the base directory is explicitly defined by the compilation process
-#ifdef DP_FS_BASEDIR
-		strlcpy(fs_basedir, DP_FS_BASEDIR, sizeof(fs_basedir));
-#elif defined(MACOSX)
-		// FIXME: is there a better way to find the directory outside the .app?
-		// FIXME: check if game data is inside .app bundle
-		if (strstr(com_argv[0], ".app/"))
-		{
-			char *split;
-			strlcpy(fs_basedir, com_argv[0], sizeof(fs_basedir));
-			split = strstr(fs_basedir, ".app/");
-			if (split)
-			{
-				while (split > fs_basedir && *split != '/')
-					split--;
-				*split = 0;
-			}
-		}
-#endif
-	}
-
-	// make sure the appending of a path separator won't create an unterminated string
-	memset(fs_basedir + sizeof(fs_basedir) - 2, 0, 2);
-	// add a path separator to the end of the basedir if it lacks one
-	if (fs_basedir[0] && fs_basedir[strlen(fs_basedir) - 1] != '/' && fs_basedir[strlen(fs_basedir) - 1] != '\\')
-		strlcat(fs_basedir, "/", sizeof(fs_basedir));
 
 	// Add the personal game directory
 	if((i = COM_CheckParm("-userdir")) && i < com_argc - 1)
