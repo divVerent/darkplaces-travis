@@ -188,6 +188,38 @@ typedef enum keynum_e
 	K_AUX31,
 	K_AUX32,
 
+	// Microsoft Xbox 360 Controller For Windows
+	K_X360_DPAD_UP,
+	K_X360_DPAD_DOWN,
+	K_X360_DPAD_LEFT,
+	K_X360_DPAD_RIGHT,
+	K_X360_START,
+	K_X360_BACK,
+	K_X360_LEFT_THUMB,
+	K_X360_RIGHT_THUMB,
+	K_X360_LEFT_SHOULDER,
+	K_X360_RIGHT_SHOULDER,
+	K_X360_A,
+	K_X360_B,
+	K_X360_X,
+	K_X360_Y,
+	K_X360_LEFT_TRIGGER,
+	K_X360_RIGHT_TRIGGER,
+	K_X360_LEFT_THUMB_UP,
+	K_X360_LEFT_THUMB_DOWN,
+	K_X360_LEFT_THUMB_LEFT,
+	K_X360_LEFT_THUMB_RIGHT,
+	K_X360_RIGHT_THUMB_UP,
+	K_X360_RIGHT_THUMB_DOWN,
+	K_X360_RIGHT_THUMB_LEFT,
+	K_X360_RIGHT_THUMB_RIGHT,
+
+	// generic joystick emulation for menu
+	K_JOY_UP,
+	K_JOY_DOWN,
+	K_JOY_LEFT,
+	K_JOY_RIGHT,
+
 	K_MIDINOTE0 = 896, // to this, the note number is added
 	K_MIDINOTE1,
 	K_MIDINOTE2,
@@ -335,17 +367,18 @@ extern	keydest_t	key_dest;
 extern	int			key_consoleactive;
 extern	char		*keybindings[MAX_BINDMAPS][MAX_KEYS];
 
-extern void Key_ClearEditLine(int edit_line);
 extern int chat_mode; // 0 for say, 1 for say_team, -1 for command
 extern char chat_buffer[MAX_INPUTLINE];
 extern unsigned int chat_bufferlen;
 
+void Key_ClearEditLine(int edit_line);
 void Key_WriteBindings(qfile_t *f);
 void Key_Init(void);
 void Key_Shutdown(void);
 void Key_Init_Cvars(void);
 void Key_Event(int key, int ascii, qboolean down);
-void Key_ClearStates (void);
+void Key_ReleaseAll (void);
+void Key_ClearStates (void); // FIXME: should this function still exist? Or should Key_ReleaseAll be used instead when shutting down a vid driver?
 void Key_EventQueue_Block(void);
 void Key_EventQueue_Unblock(void);
 

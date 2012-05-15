@@ -28,6 +28,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 cvar_t r_mipsprites = {CVAR_SAVE, "r_mipsprites", "1", "mipmaps sprites so they render faster in the distance and do not display noise artifacts"};
 cvar_t r_labelsprites_scale = {CVAR_SAVE, "r_labelsprites_scale", "1", "global scale to apply to label sprites before conversion to HUD coordinates"};
 cvar_t r_labelsprites_roundtopixels = {CVAR_SAVE, "r_labelsprites_roundtopixels", "1", "try to make label sprites sharper by rounding their size to 0.5x or 1x and by rounding their position to whole pixels if possible"};
+cvar_t r_overheadsprites_perspective = {CVAR_SAVE, "r_overheadsprites_perspective", "5", "fake perspective effect for SPR_OVERHEAD sprites"};
+cvar_t r_overheadsprites_pushback = {CVAR_SAVE, "r_overheadsprites_pushback", "15", "how far to pull the SPR_OVERHEAD sprites toward the eye (used to avoid intersections with 3D models)"};
+cvar_t r_overheadsprites_scalex = {CVAR_SAVE, "r_overheadsprites_scalex", "1", "additional scale for overhead sprites for x axis"};
+cvar_t r_overheadsprites_scaley = {CVAR_SAVE, "r_overheadsprites_scaley", "1", "additional scale for overhead sprites for y axis"};
+cvar_t r_track_sprites = {CVAR_SAVE, "r_track_sprites", "1", "track SPR_LABEL* sprites by putting them as indicator at the screen border to rotate to"};
+cvar_t r_track_sprites_flags = {CVAR_SAVE, "r_track_sprites_flags", "1", "1: Rotate sprites accordingly, 2: Make it a continuous rotation"};
+cvar_t r_track_sprites_scalew = {CVAR_SAVE, "r_track_sprites_scalew", "1", "width scaling of tracked sprites"};
+cvar_t r_track_sprites_scaleh = {CVAR_SAVE, "r_track_sprites_scaleh", "1", "height scaling of tracked sprites"};
 
 /*
 ===============
@@ -39,6 +47,14 @@ void Mod_SpriteInit (void)
 	Cvar_RegisterVariable(&r_mipsprites);
 	Cvar_RegisterVariable(&r_labelsprites_scale);
 	Cvar_RegisterVariable(&r_labelsprites_roundtopixels);
+	Cvar_RegisterVariable(&r_overheadsprites_perspective);
+	Cvar_RegisterVariable(&r_overheadsprites_pushback);
+	Cvar_RegisterVariable(&r_overheadsprites_scalex);
+	Cvar_RegisterVariable(&r_overheadsprites_scaley);
+	Cvar_RegisterVariable(&r_track_sprites);
+	Cvar_RegisterVariable(&r_track_sprites_flags);
+	Cvar_RegisterVariable(&r_track_sprites_scalew);
+	Cvar_RegisterVariable(&r_track_sprites_scaleh);
 }
 
 static void Mod_SpriteSetupTexture(texture_t *texture, skinframe_t *skinframe, qboolean fullbright, qboolean additive)
@@ -47,6 +63,7 @@ static void Mod_SpriteSetupTexture(texture_t *texture, skinframe_t *skinframe, q
 		skinframe = R_SkinFrame_LoadMissing();
 	texture->offsetmapping = OFFSETMAPPING_OFF;
 	texture->offsetscale = 1;
+	texture->offsetbias = 0;
 	texture->specularscalemod = 1;
 	texture->specularpowermod = 1;
 	texture->basematerialflags = MATERIALFLAG_WALL;
@@ -65,6 +82,8 @@ static void Mod_SpriteSetupTexture(texture_t *texture, skinframe_t *skinframe, q
 		texture->supercontents |= SUPERCONTENTS_OPAQUE;
 }
 
+extern cvar_t gl_texturecompression_sprites;
+
 static void Mod_Sprite_SharedSetup(const unsigned char *datapointer, int version, const unsigned int *palette, qboolean additive)
 {
 	int					i, j, groupframes, realframes, x, y, origin[2], width, height;
@@ -77,7 +96,7 @@ static void Mod_Sprite_SharedSetup(const unsigned char *datapointer, int version
 	float				modelradius, interval;
 	char				name[MAX_QPATH], fogname[MAX_QPATH];
 	const void			*startframes;
-	int                 texflags = (r_mipsprites.integer ? TEXF_MIPMAP : 0) | TEXF_ISSPRITE | TEXF_PICMIP | TEXF_ALPHA | TEXF_CLAMP;
+	int                 texflags = (r_mipsprites.integer ? TEXF_MIPMAP : 0) | ((gl_texturecompression.integer && gl_texturecompression_sprites.integer) ? TEXF_COMPRESS : 0) | TEXF_ISSPRITE | TEXF_PICMIP | TEXF_ALPHA | TEXF_CLAMP;
 	modelradius = 0;
 
 	if (loadmodel->numframes < 1)
@@ -213,6 +232,7 @@ static void Mod_Sprite_SharedSetup(const unsigned char *datapointer, int version
 						else //if (version == SPRITEHL_VERSION || version == SPRITE_VERSION)
 							Image_Copy8bitBGRA(datapointer, pixels, width*height, palette ? palette : palette_bgra_transparent);
 						skinframe = R_SkinFrame_LoadInternalBGRA(name, texflags, pixels, width, height, false);
+						// texflags |= TEXF_COMPRESS;
 						Mem_Free(pixels);
 					}
 				}
@@ -239,7 +259,6 @@ static void Mod_Sprite_SharedSetup(const unsigned char *datapointer, int version
 	loadmodel->radius2 = modelradius * modelradius;
 }
 
-extern void R_Model_Sprite_Draw(entity_render_t *ent);
 void Mod_IDSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 {
 	int version;
@@ -348,7 +367,7 @@ void Mod_IDSP_Load(dp_model_t *mod, void *buffer, void *bufferend)
 		Host_Error("Mod_IDSP_Load: %s has wrong version number (%i). Only %i (quake), %i (HalfLife), and %i (sprite32) supported",
 					loadmodel->name, version, SPRITE_VERSION, SPRITEHL_VERSION, SPRITE32_VERSION);
 
-	loadmodel->surfmesh.isanimated = loadmodel->numframes > 1 || loadmodel->animscenes[0].framecount > 1;
+	loadmodel->surfmesh.isanimated = loadmodel->numframes > 1 || (loadmodel->animscenes && loadmodel->animscenes[0].framecount > 1);
 }
 
 
@@ -456,5 +475,5 @@ void Mod_IDS2_Load(dp_model_t *mod, void *buffer, void *bufferend)
 	loadmodel->radius = modelradius;
 	loadmodel->radius2 = modelradius * modelradius;
 
-	loadmodel->surfmesh.isanimated = loadmodel->numframes > 1 || loadmodel->animscenes[0].framecount > 1;
+	loadmodel->surfmesh.isanimated = loadmodel->numframes > 1 || (loadmodel->animscenes && loadmodel->animscenes[0].framecount > 1);
 }

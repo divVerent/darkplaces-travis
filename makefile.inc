@@ -48,7 +48,8 @@ STRIP?=strip
 OBJ_SND_COMMON=snd_main.o snd_mem.o snd_mix.o snd_ogg.o snd_wav.o snd_modplug.o
 
 # statically loading d0_blind_id
-LIB_CRYPTO=`[ -n "$(DP_CRYPTO_STATIC_LIBDIR)" ] && echo \ $(DP_CRYPTO_STATIC_LIBDIR)/libd0_blind_id.a\ $(DP_CRYPTO_STATIC_LIBDIR)/libgmp.a`
+LIB_CRYPTO=`[ -n "$(DP_CRYPTO_STATIC_LIBDIR)" ] && echo \ $(DP_CRYPTO_STATIC_LIBDIR)/libd0_blind_id.a`
+LIB_GMP=`[ -n "$(DP_CRYPTO_STATIC_LIBDIR)" ] && { [ -n "$(DP_GMP_STATIC_LIBDIR)" ] && echo \ $(DP_GMP_STATIC_LIBDIR)/libgmp.a || echo \ -lgmp; }`
 CFLAGS_CRYPTO=`[ -n "$(DP_CRYPTO_STATIC_LIBDIR)" ] && echo \ -I$(DP_CRYPTO_STATIC_LIBDIR)/../include\ -DCRYPTO_STATIC`
 LIB_CRYPTO_RIJNDAEL=`[ -n "$(DP_CRYPTO_RIJNDAEL_STATIC_LIBDIR)" ] && echo \ $(DP_CRYPTO_RIJNDAEL_STATIC_LIBDIR)/libd0_rijndael.a`
 CFLAGS_CRYPTO_RIJNDAEL=`[ -n "$(DP_CRYPTO_RIJNDAEL_STATIC_LIBDIR)" ] && echo \ -I$(DP_CRYPTO_RIJNDAEL_STATIC_LIBDIR)/../include\ -DCRYPTO_RIJNDAEL_STATIC`
@@ -101,7 +102,6 @@ OBJ_COMMON= \
 	cl_collision.o \
 	cl_demo.o \
 	cl_dyntexture.o \
-	cl_gecko.o \
 	cl_input.o \
 	cl_main.o \
 	cl_parse.o \
@@ -209,17 +209,17 @@ DO_CC=$(CC) $(CFLAGS) -c $< -o $@
 
 
 # Link
-LDFLAGS_DEBUG=-g -ggdb $(OPTIM_DEBUG) -DSVNREVISION=`{ test -d .svn && svnversion; } || { test -d .git && git describe; } || echo -` -DBUILDTYPE=debug
-LDFLAGS_PROFILE=-g -pg -fprofile-arcs $(OPTIM_RELEASE) -DSVNREVISION=`{ test -d .svn && svnversion; } || { test -d .git && git describe; } || echo -` -DBUILDTYPE=profile
-LDFLAGS_RELEASE=$(OPTIM_RELEASE) -DSVNREVISION=`{ test -d .svn && svnversion; } || { test -d .git && git describe; } || echo -` -DBUILDTYPE=release
+LDFLAGS_DEBUG=-g -ggdb $(OPTIM_DEBUG) -DSVNREVISION=`{ test -d .svn && svnversion; } || { test -d .git && git describe --always; } || echo -` -DBUILDTYPE=debug
+LDFLAGS_PROFILE=-g -pg -fprofile-arcs $(OPTIM_RELEASE) -DSVNREVISION=`{ test -d .svn && svnversion; } || { test -d .git && git describe --always; } || echo -` -DBUILDTYPE=profile
+LDFLAGS_RELEASE=$(OPTIM_RELEASE) -DSVNREVISION=`{ test -d .svn && svnversion; } || { test -d .git && git describe --always; } || echo -` -DBUILDTYPE=release
 
 
 ##### UNIX specific variables #####
 
 OBJ_GLX= builddate.c sys_linux.o vid_glx.o thread_pthread.o keysym2ucs.o $(OBJ_SOUND) $(OBJ_CD) $(OBJ_COMMON)
 
-LDFLAGS_UNIXCOMMON=-lm $(LIB_ODE) $(LIB_JPEG) $(LIB_CRYPTO) $(LIB_CRYPTO_RIJNDAEL)
-LDFLAGS_UNIXCL=-L$(UNIX_X11LIBPATH) -lX11 -lXpm -lXext -lXxf86dga -lXxf86vm -pthread $(LIB_SOUND)
+LDFLAGS_UNIXCOMMON=-lm $(LIB_ODE) $(LIB_JPEG) $(LIB_CRYPTO) $(LIB_GMP) $(LIB_CRYPTO_RIJNDAEL)
+LDFLAGS_UNIXCL=-L$(UNIX_X11LIBPATH) -lX11 -lXpm -lXext -lXxf86vm -pthread $(LIB_SOUND)
 LDFLAGS_UNIXCL_PRELOAD=-lz -ljpeg -lpng -logg -ltheora -lvorbis -lvorbisenc -lvorbisfile -lcurl -lmodplug
 LDFLAGS_UNIXSV_PRELOAD=-lz -ljpeg -lpng -lcurl
 LDFLAGS_UNIXSDL_PRELOAD=-lz -ljpeg -lpng -logg -ltheora -lvorbis -lvorbisenc -lvorbisfile -lcurl -lmodplug
@@ -303,9 +303,9 @@ OBJ_WGL= builddate.c sys_win.o vid_wgl.o thread_null.o $(OBJ_SND_WIN) $(OBJ_WINC
 
 # Link
 # see LDFLAGS_WINCOMMON in makefile
-LDFLAGS_WINCL=$(LDFLAGS_WINCOMMON) $(LIB_CRYPTO) $(LIB_CRYPTO_RIJNDAEL) -mwindows -lwinmm -luser32 -lgdi32 -ldxguid -ldinput -lcomctl32 -lws2_32 $(LDFLAGS_D3D) $(LIB_JPEG)
-LDFLAGS_WINSV=$(LDFLAGS_WINCOMMON) $(LIB_CRYPTO) $(LIB_CRYPTO_RIJNDAEL) -mconsole -lwinmm -lws2_32 $(LIB_JPEG)
-LDFLAGS_WINSDL=$(LDFLAGS_WINCOMMON) $(LIB_CRYPTO) $(LIB_CRYPTO_RIJNDAEL) $(SDLCONFIG_LIBS) $(LIB_SND_MODPLUG) -lwinmm -lws2_32 $(LIB_JPEG)
+LDFLAGS_WINCL=$(LDFLAGS_WINCOMMON) $(LIB_CRYPTO) $(LIB_GMP) $(LIB_CRYPTO_RIJNDAEL) -mwindows -lwinmm -luser32 -lgdi32 -ldxguid -ldinput -lcomctl32 -lws2_32 $(LDFLAGS_D3D) $(LIB_JPEG)
+LDFLAGS_WINSV=$(LDFLAGS_WINCOMMON) $(LIB_CRYPTO) $(LIB_GMP) $(LIB_CRYPTO_RIJNDAEL) -mconsole -lwinmm -lws2_32 $(LIB_JPEG)
+LDFLAGS_WINSDL=$(LDFLAGS_WINCOMMON) $(LIB_CRYPTO) $(LIB_GMP) $(LIB_CRYPTO_RIJNDAEL) $(SDLCONFIG_LIBS) $(LIB_SND_MODPLUG) -lwinmm -lws2_32 $(LIB_JPEG)
 EXE_WINCL=darkplaces.exe
 EXE_WINSV=darkplaces-dedicated.exe
 EXE_WINSDL=darkplaces-sdl.exe
@@ -358,19 +358,19 @@ help:
 	@echo
 
 debug :
-	$(MAKE) sv-debug cl-debug sdl-debug
+	$(MAKE) $(TARGETS_DEBUG)
 
 profile :
-	$(MAKE) sv-profile cl-profile sdl-profile
+	$(MAKE) $(TARGETS_PROFILE)
 
 release :
-	$(MAKE) sv-release cl-release sdl-release
+	$(MAKE) $(TARGETS_RELEASE)
 
 release-profile :
-	$(MAKE) sv-release-profile cl-release-profile sdl-release-profile
+	$(MAKE) $(TARGETS_RELEASE_PROFILE)
 
 nexuiz :
-	$(MAKE) sv-nexuiz cl-nexuiz sdl-nexuiz
+	$(MAKE) $(TARGETS_NEXUIZ)
 
 cl-debug :
 	$(MAKE) bin-debug \
@@ -490,6 +490,11 @@ snd_modplug.o: snd_modplug.c
 	$(CHECKLEVEL2)
 	$(DO_CC) $(CFLAGS_SND_MODPLUG)
 
+#this checks ODE_DYNAMIC and ODE_STATIC when compiling so it needs the ODE flags as well
+prvm_cmd.o: prvm_cmd.c
+	$(CHECKLEVEL2)
+	$(DO_CC) $(CFLAGS_ODE)
+
 world.o: world.c
 	$(CHECKLEVEL2)
 	$(DO_CC) $(CFLAGS_ODE)
@@ -587,4 +592,3 @@ clean:
 clean-profile: clean
 	-$(CMD_RM) *.gcda
 	-$(CMD_RM) *.gcno
-

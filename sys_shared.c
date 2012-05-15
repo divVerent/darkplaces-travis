@@ -1,14 +1,14 @@
+#ifdef WIN32
+# ifndef DONT_USE_SETDLLDIRECTORY
+#  define _WIN32_WINNT 0x0502
+# endif
+#endif
+
 #include "quakedef.h"
 
 #define SUPPORTDLL
 
 #ifdef WIN32
-# ifdef _WIN64
-#  ifndef _WIN32_WINNT
-#   define _WIN32_WINNT 0x0502
-#  endif
-   // for SetDllDirectory
-# endif
 # include <windows.h>
 # include <mmsystem.h> // timeGetTime
 # include <time.h> // localtime
@@ -133,13 +133,15 @@ notfound:
 	{
 		Con_DPrintf (" \"%s\"", dllnames[i]);
 #ifdef WIN32
-# ifdef _WIN64
+# ifndef DONT_USE_SETDLLDIRECTORY
+#  ifdef _WIN64
 		SetDllDirectory("bin64");
+#  else
+		SetDllDirectory("bin32");
+#  endif
 # endif
 		dllhandle = LoadLibrary (dllnames[i]);
-# ifdef _WIN64
-		SetDllDirectory(NULL);
-# endif
+		// no need to unset this - we want ALL dlls to be loaded from there, anyway
 #else
 		dllhandle = dlopen (dllnames[i], RTLD_LAZY | RTLD_GLOBAL);
 #endif
@@ -261,7 +263,7 @@ static cvar_t sys_usequeryperformancecounter = {CVAR_SAVE, "sys_usequeryperforma
 static cvar_t sys_useclockgettime = {CVAR_SAVE, "sys_useclockgettime", "0", "use POSIX clock_gettime function (which has issues if the system clock speed is far off, as it can't get fixed by NTP) for timing rather than gettimeofday (which has issues if the system time is stepped by ntpdate, or apparently on some Xen installations)"};
 #endif
 
-static unsigned long benchmark_time;
+static double benchmark_time; // actually always contains an integer amount of milliseconds, will eventually "overflow"
 
 void Sys_Init_Commands (void)
 {
@@ -282,21 +284,21 @@ void Sys_Init_Commands (void)
 #endif
 }
 
-double Sys_DoubleTime(void)
+double Sys_DirtyTime(void)
 {
-	static int first = true;
-	static double oldtime = 0.0, curtime = 0.0;
-	double newtime;
-	if(sys_usenoclockbutbenchmark.integer)
-	{
-		benchmark_time += 1;
-		return ((double) benchmark_time) / 1e6;
-	}
-
 	// first all the OPTIONAL timers
 
+	// benchmark timer (fake clock)
+	if(sys_usenoclockbutbenchmark.integer)
+	{
+		double old_benchmark_time = benchmark_time;
+		benchmark_time += 1;
+		if(benchmark_time == old_benchmark_time)
+			Sys_Error("sys_usenoclockbutbenchmark cannot run any longer, sorry");
+		return benchmark_time * 0.000001;
+	}
 #if HAVE_QUERYPERFORMANCECOUNTER
-	else if (sys_usequeryperformancecounter.integer)
+	if (sys_usequeryperformancecounter.integer)
 	{
 		// LordHavoc: note to people modifying this code, DWORD is specifically defined as an unsigned 32bit number, therefore the 65536.0 * 65536.0 is fine.
 		// QueryPerformanceCounter
@@ -311,27 +313,29 @@ double Sys_DoubleTime(void)
 		LARGE_INTEGER PerformanceFreq;
 		LARGE_INTEGER PerformanceCount;
 
-		if (!QueryPerformanceFrequency (&PerformanceFreq))
+		if (QueryPerformanceFrequency (&PerformanceFreq))
 		{
-			Con_Printf ("No hardware timer available\n");
-			// fall back to timeGetTime
-			Cvar_SetValueQuick(&sys_usequeryperformancecounter, false);
-			return Sys_DoubleTime();
+			QueryPerformanceCounter (&PerformanceCount);
+	
+			#ifdef __BORLANDC__
+			timescale = 1.0 / ((double) PerformanceFreq.u.LowPart + (double) PerformanceFreq.u.HighPart * 65536.0 * 65536.0);
+			return ((double) PerformanceCount.u.LowPart + (double) PerformanceCount.u.HighPart * 65536.0 * 65536.0) * timescale;
+			#else
+			timescale = 1.0 / ((double) PerformanceFreq.LowPart + (double) PerformanceFreq.HighPart * 65536.0 * 65536.0);
+			return ((double) PerformanceCount.LowPart + (double) PerformanceCount.HighPart * 65536.0 * 65536.0) * timescale;
+			#endif
 		}
-		QueryPerformanceCounter (&PerformanceCount);
-
-		#ifdef __BORLANDC__
-		timescale = 1.0 / ((double) PerformanceFreq.u.LowPart + (double) PerformanceFreq.u.HighPart * 65536.0 * 65536.0);
-		newtime = ((double) PerformanceCount.u.LowPart + (double) PerformanceCount.u.HighPart * 65536.0 * 65536.0) * timescale;
-		#else
-		timescale = 1.0 / ((double) PerformanceFreq.LowPart + (double) PerformanceFreq.HighPart * 65536.0 * 65536.0);
-		newtime = ((double) PerformanceCount.LowPart + (double) PerformanceCount.HighPart * 65536.0 * 65536.0) * timescale;
-		#endif
+		else
+		{
+			Con_Printf("No hardware timer available\n");
+			// fall back to other clock sources
+			Cvar_SetValueQuick(&sys_usequeryperformancecounter, false);
+		}
 	}
 #endif
 
 #if HAVE_CLOCKGETTIME
-	else if (sys_useclockgettime.integer)
+	if (sys_useclockgettime.integer)
 	{
 		struct timespec ts;
 #  ifdef CLOCK_MONOTONIC
@@ -341,24 +345,20 @@ double Sys_DoubleTime(void)
 		// sunos
 		clock_gettime(CLOCK_HIGHRES, &ts);
 #  endif
-		newtime = (double) ts.tv_sec + ts.tv_nsec / 1000000000.0;
+		return (double) ts.tv_sec + ts.tv_nsec / 1000000000.0;
 	}
 #endif
 
 	// now all the FALLBACK timers
-	else if(sys_supportsdlgetticks && sys_usesdlgetticks.integer)
-	{
-		newtime = (double) Sys_SDL_GetTicks() / 1000.0;
-	}
+	if(sys_supportsdlgetticks && sys_usesdlgetticks.integer)
+		return (double) Sys_SDL_GetTicks() / 1000.0;
 #if HAVE_GETTIMEOFDAY
-	else
 	{
 		struct timeval tp;
 		gettimeofday(&tp, NULL);
-		newtime = (double) tp.tv_sec + tp.tv_usec / 1000000.0;
+		return (double) tp.tv_sec + tp.tv_usec / 1000000.0;
 	}
 #elif HAVE_TIMEGETTIME
-	else
 	{
 		static int firsttimegettime = true;
 		// timeGetTime
@@ -372,42 +372,17 @@ double Sys_DoubleTime(void)
 		// make sure the timer is high precision, otherwise different versions of windows have varying accuracy
 		if (firsttimegettime)
 		{
-			timeBeginPeriod (1);
+			timeBeginPeriod(1);
 			firsttimegettime = false;
 		}
 
-		newtime = (double) timeGetTime () / 1000.0;
+		return (double) timeGetTime() / 1000.0;
 	}
 #else
 	// fallback for using the SDL timer if no other timer is available
-	else
-	{
-		newtime = (double) Sys_SDL_GetTicks() / 1000.0;
-		// this calls Sys_Error() if not linking against SDL
-	}
+	// this calls Sys_Error() if not linking against SDL
+	return (double) Sys_SDL_GetTicks() / 1000.0;
 #endif
-
-	if (first)
-	{
-		first = false;
-		oldtime = newtime;
-	}
-
-	if (newtime < oldtime)
-	{
-		// warn if it's significant
-		if (newtime - oldtime < -0.01)
-			Con_Printf("Sys_DoubleTime: time stepped backwards (went from %f to %f, difference %f)\n", oldtime, newtime, newtime - oldtime);
-	}
-	else if (newtime > oldtime + 1800)
-	{
-		Con_Printf("Sys_DoubleTime: time stepped forward (went from %f to %f, difference %f)\n", oldtime, newtime, newtime - oldtime);
-	}
-	else
-		curtime += newtime - oldtime;
-	oldtime = newtime;
-
-	return curtime;
 }
 
 void Sys_Sleep(int microseconds)
@@ -415,12 +390,18 @@ void Sys_Sleep(int microseconds)
 	double t = 0;
 	if(sys_usenoclockbutbenchmark.integer)
 	{
-		benchmark_time += microseconds;
+		if(microseconds)
+		{
+			double old_benchmark_time = benchmark_time;
+			benchmark_time += microseconds;
+			if(benchmark_time == old_benchmark_time)
+				Sys_Error("sys_usenoclockbutbenchmark cannot run any longer, sorry");
+		}
 		return;
 	}
 	if(sys_debugsleep.integer)
 	{
-		t = Sys_DoubleTime();
+		t = Sys_DirtyTime();
 	}
 	if(sys_supportsdlgetticks && sys_usesdldelay.integer)
 	{
@@ -452,12 +433,25 @@ void Sys_Sleep(int microseconds)
 #endif
 	if(sys_debugsleep.integer)
 	{
-		t = Sys_DoubleTime() - t;
-		printf("%d %d # debugsleep\n", microseconds, (unsigned int)(t * 1000000));
+		t = Sys_DirtyTime() - t;
+		Sys_PrintfToTerminal("%d %d # debugsleep\n", microseconds, (unsigned int)(t * 1000000));
 	}
 }
 
-const char *Sys_FindInPATH(const char *name, char namesep, const char *PATH, char pathsep, char *buf, size_t bufsize)
+void Sys_PrintfToTerminal(const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[MAX_INPUTLINE];
+
+	va_start(argptr,fmt);
+	dpvsnprintf(msg,sizeof(msg),fmt,argptr);
+	va_end(argptr);
+
+	Sys_PrintToTerminal(msg);
+}
+
+#ifndef WIN32
+static const char *Sys_FindInPATH(const char *name, char namesep, const char *PATH, char pathsep, char *buf, size_t bufsize)
 {
 	const char *p = PATH;
 	const char *q;
@@ -479,8 +473,9 @@ const char *Sys_FindInPATH(const char *name, char namesep, const char *PATH, cha
 	}
 	return name;
 }
+#endif
 
-const char *Sys_FindExecutableName(void)
+static const char *Sys_FindExecutableName(void)
 {
 #if defined(WIN32)
 	return com_argv[0];
@@ -541,18 +536,24 @@ static int CPUID_Features(void)
 # endif
 	return features;
 }
+#endif
 
+#ifdef SSE_POSSIBLE
 qboolean Sys_HaveSSE(void)
 {
 	// COMMANDLINEOPTION: SSE: -nosse disables SSE support and detection
 	if(COM_CheckParm("-nosse"))
 		return false;
+#ifdef SSE_PRESENT
+	return true;
+#else
 	// COMMANDLINEOPTION: SSE: -forcesse enables SSE support and disables detection
 	if(COM_CheckParm("-forcesse") || COM_CheckParm("-forcesse2"))
 		return true;
 	if(CPUID_Features() & (1 << 25))
 		return true;
 	return false;
+#endif
 }
 
 qboolean Sys_HaveSSE2(void)
@@ -560,11 +561,82 @@ qboolean Sys_HaveSSE2(void)
 	// COMMANDLINEOPTION: SSE2: -nosse2 disables SSE2 support and detection
 	if(COM_CheckParm("-nosse") || COM_CheckParm("-nosse2"))
 		return false;
+#ifdef SSE2_PRESENT
+	return true;
+#else
 	// COMMANDLINEOPTION: SSE2: -forcesse2 enables SSE2 support and disables detection
 	if(COM_CheckParm("-forcesse2"))
 		return true;
 	if((CPUID_Features() & (3 << 25)) == (3 << 25)) // SSE is 1<<25, SSE2 is 1<<26
 		return true;
 	return false;
+#endif
+}
+#endif
+
+/// called to set process priority for dedicated servers
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <errno.h>
+static int nicelevel;
+static qboolean nicepossible;
+static qboolean isnice;
+void Sys_InitProcessNice (void)
+{
+	struct rlimit lim;
+	nicepossible = false;
+	if(COM_CheckParm("-nonice"))
+		return;
+	errno = 0;
+	nicelevel = getpriority(PRIO_PROCESS, 0);
+	if(errno)
+	{
+		Con_Printf("Kernel does not support reading process priority - cannot use niceness\n");
+		return;
+	}
+	if(getrlimit(RLIMIT_NICE, &lim))
+	{
+		Con_Printf("Kernel does not support lowering nice level again - cannot use niceness\n");
+		return;
+	}
+	if(lim.rlim_cur != RLIM_INFINITY && nicelevel < (int) (20 - lim.rlim_cur))
+	{
+		Con_Printf("Current nice level is below the soft limit - cannot use niceness\n");
+		return;
+	}
+	nicepossible = true;
+	isnice = false;
+}
+void Sys_MakeProcessNice (void)
+{
+	if(!nicepossible)
+		return;
+	if(isnice)
+		return;
+	Con_DPrintf("Process is becoming 'nice'...\n");
+	if(setpriority(PRIO_PROCESS, 0, 19))
+		Con_Printf("Failed to raise nice level to %d\n", 19);
+	isnice = true;
+}
+void Sys_MakeProcessMean (void)
+{
+	if(!nicepossible)
+		return;
+	if(!isnice)
+		return;
+	Con_DPrintf("Process is becoming 'mean'...\n");
+	if(setpriority(PRIO_PROCESS, 0, nicelevel))
+		Con_Printf("Failed to lower nice level to %d\n", nicelevel);
+	isnice = false;
+}
+#else
+void Sys_InitProcessNice (void)
+{
+}
+void Sys_MakeProcessNice (void)
+{
+}
+void Sys_MakeProcessMean (void)
+{
 }
 #endif

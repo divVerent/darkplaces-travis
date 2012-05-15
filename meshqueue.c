@@ -10,17 +10,15 @@ typedef struct meshqueue_s
 	int surfacenumber;
 	const rtlight_t *rtlight;
 	float dist;
+	meshqueue_sortcategory_t category;
 }
 meshqueue_t;
 
 int trans_sortarraysize;
 meshqueue_t **trans_hash = NULL;
 meshqueue_t ***trans_hashpointer = NULL;
-extern cvar_t r_transparent_sortarraysize;
-extern cvar_t r_transparent_sortmaxdist;
 
 float mqt_viewplanedist;
-float mqt_viewmindist;
 float mqt_viewmaxdist;
 meshqueue_t *mqt_array;
 int mqt_count;
@@ -31,10 +29,9 @@ void R_MeshQueue_BeginScene(void)
 	mqt_count = 0;
 	mqt_viewplanedist = DotProduct(r_refdef.view.origin, r_refdef.view.forward);
 	mqt_viewmaxdist = 0;
-	mqt_viewmindist = 999999999;
 }
 
-void R_MeshQueue_AddTransparent(const vec3_t center, void (*callback)(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist), const entity_render_t *ent, int surfacenumber, const rtlight_t *rtlight)
+void R_MeshQueue_AddTransparent(meshqueue_sortcategory_t category, const vec3_t center, void (*callback)(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist), const entity_render_t *ent, int surfacenumber, const rtlight_t *rtlight)
 {
 	meshqueue_t *mq;
 	if (mqt_count >= mqt_total || !mqt_array)
@@ -54,10 +51,13 @@ void R_MeshQueue_AddTransparent(const vec3_t center, void (*callback)(const enti
 	mq->ent = ent;
 	mq->surfacenumber = surfacenumber;
 	mq->rtlight = rtlight;
-	mq->dist = DotProduct(center, r_refdef.view.forward) - mqt_viewplanedist;
+	mq->category = category;
+	if (r_transparent_useplanardistance.integer)
+		mq->dist = DotProduct(center, r_refdef.view.forward) - mqt_viewplanedist;
+	else
+		mq->dist = VectorDistance(center, r_refdef.view.origin);
 	mq->next = NULL;
 	mqt_viewmaxdist = max(mqt_viewmaxdist, mq->dist);
-	mqt_viewmindist = min(mqt_viewmindist, mq->dist);
 }
 
 void R_MeshQueue_RenderTransparent(void)
@@ -76,8 +76,10 @@ void R_MeshQueue_RenderTransparent(void)
 	// check for bad cvars
 	if (r_transparent_sortarraysize.integer < 1 || r_transparent_sortarraysize.integer > 32768)
 		Cvar_SetValueQuick(&r_transparent_sortarraysize, bound(1, r_transparent_sortarraysize.integer, 32768));
-	if (r_transparent_sortmaxdist.integer < 1 || r_transparent_sortmaxdist.integer > 32768)
-		Cvar_SetValueQuick(&r_transparent_sortmaxdist, bound(1, r_transparent_sortmaxdist.integer, 32768));
+	if (r_transparent_sortmindist.integer < 1 || r_transparent_sortmindist.integer >= r_transparent_sortmaxdist.integer)
+		Cvar_SetValueQuick(&r_transparent_sortmindist, 0);
+	if (r_transparent_sortmaxdist.integer < r_transparent_sortmindist.integer || r_transparent_sortmaxdist.integer > 32768)
+		Cvar_SetValueQuick(&r_transparent_sortmaxdist, bound(r_transparent_sortmindist.integer, r_transparent_sortmaxdist.integer, 32768));
 
 	// update hash array
 	if (trans_sortarraysize != r_transparent_sortarraysize.integer)
@@ -95,11 +97,24 @@ void R_MeshQueue_RenderTransparent(void)
 	memset(trans_hash, 0, sizeof(trans_hash) * trans_sortarraysize);
 	for (i = 0; i < trans_sortarraysize; i++)
 		trans_hashpointer[i] = &trans_hash[i];
-	distscale = (trans_sortarraysize - 1) / max( min(mqt_viewmaxdist, r_transparent_sortmaxdist.integer) - mqt_viewmindist, 64 );
+	distscale = (trans_sortarraysize - 1) / min(mqt_viewmaxdist, r_transparent_sortmaxdist.integer);
 	maxhashindex = trans_sortarraysize - 1;
 	for (i = 0, mqt = mqt_array; i < mqt_count; i++, mqt++)
 	{
-		hashindex = bound(0, (int)(min(mqt->dist - mqt_viewmindist, r_transparent_sortmaxdist.integer) * distscale - 0.1), maxhashindex);
+		switch(mqt->category)
+		{
+		default:
+		case MESHQUEUE_SORT_HUD:
+			hashindex = 0;
+			break;
+		case MESHQUEUE_SORT_DISTANCE:
+			// this could use a reduced range if we need more categories
+			hashindex = bound(0, (int)(bound(0, mqt->dist - r_transparent_sortmindist.integer, r_transparent_sortmaxdist.integer) * distscale), maxhashindex);
+			break;
+		case MESHQUEUE_SORT_SKY:
+			hashindex = maxhashindex;
+			break;
+		}
 		// link to tail of hash chain (to preserve render order)
 		mqt->next = NULL;
 		*trans_hashpointer[hashindex] = mqt;

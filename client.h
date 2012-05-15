@@ -215,6 +215,10 @@ typedef struct rtlight_s
 	int particlecache_maxparticles;
 	int particlecache_updateparticle;
 	rtlight_particle_t *particlecache_particles;
+
+	/// bouncegrid light info
+	float photoncolor[3];
+	float photons;
 }
 rtlight_t;
 
@@ -290,18 +294,6 @@ typedef struct dlight_s
 	rtlight_t rtlight;
 }
 dlight_t;
-
-#define MAX_FRAMEGROUPBLENDS 4
-typedef struct framegroupblend_s
-{
-	// animation number and blend factor
-	// (for most models this is the frame number)
-	int frame;
-	float lerp;
-	// time frame began playing (for framegroup animations)
-	double start;
-}
-framegroupblend_t;
 
 // this is derived from processing of the framegroupblend array
 // note: technically each framegroupblend can produce two of these, but that
@@ -401,32 +393,22 @@ typedef struct entity_render_s
 	double last_trace_visibility;
 
 	// user wavefunc parameters (from csqc)
-	float userwavefunc_param[Q3WAVEFUNC_USER_COUNT];
+	vec_t userwavefunc_param[Q3WAVEFUNC_USER_COUNT];
 }
 entity_render_t;
 
 typedef struct entity_persistent_s
 {
-	vec3_t trail_origin;
-
-	// particle trail
-	float trail_time;
+	vec3_t trail_origin; // previous position for particle trail spawning
+	vec3_t oldorigin; // lerp
+	vec3_t oldangles; // lerp
+	vec3_t neworigin; // lerp
+	vec3_t newangles; // lerp
+	vec_t lerpstarttime; // lerp
+	vec_t lerpdeltatime; // lerp
+	float muzzleflash; // muzzleflash intensity, fades over time
+	float trail_time; // residual error accumulation for particle trail spawning (to keep spacing across frames)
 	qboolean trail_allowed; // set to false by teleports, true by update code, prevents bad lerps
-
-	// muzzleflash fading
-	float muzzleflash;
-
-	// interpolated movement
-
-	// start time of move
-	float lerpstarttime;
-	// time difference from start to end of move
-	float lerpdeltatime;
-	// the move itself, start and end
-	float oldorigin[3];
-	float oldangles[3];
-	float neworigin[3];
-	float newangles[3];
 }
 entity_persistent_t;
 
@@ -588,7 +570,7 @@ typedef struct capturevideostate_s
 	const char *formatextension;
 	qfile_t *videofile;
 		// always use this:
-		//   cls.capturevideo.videofile = FS_OpenRealFile(va("%s.%s", cls.capturevideo.basename, cls.capturevideo.formatextension), "wb", false);
+		//   cls.capturevideo.videofile = FS_OpenRealFile(va(vabuf, sizeof(vabuf), "%s.%s", cls.capturevideo.basename, cls.capturevideo.formatextension), "wb", false);
 	void (*endvideo) (void);
 	void (*videoframes) (int num);
 	void (*soundframe) (const portable_sampleframe_t *paintbuffer, size_t length);
@@ -640,6 +622,7 @@ typedef struct client_static_s
 	fs_offset_t demo_lastcsprogssize;
 	int demo_lastcsprogscrc;
 	qboolean demoplayback;
+	qboolean demostarting; // set if currently starting a demo, to stop -demo from quitting when switching to another demo
 	qboolean timedemo;
 	// -1 = use normal cd track
 	int forcetrack;
@@ -1003,6 +986,7 @@ typedef struct client_state_s
 	float bob2_smooth;
 	float bobfall_speed;
 	float bobfall_swing;
+	double calcrefdef_prevtime;
 
 	// don't change view angle, full screen, etc
 	int intermission;
@@ -1216,6 +1200,7 @@ typedef struct client_state_s
 	float movevars_maxairspeed;
 	float movevars_stepheight;
 	float movevars_airaccel_qw;
+	float movevars_airaccel_qw_stretchfactor;
 	float movevars_airaccel_sideways_friction;
 	float movevars_airstopaccelerate;
 	float movevars_airstrafeaccelerate;
@@ -1255,8 +1240,11 @@ typedef struct client_state_s
 	// server entity number corresponding to a clientside entity
 	unsigned short csqc_server2csqcentitynumber[MAX_EDICTS];
 	qboolean csqc_loaded;
-	vec3_t csqc_origin;
-	vec3_t csqc_angles;
+	vec3_t csqc_vieworigin;
+	vec3_t csqc_viewangles;
+	vec3_t csqc_vieworiginfromengine;
+	vec3_t csqc_viewanglesfromengine;
+	matrix4x4_t csqc_viewmodelmatrixfromengine;
 	qboolean csqc_usecsqclistener;
 	matrix4x4_t csqc_listenermatrix;
 	char csqc_printtextbuf[MAX_INPUTLINE];
@@ -1274,6 +1262,9 @@ typedef struct client_state_s
 	// freed on each level change
 	size_t buildlightmapmemorysize;
 	unsigned char *buildlightmapmemory;
+
+	// used by EntityState5_ReadUpdate
+	skeleton_t *engineskeletonobjects;
 }
 client_state_t;
 
@@ -1410,7 +1401,7 @@ extern int cl_ignoremousemoves;
 
 
 float CL_KeyState (kbutton_t *key);
-const char *Key_KeynumToString (int keynum);
+const char *Key_KeynumToString (int keynum, char *buf, size_t buflength);
 int Key_StringToKeynum (const char *str);
 
 //
@@ -1448,7 +1439,7 @@ void V_StartPitchDrift (void);
 void V_StopPitchDrift (void);
 
 void V_Init (void);
-float V_CalcRoll (vec3_t angles, vec3_t velocity);
+float V_CalcRoll (const vec3_t angles, const vec3_t velocity);
 void V_UpdateBlends (void);
 void V_ParseDamage (void);
 
@@ -1662,16 +1653,18 @@ typedef struct r_refdef_view_s
 	// which color components to allow (for anaglyph glasses)
 	int colormask[4];
 
-	// global RGB color multiplier for rendering, this is required by HDR
+	// global RGB color multiplier for rendering
 	float colorscale;
 
 	// whether to call R_ClearScreen before rendering stuff
 	qboolean clear;
 	// if true, don't clear or do any post process effects (bloom, etc)
 	qboolean isoverlay;
+	// if true, this is the MAIN view (which is, after CSQC, copied into the scene for use e.g. by r_speeds 1, showtex, prydon cursor)
+	qboolean ismain;
 
 	// whether to draw r_showtris and such, this is only true for the main
-	// view render, all secondary renders (HDR, mirrors, portals, cameras,
+	// view render, all secondary renders (mirrors, portals, cameras,
 	// distortion effects, etc) omit such debugging information
 	qboolean showdebug;
 
@@ -1836,8 +1829,62 @@ r_refdef_t;
 
 extern r_refdef_t r_refdef;
 
+typedef enum waterlevel_e
+{
+	WATERLEVEL_NONE,
+	WATERLEVEL_WETFEET,
+	WATERLEVEL_SWIMMING,
+	WATERLEVEL_SUBMERGED
+}
+waterlevel_t;
+
+typedef struct cl_clientmovement_state_s
+{
+	// entity to be ignored for movement
+	struct prvm_edict_s *self;
+	// position
+	vec3_t origin;
+	vec3_t velocity;
+	// current bounding box (different if crouched vs standing)
+	vec3_t mins;
+	vec3_t maxs;
+	// currently on the ground
+	qboolean onground;
+	// currently crouching
+	qboolean crouched;
+	// what kind of water (SUPERCONTENTS_LAVA for instance)
+	int watertype;
+	// how deep
+	waterlevel_t waterlevel;
+	// weird hacks when jumping out of water
+	// (this is in seconds and counts down to 0)
+	float waterjumptime;
+
+	// user command
+	usercmd_t cmd;
+}
+cl_clientmovement_state_t;
+void CL_ClientMovement_PlayerMove_Frame(cl_clientmovement_state_t *s);
+
 // warpzone prediction hack (CSQC builtin)
 void CL_RotateMoves(const matrix4x4_t *m);
+
+void CL_NewFrameReceived(int num);
+void CL_ParseEntityLump(char *entitystring);
+void CL_FindNonSolidLocation(const vec3_t in, vec3_t out, vec_t radius);
+void CL_RelinkLightFlashes(void);
+void Sbar_ShowFPS(void);
+void Sbar_ShowFPS_Update(void);
+void Host_SaveConfig(void);
+void Host_LoadConfig_f(void);
+void CL_UpdateMoveVars(void);
+void SCR_CaptureVideo_SoundFrame(const portable_sampleframe_t *paintbuffer, size_t length);
+void V_DriftPitch(void);
+void V_FadeViewFlashs(void);
+void V_CalcViewBlend(void);
+void V_CalcRefdefUsing (const matrix4x4_t *entrendermatrix, const vec3_t clviewangles, qboolean teleported, qboolean clonground, qboolean clcmdjump, float clstatsviewheight, qboolean cldead, qboolean clintermission, const vec3_t clvelocity);
+void V_CalcRefdef(void);
+void CL_Locs_Reload_f(void);
 
 #endif
 

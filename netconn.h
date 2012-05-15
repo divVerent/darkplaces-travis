@@ -221,6 +221,17 @@ typedef struct netconn_s
 
 	char address[128];
 	crypto_t crypto;
+
+	// statistic counters
+	int packetsSent;
+	int packetsReSent;
+	int packetsReceived;
+	int receivedDuplicateCount;
+	int droppedDatagrams;
+	int unreliableMessagesSent;
+	int unreliableMessagesReceived;
+	int reliableMessagesSent;
+	int reliableMessagesReceived;
 } netconn_t;
 
 extern netconn_t *netconn_list;
@@ -229,10 +240,7 @@ extern mempool_t *netconn_mempool;
 extern cvar_t hostname;
 extern cvar_t developer_networking;
 
-#define SERVERLIST_TOTALSIZE		2048
 #define SERVERLIST_VIEWLISTSIZE		SERVERLIST_TOTALSIZE
-#define SERVERLIST_ANDMASKCOUNT		5
-#define SERVERLIST_ORMASKCOUNT		5
 
 typedef enum serverlist_maskop_e
 {
@@ -392,7 +400,10 @@ extern int masterreplycount;
 extern int serverquerycount;
 extern int serverreplycount;
 
-extern sizebuf_t net_message;
+extern sizebuf_t cl_message;
+extern sizebuf_t sv_message;
+extern char cl_readstring[MAX_INPUTLINE];
+extern char sv_readstring[MAX_INPUTLINE];
 
 extern cvar_t sv_public;
 

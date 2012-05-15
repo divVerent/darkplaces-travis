@@ -213,7 +213,7 @@ static void R_DrawExplosion_TransparentCallback(const entity_render_t *ent, cons
 	R_EntityMatrix(&identitymatrix);
 
 //	R_Mesh_ResetTextureState();
-	R_SetupShader_Generic(explosiontexture, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic(explosiontexture, NULL, GL_MODULATE, 1, false, false, false);
 	for (surfacelistindex = 0;surfacelistindex < numsurfaces;surfacelistindex++)
 	{
 		const explosion_t *e = explosion + surfacelist[surfacelistindex];
@@ -275,7 +275,7 @@ void R_DrawExplosions(void)
 		{
 			R_MoveExplosion(&explosion[i]);
 			if (explosion[i].alpha)
-				R_MeshQueue_AddTransparent(explosion[i].origin, R_DrawExplosion_TransparentCallback, NULL, i, NULL);
+				R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, explosion[i].origin, R_DrawExplosion_TransparentCallback, NULL, i, NULL);
 		}
 	}
 	while (numexplosions > 0 && explosion[i-1].alpha <= 0)

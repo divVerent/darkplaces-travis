@@ -68,10 +68,11 @@ char *Sys_TimeString(const char *timeformat);
 //
 
 /// an error will cause the entire program to exit
-void Sys_Error (const char *error, ...) DP_FUNC_PRINTF(1);
+void Sys_Error (const char *error, ...) DP_FUNC_PRINTF(1) DP_FUNC_NORETURN;
 
 /// (may) output text to terminal which launched program
 void Sys_PrintToTerminal(const char *text);
+void Sys_PrintfToTerminal(const char *fmt, ...);
 
 /// INFO: This is only called by Host_Shutdown so we dont need testing for recursion
 void Sys_Shutdown (void);
@@ -84,7 +85,14 @@ void Sys_Quit (int returnvalue);
  */
 void Sys_AllowProfiling (qboolean enable);
 
-double Sys_DoubleTime (void);
+typedef struct sys_cleantime_s
+{
+	double dirtytime; // last value gotten from Sys_DirtyTime()
+	double cleantime; // sanitized linearly increasing time since app start
+}
+sys_cleantime_t;
+
+double Sys_DirtyTime(void);
 
 void Sys_ProvideSelfFD (void);
 
@@ -101,6 +109,11 @@ char *Sys_GetClipboardData (void);
 extern qboolean sys_supportsdlgetticks;
 unsigned int Sys_SDL_GetTicks (void); // wrapper to call SDL_GetTicks
 void Sys_SDL_Delay (unsigned int milliseconds); // wrapper to call SDL_Delay
+
+/// called to set process priority for dedicated servers
+void Sys_InitProcessNice (void);
+void Sys_MakeProcessNice (void);
+void Sys_MakeProcessMean (void);
 
 #endif
 

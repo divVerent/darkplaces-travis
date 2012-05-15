@@ -31,6 +31,7 @@ void R_GetViewport(r_viewport_t *v);
 void GL_Finish(void);
 
 void GL_BlendFunc(int blendfunc1, int blendfunc2);
+void GL_BlendEquationSubtract(qboolean negated);
 void GL_DepthMask(int state);
 void GL_DepthTest(int state);
 void GL_DepthFunc(int state);
@@ -40,6 +41,7 @@ void R_SetStencil(qboolean enable, int writemask, int fail, int zfail, int zpass
 void GL_PolygonOffset(float planeoffset, float depthoffset);
 void GL_CullFace(int state);
 void GL_AlphaTest(int state);
+void GL_AlphaToCoverage(qboolean state);
 void GL_ColorMask(int r, int g, int b, int a);
 void GL_Color(float cr, float cg, float cb, float ca);
 void GL_ActiveTexture(unsigned int num);
@@ -50,8 +52,6 @@ void GL_Clear(int mask, const float *colorvalue, float depthvalue, int stencilva
 void GL_ReadPixelsBGRA(int x, int y, int width, int height, unsigned char *outpixels);
 int R_Mesh_CreateFramebufferObject(rtexture_t *depthtexture, rtexture_t *colortexture, rtexture_t *colortexture2, rtexture_t *colortexture3, rtexture_t *colortexture4);
 void R_Mesh_DestroyFramebufferObject(int fbo);
-void R_Mesh_ResetRenderTargets(void);
-void R_Mesh_SetMainRenderTargets(void);
 void R_Mesh_SetRenderTargets(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture, rtexture_t *colortexture2, rtexture_t *colortexture3, rtexture_t *colortexture4);
 
 unsigned int GL_Backend_CompileProgram(int vertexstrings_count, const char **vertexstrings_list, int geometrystrings_count, const char **geometrystrings_list, int fragmentstrings_count, const char **fragmentstrings_list);

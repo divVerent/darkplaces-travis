@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cmd.c -- Quake script command processing module
 
 #include "quakedef.h"
+#include "thread.h"
 
 typedef struct cmdalias_s
 {
@@ -59,7 +60,7 @@ typedef struct cmddeferred_s
 {
 	struct cmddeferred_s *next;
 	char *value;
-	double time;
+	double delay;
 } cmddeferred_t;
 
 static cmddeferred_t *cmd_deferred_list = NULL;
@@ -75,13 +76,12 @@ static void Cmd_Defer_f (void)
 {
 	if(Cmd_Argc() == 1)
 	{
-		double time = Sys_DoubleTime();
 		cmddeferred_t *next = cmd_deferred_list;
 		if(!next)
 			Con_Printf("No commands are pending.\n");
 		while(next)
 		{
-			Con_Printf("-> In %9.2f: %s\n", next->time-time, next->value);
+			Con_Printf("-> In %9.2f: %s\n", next->delay, next->value);
 			next = next->next;
 		}
 	} else if(Cmd_Argc() == 2 && !strcasecmp("clear", Cmd_Argv(1)))
@@ -99,7 +99,7 @@ static void Cmd_Defer_f (void)
 		cmddeferred_t *defcmd = (cmddeferred_t*)Mem_Alloc(tempmempool, sizeof(*defcmd));
 		size_t len = strlen(value);
 
-		defcmd->time = Sys_DoubleTime() + atof(Cmd_Argv(1));
+		defcmd->delay = atof(Cmd_Argv(1));
 		defcmd->value = (char*)Mem_Alloc(tempmempool, len+1);
 		memcpy(defcmd->value, value, len+1);
 		defcmd->next = NULL;
@@ -175,6 +175,10 @@ static void Cmd_Centerprint_f (void)
 
 static sizebuf_t	cmd_text;
 static unsigned char		cmd_text_buf[CMDBUFSIZE];
+void *cmd_text_mutex = NULL;
+
+#define Cbuf_LockThreadMutex() (void)(cmd_text_mutex ? Thread_LockMutex(cmd_text_mutex) : 0)
+#define Cbuf_UnlockThreadMutex() (void)(cmd_text_mutex ? Thread_UnlockMutex(cmd_text_mutex) : 0)
 
 /*
 ============
@@ -187,15 +191,14 @@ void Cbuf_AddText (const char *text)
 {
 	int		l;
 
-	l = (int)strlen (text);
+	l = (int)strlen(text);
 
+	Cbuf_LockThreadMutex();
 	if (cmd_text.cursize + l >= cmd_text.maxsize)
-	{
 		Con_Print("Cbuf_AddText: overflow\n");
-		return;
-	}
-
-	SZ_Write (&cmd_text, (const unsigned char *)text, (int)strlen (text));
+	else
+		SZ_Write(&cmd_text, (const unsigned char *)text, l);
+	Cbuf_UnlockThreadMutex();
 }
 
 
@@ -210,29 +213,19 @@ FIXME: actually change the command buffer to do less copying
 */
 void Cbuf_InsertText (const char *text)
 {
-	char	*temp;
-	int		templen;
-
-	// copy off any commands still remaining in the exec buffer
-	templen = cmd_text.cursize;
-	if (templen)
-	{
-		temp = (char *)Mem_Alloc (tempmempool, templen);
-		memcpy (temp, cmd_text.data, templen);
-		SZ_Clear (&cmd_text);
-	}
+	size_t l = strlen(text);
+	Cbuf_LockThreadMutex();
+	// we need to memmove the existing text and stuff this in before it...
+	if (cmd_text.cursize + l >= (size_t)cmd_text.maxsize)
+		Con_Print("Cbuf_InsertText: overflow\n");
 	else
-		temp = NULL;
-
-	// add the entire text of the file
-	Cbuf_AddText (text);
-
-	// add the copied off data
-	if (temp != NULL)
 	{
-		SZ_Write (&cmd_text, (const unsigned char *)temp, templen);
-		Mem_Free (temp);
+		// we don't have a SZ_Prepend, so...
+		memmove(cmd_text.data + l, cmd_text.data, cmd_text.cursize);
+		cmd_text.cursize += l;
+		memcpy(cmd_text.data, text, l);
 	}
+	Cbuf_UnlockThreadMutex();
 }
 
 /*
@@ -240,15 +233,22 @@ void Cbuf_InsertText (const char *text)
 Cbuf_Execute_Deferred --blub
 ============
 */
-void Cbuf_Execute_Deferred (void)
+static void Cbuf_Execute_Deferred (void)
 {
+	static double oldrealtime = 0;
 	cmddeferred_t *cmd, *prev;
-	double time = Sys_DoubleTime();
+	double eat;
+	if (realtime - oldrealtime < 0 || realtime - oldrealtime > 1800) oldrealtime = realtime;
+	eat = realtime - oldrealtime;
+	if (eat < (1.0 / 120.0))
+		return;
+	oldrealtime = realtime;
 	prev = NULL;
 	cmd = cmd_deferred_list;
 	while(cmd)
 	{
-		if(cmd->time <= time)
+		cmd->delay -= eat;
+		if(cmd->delay <= 0)
 		{
 			Cbuf_AddText(cmd->value);
 			Cbuf_AddText(";\n");
@@ -275,7 +275,7 @@ void Cbuf_Execute_Deferred (void)
 Cbuf_Execute
 ============
 */
-static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned maxoutlen, cmdalias_t *alias );
+static qboolean Cmd_PreprocessString( const char *intext, char *outtext, unsigned maxoutlen, cmdalias_t *alias );
 void Cbuf_Execute (void)
 {
 	int i;
@@ -289,7 +289,6 @@ void Cbuf_Execute (void)
 	// LordHavoc: making sure the tokenizebuffer doesn't get filled up by repeated crashes
 	cmd_tokenizebufferpos = 0;
 
-	Cbuf_Execute_Deferred();
 	while (cmd_text.cursize)
 	{
 // find a \n or ; line break
@@ -361,12 +360,12 @@ void Cbuf_Execute (void)
 			(strncmp(firstchar, "in_bind", 7) || !ISWHITESPACE(firstchar[7]))
 		)
 		{
-			Cmd_PreprocessString( line, preprocessed, sizeof(preprocessed), NULL );
-			Cmd_ExecuteString (preprocessed, src_command);
+			if(Cmd_PreprocessString( line, preprocessed, sizeof(preprocessed), NULL ))
+				Cmd_ExecuteString (preprocessed, src_command, false);
 		}
 		else
 		{
-			Cmd_ExecuteString (line, src_command);
+			Cmd_ExecuteString (line, src_command, false);
 		}
 
 		if (cmd_wait)
@@ -375,6 +374,17 @@ void Cbuf_Execute (void)
 			cmd_wait = false;
 			break;
 		}
+	}
+}
+
+void Cbuf_Frame(void)
+{
+	Cbuf_Execute_Deferred();
+	if (cmd_text.cursize)
+	{
+		SV_LockThreadMutex();
+		Cbuf_Execute();
+		SV_UnlockThreadMutex();
 	}
 }
 
@@ -397,7 +407,7 @@ quake -nosound +cmd amlev1
 ===============
 */
 qboolean host_stuffcmdsrun = false;
-void Cmd_StuffCmds_f (void)
+static void Cmd_StuffCmds_f (void)
 {
 	int		i, j, l;
 	// this is for all commandline options combined (and is bounds checked)
@@ -450,24 +460,12 @@ void Cmd_StuffCmds_f (void)
 	Cbuf_InsertText (build);
 }
 
-
-/*
-===============
-Cmd_Exec_f
-===============
-*/
-static void Cmd_Exec_f (void)
+static void Cmd_Exec(const char *filename)
 {
 	char *f;
-	const char *filename;
+	size_t filenameLen = strlen(filename);
+	qboolean isdefaultcfg = filenameLen >= 11 && !strcmp(filename + filenameLen - 11, "default.cfg");
 
-	if (Cmd_Argc () != 2)
-	{
-		Con_Print("exec <filename> : execute a script file\n");
-		return;
-	}
-
-	filename = Cmd_Argv(1);
 	if (!strcmp(filename, "config.cfg"))
 	{
 		filename = CONFIGFILENAME;
@@ -486,7 +484,7 @@ static void Cmd_Exec_f (void)
 	// if executing default.cfg for the first time, lock the cvar defaults
 	// it may seem backwards to insert this text BEFORE the default.cfg
 	// but Cbuf_InsertText inserts before, so this actually ends up after it.
-	if (strlen(filename) >= 11 && !strcmp(filename + strlen(filename) - 11, "default.cfg"))
+	if (isdefaultcfg)
 		Cbuf_InsertText("\ncvar_lockdefaults\n");
 
 	// insert newline after the text to make sure the last line is terminated (some text editors omit the trailing newline)
@@ -495,23 +493,58 @@ static void Cmd_Exec_f (void)
 	Cbuf_InsertText (f);
 	Mem_Free(f);
 
-	// special defaults for specific games go here, these execute before default.cfg
-	// Nehahra pushable crates malfunction in some levels if this is on
-	// Nehahra NPC AI is confused by blowupfallenzombies
-	if (gamemode == GAME_NEHAHRA)
-		Cbuf_InsertText("\nsv_gameplayfix_upwardvelocityclearsongroundflag 0\nsv_gameplayfix_blowupfallenzombies 0\n\n");
-	// hipnotic mission pack has issues in their 'friendly monster' ai, which seem to attempt to attack themselves for some reason when findradius() returns non-solid entities.
-	// hipnotic mission pack has issues with bobbing water entities 'jittering' between different heights on alternate frames at the default 0.0138889 ticrate, 0.02 avoids this issue
-	// hipnotic mission pack has issues in their proximity mine sticking code, which causes them to bounce off.
-	if (gamemode == GAME_HIPNOTIC)
-		Cbuf_InsertText("\nsv_gameplayfix_blowupfallenzombies 0\nsys_ticrate 0.02\nsv_gameplayfix_slidemoveprojectiles 0\n\n");
-	// rogue mission pack has a guardian boss that does not wake up if findradius returns one of the entities around its spawn area
-	if (gamemode == GAME_ROGUE)
-		Cbuf_InsertText("\nsv_gameplayfix_findradiusdistancetobox 0\n\n");
-	if (gamemode == GAME_NEXUIZ)
-		Cbuf_InsertText("\nsv_gameplayfix_q2airaccelerate 1\nsv_gameplayfix_stepmultipletimes 1\n\n");
-	if (gamemode == GAME_TENEBRAE)
-		Cbuf_InsertText("\nr_shadow_gloss 2\nr_shadow_bumpscale_basetexture 4\n\n");
+	if (isdefaultcfg)
+	{
+		// special defaults for specific games go here, these execute before default.cfg
+		// Nehahra pushable crates malfunction in some levels if this is on
+		// Nehahra NPC AI is confused by blowupfallenzombies
+		if (gamemode == GAME_NEHAHRA)
+			Cbuf_InsertText("\nsv_gameplayfix_upwardvelocityclearsongroundflag 0\nsv_gameplayfix_blowupfallenzombies 0\n\n");
+		// hipnotic mission pack has issues in their 'friendly monster' ai, which seem to attempt to attack themselves for some reason when findradius() returns non-solid entities.
+		// hipnotic mission pack has issues with bobbing water entities 'jittering' between different heights on alternate frames at the default 0.0138889 ticrate, 0.02 avoids this issue
+		// hipnotic mission pack has issues in their proximity mine sticking code, which causes them to bounce off.
+		if (gamemode == GAME_HIPNOTIC)
+			Cbuf_InsertText("\nsv_gameplayfix_blowupfallenzombies 0\nsys_ticrate 0.02\nsv_gameplayfix_slidemoveprojectiles 0\n\n");
+		// rogue mission pack has a guardian boss that does not wake up if findradius returns one of the entities around its spawn area
+		if (gamemode == GAME_ROGUE)
+			Cbuf_InsertText("\nsv_gameplayfix_findradiusdistancetobox 0\n\n");
+		if (gamemode == GAME_NEXUIZ)
+			Cbuf_InsertText("\nsv_gameplayfix_q2airaccelerate 1\nsv_gameplayfix_stepmultipletimes 1\n\n");
+		if (gamemode == GAME_TENEBRAE)
+			Cbuf_InsertText("\nr_shadow_gloss 2\nr_shadow_bumpscale_basetexture 4\n\n");
+		// Steel Storm: Burning Retribution csqc misinterprets CSQC_InputEvent if type is a value other than 0 or 1
+		if (gamemode == GAME_STEELSTORM)
+			Cbuf_InsertText("\ncl_csqc_generatemousemoveevents 0\n\n");
+	}
+}
+
+/*
+===============
+Cmd_Exec_f
+===============
+*/
+static void Cmd_Exec_f (void)
+{
+	fssearch_t *s;
+	int i;
+
+	if (Cmd_Argc () != 2)
+	{
+		Con_Print("exec <filename> : execute a script file\n");
+		return;
+	}
+
+	s = FS_Search(Cmd_Argv(1), true, true);
+	if(!s || !s->numfilenames)
+	{
+		Con_Printf("couldn't exec %s\n",Cmd_Argv(1));
+		return;
+	}
+
+	for(i = 0; i < s->numfilenames; ++i)
+		Cmd_Exec(s->filenames[i]);
+
+	FS_FreeSearch(s);
 }
 
 
@@ -763,6 +796,7 @@ static const char *Cmd_GetDirectCvarValue(const char *varname, cmdalias_t *alias
 	cvar_t *cvar;
 	long argno;
 	char *endptr;
+	char vabuf[1024];
 
 	if(is_multiple)
 		*is_multiple = false;
@@ -780,7 +814,7 @@ static const char *Cmd_GetDirectCvarValue(const char *varname, cmdalias_t *alias
 		}
 		else if(!strcmp(varname, "#"))
 		{
-			return va("%d", Cmd_Argc());
+			return va(vabuf, sizeof(vabuf), "%d", Cmd_Argc());
 		}
 		else if(varname[strlen(varname) - 1] == '-')
 		{
@@ -885,11 +919,13 @@ fail:
 
 static const char *Cmd_GetCvarValue(const char *var, size_t varlen, cmdalias_t *alias)
 {
-	static char varname[MAX_INPUTLINE];
-	static char varval[MAX_INPUTLINE];
-	const char *varstr;
+	static char varname[MAX_INPUTLINE]; // cmd_mutex
+	static char varval[MAX_INPUTLINE]; // cmd_mutex
+	const char *varstr = NULL;
 	char *varfunc;
-static char asis[] = "asis"; // just to suppress const char warnings
+	qboolean required = false;
+	qboolean optional = false;
+	static char asis[] = "asis"; // just to suppress const char warnings
 
 	if(varlen >= MAX_INPUTLINE)
 		varlen = MAX_INPUTLINE - 1;
@@ -906,10 +942,37 @@ static char asis[] = "asis"; // just to suppress const char warnings
 	if(*var == 0)
 	{
 		// empty cvar name?
-		return NULL;
+		if(alias)
+			Con_Printf("Warning: Could not expand $ in alias %s\n", alias->name);
+		else
+			Con_Printf("Warning: Could not expand $\n");
+		return "$";
 	}
 
-	varstr = NULL;
+	if(varfunc)
+	{
+		char *p;
+		// ? means optional
+		while((p = strchr(varfunc, '?')))
+		{
+			optional = true;
+			memmove(p, p+1, strlen(p)); // with final NUL
+		}
+		// ! means required
+		while((p = strchr(varfunc, '!')))
+		{
+			required = true;
+			memmove(p, p+1, strlen(p)); // with final NUL
+		}
+		// kill spaces
+		while((p = strchr(varfunc, ' ')))
+		{
+			memmove(p, p+1, strlen(p)); // with final NUL
+		}
+		// if no function is left, NULL it
+		if(!*varfunc)
+			varfunc = NULL;
+	}
 
 	if(varname[0] == '$')
 		varstr = Cmd_GetDirectCvarValue(Cmd_GetDirectCvarValue(varname + 1, alias, NULL), alias, NULL);
@@ -925,11 +988,27 @@ static char asis[] = "asis"; // just to suppress const char warnings
 
 	if(!varstr)
 	{
-		if(alias)
-			Con_Printf("Warning: Could not expand $%s in alias %s\n", varname, alias->name);
+		if(required)
+		{
+			if(alias)
+				Con_Printf("Error: Could not expand $%s in alias %s\n", varname, alias->name);
+			else
+				Con_Printf("Error: Could not expand $%s\n", varname);
+			return NULL;
+		}
+		else if(optional)
+		{
+			return "";
+		}
 		else
-			Con_Printf("Warning: Could not expand $%s\n", varname);
-		return NULL;
+		{
+			if(alias)
+				Con_Printf("Warning: Could not expand $%s in alias %s\n", varname, alias->name);
+			else
+				Con_Printf("Warning: Could not expand $%s\n", varname);
+			dpsnprintf(varval, sizeof(varval), "$%s", varname);
+			return varval;
+		}
 	}
 
 	if(!varfunc || !strcmp(varfunc, "q")) // note: quoted form is default, use "asis" to override!
@@ -954,7 +1033,7 @@ Cmd_PreprocessString
 
 Preprocesses strings and replaces $*, $param#, $cvar accordingly. Also strips comments.
 */
-static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned maxoutlen, cmdalias_t *alias ) {
+static qboolean Cmd_PreprocessString( const char *intext, char *outtext, unsigned maxoutlen, cmdalias_t *alias ) {
 	const char *in;
 	size_t eat, varlen;
 	unsigned outlen;
@@ -962,7 +1041,7 @@ static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned ma
 
 	// don't crash if there's no room in the outtext buffer
 	if( maxoutlen == 0 ) {
-		return;
+		return false;
 	}
 	maxoutlen--; // because of \0
 
@@ -983,6 +1062,10 @@ static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned ma
 			//   that way)
 			// - ${var asis} inserts the cvar value as is, without doing this
 			//   quoting
+			// - ${var ?} silently expands to the empty string if
+			//   $var does not exist
+			// - ${var !} fails expansion and executes nothing if
+			//   $var does not exist
 			// - prefix the cvar name with a dollar sign to do indirection;
 			//   for example, if $x has the value timelimit, ${$x} will return
 			//   the value of $timelimit
@@ -993,6 +1076,7 @@ static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned ma
 			//   parameters, without extra quoting, so one can use $* to just
 			//   pass all parameters around. All parameters starting from $n
 			//   can be referred to as $n- (so $* is equivalent to $1-).
+			// - ${* q} and ${n- q} force quoting anyway
 			//
 			// Note: when expanding an alias, cvar expansion is done in the SAME step
 			// as alias expansion so that alias parameters or cvar values containing
@@ -1029,6 +1113,8 @@ static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned ma
 				if(in[varlen + 1] == '}')
 				{
 					val = Cmd_GetCvarValue(in + 1, varlen, alias);
+					if(!val)
+						return false;
 					eat = varlen + 2;
 				}
 				else
@@ -1040,6 +1126,8 @@ static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned ma
 			} else {
 				varlen = strspn(in, "#*0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-");
 				val = Cmd_GetCvarValue(in, varlen, alias);
+				if(!val)
+					return false;
 				eat = varlen;
 			}
 			if(val)
@@ -1064,6 +1152,7 @@ static void Cmd_PreprocessString( const char *intext, char *outtext, unsigned ma
 			outtext[outlen++] = *in++;
 	}
 	outtext[outlen] = 0;
+	return true;
 }
 
 /*
@@ -1075,9 +1164,11 @@ Called for aliases and fills in the alias into the cbuffer
 */
 static void Cmd_ExecuteAlias (cmdalias_t *alias)
 {
-	static char buffer[ MAX_INPUTLINE ];
-	static char buffer2[ MAX_INPUTLINE ];
-	Cmd_PreprocessString( alias->value, buffer, sizeof(buffer) - 2, alias );
+	static char buffer[ MAX_INPUTLINE ]; // cmd_mutex
+	static char buffer2[ MAX_INPUTLINE ]; // cmd_mutex
+	qboolean ret = Cmd_PreprocessString( alias->value, buffer, sizeof(buffer) - 2, alias );
+	if(!ret)
+		return;
 	// insert at start of command buffer, so that aliases execute in order
 	// (fixes bug introduced by Black on 20050705)
 
@@ -1109,14 +1200,14 @@ static void Cmd_List_f (void)
 	{
 		partial = Cmd_Argv (1);
 		len = strlen(partial);
+		ispattern = (strchr(partial, '*') || strchr(partial, '?'));
 	}
 	else
 	{
 		partial = NULL;
 		len = 0;
+		ispattern = false;
 	}
-
-	ispattern = partial && (strchr(partial, '*') || strchr(partial, '?'));
 
 	count = 0;
 	for (cmd = cmd_functions; cmd; cmd = cmd->next)
@@ -1146,6 +1237,7 @@ static void Cmd_Apropos_f(void)
 	const char *partial;
 	int count;
 	qboolean ispattern;
+	char vabuf[1024];
 
 	if (Cmd_Argc() > 1)
 		partial = Cmd_Args();
@@ -1157,7 +1249,7 @@ static void Cmd_Apropos_f(void)
 
 	ispattern = partial && (strchr(partial, '*') || strchr(partial, '?'));
 	if(!ispattern)
-		partial = va("*%s*", partial);
+		partial = va(vabuf, sizeof(vabuf), "*%s*", partial);
 
 	count = 0;
 	for (cvar = cvar_vars; cvar; cvar = cvar->next)
@@ -1200,6 +1292,9 @@ void Cmd_Init (void)
 	cmd_text.data = cmd_text_buf;
 	cmd_text.maxsize = sizeof(cmd_text_buf);
 	cmd_text.cursize = 0;
+
+	if (Thread_HasThreads())
+		cmd_text_mutex = Thread_CreateMutex();
 }
 
 void Cmd_Init_Commands (void)
@@ -1247,6 +1342,14 @@ Cmd_Shutdown
 */
 void Cmd_Shutdown(void)
 {
+	if (cmd_text_mutex)
+	{
+		// we usually have this locked when we get here from Host_Quit_f
+		Cbuf_UnlockThreadMutex();
+		Thread_DestroyMutex(cmd_text_mutex);
+	}
+	cmd_text_mutex = NULL;
+
 	Mem_FreePool(&cmd_mempool);
 }
 
@@ -1615,7 +1718,6 @@ void Cmd_ClearCsqcFuncs (void)
 		cmd->csqcfunc = false;
 }
 
-qboolean CL_VM_ConsoleCommand (const char *cmd);
 /*
 ============
 Cmd_ExecuteString
@@ -1624,7 +1726,7 @@ A complete command line has been parsed, so try to execute it
 FIXME: lookupnoadd the token to speed search?
 ============
 */
-void Cmd_ExecuteString (const char *text, cmd_source_t src)
+void Cmd_ExecuteString (const char *text, cmd_source_t src, qboolean lockmutex)
 {
 	int oldpos;
 	int found;
@@ -1639,10 +1741,7 @@ void Cmd_ExecuteString (const char *text, cmd_source_t src)
 
 // execute the command line
 	if (!Cmd_Argc())
-	{
-		cmd_tokenizebufferpos = oldpos;
-		return;		// no tokens
-	}
+		goto done; // no tokens
 
 // check functions
 	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)
@@ -1650,7 +1749,7 @@ void Cmd_ExecuteString (const char *text, cmd_source_t src)
 		if (!strcasecmp (cmd_argv[0],cmd->name))
 		{
 			if (cmd->csqcfunc && CL_VM_ConsoleCommand (text))	//[515]: csqc
-				return;
+				goto done;
 			switch (src)
 			{
 			case src_command:
@@ -1674,8 +1773,7 @@ void Cmd_ExecuteString (const char *text, cmd_source_t src)
 				if (cmd->clientfunction)
 				{
 					cmd->clientfunction ();
-					cmd_tokenizebufferpos = oldpos;
-					return;
+					goto done;
 				}
 				break;
 			}
@@ -1688,8 +1786,7 @@ command_found:
 	if (cmd_source == src_client)
 	{
 		Con_Printf("player \"%s\" tried to %s\n", host_client->name, text);
-		cmd_tokenizebufferpos = oldpos;
-		return;
+		goto done;
 	}
 
 // check alias
@@ -1698,21 +1795,18 @@ command_found:
 		if (!strcasecmp (cmd_argv[0], a->name))
 		{
 			Cmd_ExecuteAlias(a);
-			cmd_tokenizebufferpos = oldpos;
-			return;
+			goto done;
 		}
 	}
 
 	if(found) // if the command was hooked and found, all is good
-	{
-		cmd_tokenizebufferpos = oldpos;
-		return;
-	}
+		goto done;
 
 // check cvars
 	if (!Cvar_Command () && host_framecount > 0)
 		Con_Printf("Unknown command \"%s\"\n", Cmd_Argv(0));
 
+done:
 	cmd_tokenizebufferpos = oldpos;
 }
 
@@ -1854,6 +1948,7 @@ Sends the entire command line over to the server
 void Cmd_ForwardToServer (void)
 {
 	const char *s;
+	char vabuf[1024];
 	if (!strcasecmp(Cmd_Argv(0), "cmd"))
 	{
 		// we want to strip off "cmd", so just send the args
@@ -1862,7 +1957,7 @@ void Cmd_ForwardToServer (void)
 	else
 	{
 		// we need to keep the command name, so send Cmd_Argv(0), a space and then Cmd_Args()
-		s = va("%s %s", Cmd_Argv(0), Cmd_Argc() > 1 ? Cmd_Args() : "");
+		s = va(vabuf, sizeof(vabuf), "%s %s", Cmd_Argv(0), Cmd_Argc() > 1 ? Cmd_Args() : "");
 	}
 	// don't send an empty forward message if the user tries "cmd" by itself
 	if (!s || !*s)

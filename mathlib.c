@@ -198,30 +198,61 @@ void PerpendicularVector( vec3_t dst, const vec3_t src )
 // LordHavoc: like AngleVectors, but taking a forward vector instead of angles, useful!
 void VectorVectors(const vec3_t forward, vec3_t right, vec3_t up)
 {
-	float d;
+	// NOTE: this is consistent to AngleVectors applied to AnglesFromVectors
+	if (forward[0] == 0 && forward[1] == 0)
+	{
+		if(forward[2] > 0)
+		{
+			VectorSet(right, 0, -1, 0);
+			VectorSet(up, -1, 0, 0);
+		}
+		else
+		{
+			VectorSet(right, 0, -1, 0);
+			VectorSet(up, 1, 0, 0);
+		}
+	}
+	else
+	{
+		right[0] = forward[1];
+		right[1] = -forward[0];
+		right[2] = 0;
+		VectorNormalize(right);
 
-	right[0] = forward[2];
-	right[1] = -forward[0];
-	right[2] = forward[1];
-
-	d = DotProduct(forward, right);
-	VectorMA(right, -d, forward, right);
-	VectorNormalize(right);
-	CrossProduct(right, forward, up);
+		up[0] = (-forward[2]*forward[0]);
+		up[1] = (-forward[2]*forward[1]);
+		up[2] = (forward[0]*forward[0] + forward[1]*forward[1]);
+		VectorNormalize(up);
+	}
 }
 
 void VectorVectorsDouble(const double *forward, double *right, double *up)
 {
-	double d;
+	if (forward[0] == 0 && forward[1] == 0)
+	{
+		if(forward[2] > 0)
+		{
+			VectorSet(right, 0, -1, 0);
+			VectorSet(up, -1, 0, 0);
+		}
+		else
+		{
+			VectorSet(right, 0, -1, 0);
+			VectorSet(up, 1, 0, 0);
+		}
+	}
+	else
+	{
+		right[0] = forward[1];
+		right[1] = -forward[0];
+		right[2] = 0;
+		VectorNormalize(right);
 
-	right[0] = forward[2];
-	right[1] = -forward[0];
-	right[2] = forward[1];
-
-	d = DotProduct(forward, right);
-	VectorMA(right, -d, forward, right);
-	VectorNormalize(right);
-	CrossProduct(right, forward, up);
+		up[0] = (-forward[2]*forward[0]);
+		up[1] = (-forward[2]*forward[1]);
+		up[2] = (forward[0]*forward[0] + forward[1]*forward[1]);
+		VectorNormalize(up);
+	}
 }
 
 void RotatePointAroundVector( vec3_t dst, const vec3_t dir, const vec3_t point, float degrees )
@@ -539,9 +570,11 @@ void AnglesFromVectors (vec3_t angles, const vec3_t forward, const vec3_t up, qb
 	{
 		angles[YAW] = atan2(forward[1], forward[0]);
 		angles[PITCH] = -atan2(forward[2], sqrt(forward[0]*forward[0] + forward[1]*forward[1]));
+		// note: we know that angles[PITCH] is in ]-pi/2..pi/2[ due to atan2(anything, positive)
 		if (up)
 		{
 			vec_t cp = cos(angles[PITCH]), sp = sin(angles[PITCH]);
+			// note: we know cp > 0, due to the range angles[pitch] is in
 			vec_t cy = cos(angles[YAW]), sy = sin(angles[YAW]);
 			vec3_t tleft, tup;
 			tleft[0] = -sy;
@@ -551,9 +584,14 @@ void AnglesFromVectors (vec3_t angles, const vec3_t forward, const vec3_t up, qb
 			tup[1] = sp*sy;
 			tup[2] = cp;
 			angles[ROLL] = -atan2(DotProduct(up, tleft), DotProduct(up, tup));
+			// for up == '0 0 1', this is
+			// angles[ROLL] = -atan2(0, cp);
+			// which is 0
 		}
 		else
 			angles[ROLL] = 0;
+
+		// so no up vector is equivalent to '1 0 0'!
 	}
 
 	// now convert radians to degrees, and make all values positive
@@ -722,7 +760,7 @@ void Matrix4x4_Print(const matrix4x4_t *in)
 	, in->m[3][0], in->m[3][1], in->m[3][2], in->m[3][3]);
 }
 
-int Math_atov(const char *s, vec3_t out)
+int Math_atov(const char *s, prvm_vec3_t out)
 {
 	int i;
 	VectorClear(out);
@@ -754,5 +792,14 @@ void BoxFromPoints(vec3_t mins, vec3_t maxs, int numpoints, vec_t *point3f)
 		mins[1] = min(mins[1], point3f[1]);maxs[1] = max(maxs[1], point3f[1]);
 		mins[2] = min(mins[2], point3f[2]);maxs[2] = max(maxs[2], point3f[2]);
 	}
+}
+
+// LordHavoc: this has to be done right or you get severe precision breakdown
+int LoopingFrameNumberFromDouble(double t, int loopframes)
+{
+	if (loopframes)
+		return (int)(t - floor(t/loopframes)*loopframes);
+	else
+		return (int)t;
 }
 

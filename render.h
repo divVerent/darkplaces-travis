@@ -27,22 +27,22 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern float ixtable[4096];
 
 // fog stuff
-extern void FOG_clear(void);
+void FOG_clear(void);
 
 // sky stuff
 extern cvar_t r_sky;
 extern cvar_t r_skyscroll1;
 extern cvar_t r_skyscroll2;
 extern int skyrenderlater, skyrendermasked;
-extern int R_SetSkyBox(const char *sky);
-extern void R_SkyStartFrame(void);
-extern void R_Sky(void);
-extern void R_ResetSkyBox(void);
+int R_SetSkyBox(const char *sky);
+void R_SkyStartFrame(void);
+void R_Sky(void);
+void R_ResetSkyBox(void);
 
 // SHOWLMP stuff (Nehahra)
-extern void SHOWLMP_decodehide(void);
-extern void SHOWLMP_decodeshow(void);
-extern void SHOWLMP_drawall(void);
+void SHOWLMP_decodehide(void);
+void SHOWLMP_decodeshow(void);
+void SHOWLMP_drawall(void);
 
 // render profiling stuff
 extern int r_timereport_active;
@@ -53,6 +53,8 @@ extern cvar_t gl_flashblend;
 
 // vis stuff
 extern cvar_t r_novis;
+
+extern cvar_t r_trippy;
 
 extern cvar_t r_lerpsprites;
 extern cvar_t r_lerpmodels;
@@ -111,9 +113,6 @@ extern cvar_t r_showcollisionbrushes_polygonfactor;
 extern cvar_t r_showcollisionbrushes_polygonoffset;
 extern cvar_t r_showdisabledepthtest;
 
-//
-// view origin
-//
 extern cvar_t r_drawentities;
 extern cvar_t r_draw2d;
 extern qboolean r_draw2d_force;
@@ -127,6 +126,7 @@ extern cvar_t r_dynamic;
 void R_Init(void);
 void R_UpdateVariables(void); // must call after setting up most of r_refdef, but before calling R_RenderView
 void R_RenderView(void); // must set r_refdef and call R_UpdateVariables first
+void R_RenderView_UpdateViewVectors(void); // just updates r_refdef.view.{forward,left,up,origin,right,inverse_matrix}
 
 typedef enum r_refdef_scene_type_s {
 	RST_CLIENT,
@@ -189,6 +189,8 @@ extern cvar_t r_textureunits;
 extern cvar_t r_glsl_offsetmapping;
 extern cvar_t r_glsl_offsetmapping_reliefmapping;
 extern cvar_t r_glsl_offsetmapping_scale;
+extern cvar_t r_glsl_offsetmapping_lod;
+extern cvar_t r_glsl_offsetmapping_lod_distance;
 extern cvar_t r_glsl_deluxemapping;
 
 extern cvar_t gl_polyblend;
@@ -199,14 +201,6 @@ extern cvar_t cl_deathfade;
 extern cvar_t r_smoothnormals_areaweighting;
 
 extern cvar_t r_test;
-
-extern cvar_t r_texture_sRGB_2d;
-extern cvar_t r_texture_sRGB_skin_diffuse;
-extern cvar_t r_texture_sRGB_skin_gloss;
-extern cvar_t r_texture_sRGB_skin_glow;
-extern cvar_t r_texture_sRGB_skin_reflect;
-extern cvar_t r_texture_sRGB_cubemap;
-extern cvar_t r_texture_sRGB_skybox;
 
 #include "gl_backend.h"
 
@@ -229,8 +223,8 @@ void R_TimeReport(const char *name);
 // r_stain
 void R_Stain(const vec3_t origin, float radius, int cr1, int cg1, int cb1, int ca1, int cr2, int cg2, int cb2, int ca2);
 
-void R_CalcBeam_Vertex3f(float *vert, const vec3_t org1, const vec3_t org2, float width);
-void R_CalcSprite_Vertex3f(float *vertex3f, const vec3_t origin, const vec3_t left, const vec3_t up, float scalex1, float scalex2, float scaley1, float scaley2);
+void R_CalcBeam_Vertex3f(float *vert, const float *org1, const float *org2, float width);
+void R_CalcSprite_Vertex3f(float *vertex3f, const float *origin, const float *left, const float *up, float scalex1, float scalex2, float scaley1, float scaley2);
 
 extern mempool_t *r_main_mempool;
 
@@ -250,6 +244,7 @@ typedef struct rsurfacestate_s
 	//
 	// this indicates the model* arrays are pointed at array_model* buffers
 	// (in other words, the model has been animated in software)
+	qboolean                    forcecurrenttextureupdate; // set for RSurf_ActiveCustomEntity to force R_GetCurrentTexture to recalculate the texture parameters (such as entity alpha)
 	qboolean                    modelgeneratedvertex;
 	float                      *modelvertex3f;
 	const r_meshbuffer_t       *modelvertex3f_vertexbuffer;
@@ -335,8 +330,8 @@ typedef struct rsurfacestate_s
 	int ent_skinnum;
 	int ent_qwskin;
 	int ent_flags;
-	float ent_shadertime;
 	int ent_alttextures; // used by q1bsp animated textures (pressed buttons)
+	double shadertime; // r_refdef.scene.time - ent->shadertime
 	// transform matrices to render this entity and effects on this entity
 	matrix4x4_t matrix;
 	matrix4x4_t inversematrix;
@@ -447,17 +442,21 @@ typedef enum rsurfacepass_e
 }
 rsurfacepass_t;
 
-void R_SetupShader_Generic(rtexture_t *first, rtexture_t *second, int texturemode, int rgbscale);
-void R_SetupShader_DepthOrShadow(void);
-void R_SetupShader_ShowDepth(void);
-void R_SetupShader_Surface(const vec3_t lightcolorbase, qboolean modellighting, float ambientscale, float diffusescale, float specularscale, rsurfacepass_t rsurfacepass, int texturenumsurfaces, const msurface_t **texturesurfacelist, void *waterplane);
+void R_SetupShader_Generic(rtexture_t *first, rtexture_t *second, int texturemode, int rgbscale, qboolean usegamma, qboolean notrippy, qboolean suppresstexalpha);
+void R_SetupShader_Generic_NoTexture(qboolean usegamma, qboolean notrippy);
+void R_SetupShader_DepthOrShadow(qboolean notrippy, qboolean depthrgb);
+void R_SetupShader_ShowDepth(qboolean notrippy);
+void R_SetupShader_Surface(const vec3_t lightcolorbase, qboolean modellighting, float ambientscale, float diffusescale, float specularscale, rsurfacepass_t rsurfacepass, int texturenumsurfaces, const msurface_t **texturesurfacelist, void *waterplane, qboolean notrippy);
 void R_SetupShader_DeferredLight(const rtlight_t *rtlight);
 
 typedef struct r_waterstate_waterplane_s
 {
-	rtexture_t *texture_refraction;
-	rtexture_t *texture_reflection;
-	rtexture_t *texture_camera;
+	rtexture_t *texture_refraction; // MATERIALFLAG_WATERSHADER or MATERIALFLAG_REFRACTION
+	rtexture_t *texture_reflection; // MATERIALFLAG_WATERSHADER or MATERIALFLAG_REFLECTION
+	rtexture_t *texture_camera; // MATERIALFLAG_CAMERA
+	int fbo_refraction;
+	int fbo_reflection;
+	int fbo_camera;
 	mplane_t plane;
 	int materialflags; // combined flags of all water surfaces on this plane
 	unsigned char pvsbits[(MAX_MAP_LEAFS+7)>>3]; // FIXME: buffer overflow on huge maps
@@ -469,14 +468,10 @@ r_waterstate_waterplane_t;
 
 typedef struct r_waterstate_s
 {
-	qboolean enabled;
-
-	qboolean renderingscene; // true while rendering a refraction or reflection texture, disables water surfaces
-	qboolean renderingrefraction;
-
 	int waterwidth, waterheight;
 	int texturewidth, textureheight;
 	int camerawidth, cameraheight;
+	rtexture_t *depthtexture;
 
 	int maxwaterplanes; // same as MAX_WATERPLANES
 	int numwaterplanes;
@@ -484,10 +479,107 @@ typedef struct r_waterstate_s
 
 	float screenscale[2];
 	float screencenter[2];
+
+	qboolean enabled;
+
+	qboolean renderingscene; // true while rendering a refraction or reflection texture, disables water surfaces
+	qboolean hideplayer;
 }
 r_waterstate_t;
 
-extern r_waterstate_t r_waterstate;
+typedef struct r_framebufferstate_s
+{
+	textype_t textype; // type of color buffer we're using (dependent on r_viewfbo cvar)
+	int fbo; // non-zero if r_viewfbo is enabled and working
+	int screentexturewidth, screentextureheight; // dimensions of texture
+
+	rtexture_t *colortexture; // non-NULL if fbo is non-zero
+	rtexture_t *depthtexture; // non-NULL if fbo is non-zero
+	rtexture_t *ghosttexture; // for r_motionblur (not recommended on multi-GPU hardware!)
+	rtexture_t *bloomtexture[2]; // for r_bloom, multi-stage processing
+	int bloomfbo[2]; // fbos for rendering into bloomtexture[]
+	int bloomindex; // which bloomtexture[] contains the final image
+
+	int bloomwidth, bloomheight;
+	int bloomtexturewidth, bloomtextureheight;
+
+	// arrays for rendering the screen passes
+	float screentexcoord2f[8]; // texcoords for colortexture or ghosttexture
+	float bloomtexcoord2f[8]; // texcoords for bloomtexture[]
+	float offsettexcoord2f[8]; // temporary use while updating bloomtexture[]
+
+	r_viewport_t bloomviewport;
+
+	r_waterstate_t water;
+
+	qboolean ghosttexture_valid; // don't draw garbage on first frame with motionblur
+	qboolean usedepthtextures; // use depth texture instead of depth renderbuffer (faster if you need to read it later anyway)
+}
+r_framebufferstate_t;
+
+extern r_framebufferstate_t r_fb;
+
+extern cvar_t r_viewfbo;
+
+void R_ResetViewRendering2D_Common(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture, float x2, float y2); // this is called by R_ResetViewRendering2D and _DrawQ_Setup and internal
+void R_ResetViewRendering2D(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
+void R_ResetViewRendering3D(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
+void R_SetupView(qboolean allowwaterclippingplane, int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
+extern const float r_screenvertex3f[12];
+extern cvar_t r_shadows;
+extern cvar_t r_shadows_darken;
+extern cvar_t r_shadows_drawafterrtlighting;
+extern cvar_t r_shadows_castfrombmodels;
+extern cvar_t r_shadows_throwdistance;
+extern cvar_t r_shadows_throwdirection;
+extern cvar_t r_shadows_focus;
+extern cvar_t r_shadows_shadowmapscale;
+
+extern cvar_t r_transparent_alphatocoverage;
+extern cvar_t r_transparent_sortsurfacesbynearest;
+extern cvar_t r_transparent_useplanardistance;
+extern cvar_t r_transparent_sortarraysize;
+extern cvar_t r_transparent_sortmindist;
+extern cvar_t r_transparent_sortmaxdist;
+
+void R_Model_Sprite_Draw(entity_render_t *ent);
+
+struct prvm_prog_s;
+void R_UpdateFog(void);
+qboolean CL_VM_UpdateView(void);
+void SCR_DrawConsole(void);
+void R_Shadow_EditLights_DrawSelectedLightProperties(void);
+void R_DecalSystem_Reset(decalsystem_t *decalsystem);
+void R_Shadow_UpdateBounceGridTexture(void);
+void R_DrawLightningBeams(void);
+void VM_CL_AddPolygonsToMeshQueue(struct prvm_prog_s *prog);
+void R_DrawPortals(void);
+void R_DrawModelShadows(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
+void R_DrawModelShadowMaps(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
+void R_BuildLightMap(const entity_render_t *ent, msurface_t *surface);
+void R_Water_AddWaterPlane(msurface_t *surface, int entno);
+int R_Shadow_GetRTLightInfo(unsigned int lightindex, float *origin, float *radius, float *color);
+dp_font_t *FindFont(const char *title, qboolean allocate_new);
+void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, float voffset);
+
+void Render_Init(void);
+
+// these are called by Render_Init
+void R_Textures_Init(void);
+void GL_Draw_Init(void);
+void GL_Main_Init(void);
+void R_Shadow_Init(void);
+void R_Sky_Init(void);
+void GL_Surf_Init(void);
+void R_Particles_Init(void);
+void R_Explosion_Init(void);
+void gl_backend_init(void);
+void Sbar_Init(void);
+void R_LightningBeams_Init(void);
+void Mod_RenderInit(void);
+void Font_Init(void);
+
+qboolean R_CompileShader_CheckStaticParms(void);
+void R_GLSL_Restart_f(void);
 
 #endif
-

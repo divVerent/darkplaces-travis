@@ -188,7 +188,7 @@ static void SCR_CaptureVideo_RIFF_IndexEntry(const char *chunkfourcc, int chunks
 {
 	LOAD_FORMATSPECIFIC_AVI();
 	if(!format->canseek)
-		Host_Error("SCR_CaptureVideo_RIFF_IndexEntry called on non-seekable AVI");
+		Sys_Error("SCR_CaptureVideo_RIFF_IndexEntry called on non-seekable AVI");
 
 	if (format->riffstacklevel != 2)
 		Sys_Error("SCR_Capturevideo_RIFF_IndexEntry: RIFF stack level is %i (should be 2)\n", format->riffstacklevel);
@@ -209,7 +209,7 @@ static void SCR_CaptureVideo_RIFF_MakeIxChunk(const char *fcc, const char *dwChu
 	fs_offset_t pos, sz;
 	
 	if(!format->canseek)
-		Host_Error("SCR_CaptureVideo_RIFF_MakeIxChunk called on non-seekable AVI");
+		Sys_Error("SCR_CaptureVideo_RIFF_MakeIxChunk called on non-seekable AVI");
 
 	if(*masteridx_count >= AVI_MASTER_INDEX_SIZE)
 		return;
@@ -352,7 +352,7 @@ static void SCR_CaptureVideo_ConvertFrame_BGRA_to_I420_flip(int width, int heigh
 			blockb = b[0];
 			*out = cls.capturevideo.yuvnormalizetable[0][cls.capturevideo.rgbtoyuvscaletable[0][0][blockr] + cls.capturevideo.rgbtoyuvscaletable[0][1][blockg] + cls.capturevideo.rgbtoyuvscaletable[0][2][blockb]];
 		}
-		if ((y & 1) == 0)
+		if ((y & 1) == 0 && y/2 < height/2) // if h is odd, this skips the last row
 		{
 			// 2x2 Cr and Cb planes
 			int inpitch = width*4;
@@ -404,7 +404,7 @@ static void SCR_CaptureVideo_Avi_VideoFrames(int num)
 	}
 }
 
-void SCR_CaptureVideo_Avi_EndVideo(void)
+static void SCR_CaptureVideo_Avi_EndVideo(void)
 {
 	LOAD_FORMATSPECIFIC_AVI();
 
@@ -449,7 +449,7 @@ void SCR_CaptureVideo_Avi_EndVideo(void)
 	Mem_Free(format);
 }
 
-void SCR_CaptureVideo_Avi_SoundFrame(const portable_sampleframe_t *paintbuffer, size_t length)
+static void SCR_CaptureVideo_Avi_SoundFrame(const portable_sampleframe_t *paintbuffer, size_t length)
 {
 	LOAD_FORMATSPECIFIC_AVI();
 	int x;
@@ -462,12 +462,12 @@ void SCR_CaptureVideo_Avi_SoundFrame(const portable_sampleframe_t *paintbuffer, 
 	{
 		int n0, n1;
 
-		n0 = paintbuffer[i].sample[0];
+		n0 = paintbuffer[i].sample[0] * 32768.0f;
 		n0 = bound(-32768, n0, 32767);
 		out_ptr[0] = (unsigned char)n0;
 		out_ptr[1] = (unsigned char)(n0 >> 8);
 
-		n1 = paintbuffer[i].sample[1];
+		n1 = paintbuffer[i].sample[1] * 32768.0f;
 		n1 = bound(-32768, n1, 32767);
 		out_ptr[2] = (unsigned char)n1;
 		out_ptr[3] = (unsigned char)(n1 >> 8);
@@ -502,12 +502,13 @@ void SCR_CaptureVideo_Avi_BeginVideo(void)
 	int n, d;
 	unsigned int i;
 	double aspect;
+	char vabuf[1024];
 
 	aspect = vid.width / (vid.height * vid_pixelheight.value);
 
 	cls.capturevideo.format = CAPTUREVIDEOFORMAT_AVI_I420;
 	cls.capturevideo.formatextension = "avi";
-	cls.capturevideo.videofile = FS_OpenRealFile(va("%s.%s", cls.capturevideo.basename, cls.capturevideo.formatextension), "wb", false);
+	cls.capturevideo.videofile = FS_OpenRealFile(va(vabuf, sizeof(vabuf), "%s.%s", cls.capturevideo.basename, cls.capturevideo.formatextension), "wb", false);
 	cls.capturevideo.endvideo = SCR_CaptureVideo_Avi_EndVideo;
 	cls.capturevideo.videoframes = SCR_CaptureVideo_Avi_VideoFrames;
 	cls.capturevideo.soundframe = SCR_CaptureVideo_Avi_SoundFrame;

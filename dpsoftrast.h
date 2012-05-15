@@ -65,8 +65,6 @@ void DPSOFTRAST_DepthFunc(int comparemode);
 void DPSOFTRAST_DepthRange(float range0, float range1);
 void DPSOFTRAST_PolygonOffset(float alongnormal, float intoview);
 void DPSOFTRAST_CullFace(int mode);
-void DPSOFTRAST_AlphaTest(int enable);
-void DPSOFTRAST_AlphaFunc(int alphafunc, float alphavalue);
 void DPSOFTRAST_Color4f(float r, float g, float b, float a);
 void DPSOFTRAST_GetPixelsBGRA(int blockx, int blocky, int blockwidth, int blockheight, unsigned char *outpixels);
 void DPSOFTRAST_CopyRectangleToTexture(int index, int mip, int tx, int ty, int sx, int sy, int width, int height);
@@ -114,7 +112,7 @@ typedef enum gl20_texunit_e
 	GL20TU_SHADOWMAP2D = 15,
 	GL20TU_CUBEPROJECTION = 12,
 	// rtlight prepass data (screenspace depth and normalmap)
-	GL20TU_SCREENDEPTH = 13,
+//	GL20TU_UNUSED1 = 13,
 	GL20TU_SCREENNORMALMAP = 14,
 	// lightmap prepass data (screenspace diffuse and specular from lights)
 	GL20TU_SCREENDIFFUSE = 11,
@@ -153,6 +151,8 @@ typedef enum shadermode_e
 	SHADERMODE_FAKELIGHT, ///< (fakelight) modulate texture by "fake" lighting (no lightmaps, no nothing)
 	SHADERMODE_LIGHTDIRECTIONMAP_MODELSPACE, ///< (lightmap) use directional pixel shading from texture containing modelspace light directions (q3bsp deluxemap)
 	SHADERMODE_LIGHTDIRECTIONMAP_TANGENTSPACE, ///< (lightmap) use directional pixel shading from texture containing tangentspace light directions (q1bsp deluxemap)
+	SHADERMODE_LIGHTDIRECTIONMAP_FORCED_LIGHTMAP, // forced deluxemapping for lightmapped surfaces
+	SHADERMODE_LIGHTDIRECTIONMAP_FORCED_VERTEXCOLOR, // forced deluxemapping for vertexlit surfaces
 	SHADERMODE_LIGHTDIRECTION, ///< (lightmap) use directional pixel shading from fixed light direction (q3bsp)
 	SHADERMODE_LIGHTSOURCE, ///< (lightsource) use directional pixel shading from light source (rtlight)
 	SHADERMODE_REFRACTION, ///< refract background (the material is rendered normally after this pass)
@@ -185,18 +185,17 @@ typedef enum shaderpermutation_e
 	SHADERPERMUTATION_OFFSETMAPPING = 1<<16, ///< adjust texcoords to roughly simulate a displacement mapped surface
 	SHADERPERMUTATION_OFFSETMAPPING_RELIEFMAPPING = 1<<17, ///< adjust texcoords to accurately simulate a displacement mapped surface (requires OFFSETMAPPING to also be set!)
 	SHADERPERMUTATION_SHADOWMAP2D = 1<<18, ///< (lightsource) use shadowmap texture as light filter
-	SHADERPERMUTATION_SHADOWMAPPCF = 1<<19, ///< (lightsource) use percentage closer filtering on shadowmap test results
-	SHADERPERMUTATION_SHADOWMAPPCF2 = 1<<20, ///< (lightsource) use higher quality percentage closer filtering on shadowmap test results
-	SHADERPERMUTATION_SHADOWSAMPLER = 1<<21, ///< (lightsource) use hardware shadowmap test
-	SHADERPERMUTATION_SHADOWMAPVSDCT = 1<<22, ///< (lightsource) use virtual shadow depth cube texture for shadowmap indexing
-	SHADERPERMUTATION_SHADOWMAPORTHO = 1<<23, ///< (lightsource) use orthographic shadowmap projection
-	SHADERPERMUTATION_DEFERREDLIGHTMAP = 1<<24, ///< (lightmap) read Texture_ScreenDiffuse/Specular textures and add them on top of lightmapping
-	SHADERPERMUTATION_ALPHAKILL = 1<<25, ///< (deferredgeometry) discard pixel if diffuse texture alpha below 0.5
-	SHADERPERMUTATION_REFLECTCUBE = 1<<26, ///< fake reflections using global cubemap (not HDRI light probe)
-	SHADERPERMUTATION_NORMALMAPSCROLLBLEND = 1<<27, ///< (water) counter-direction normalmaps scrolling
-	SHADERPERMUTATION_BOUNCEGRID = 1<<28, ///< (lightmap) use Texture_BounceGrid as an additional source of ambient light
-	SHADERPERMUTATION_BOUNCEGRIDDIRECTIONAL = 1<<29, ///< (lightmap) use 16-component pixels in bouncegrid texture for directional lighting rather than standard 4-component
-	SHADERPERMUTATION_LIMIT = 1<<30, ///< size of permutations array
+	SHADERPERMUTATION_SHADOWMAPVSDCT = 1<<19, ///< (lightsource) use virtual shadow depth cube texture for shadowmap indexing
+	SHADERPERMUTATION_SHADOWMAPORTHO = 1<<20, ///< (lightsource) use orthographic shadowmap projection
+	SHADERPERMUTATION_DEFERREDLIGHTMAP = 1<<21, ///< (lightmap) read Texture_ScreenDiffuse/Specular textures and add them on top of lightmapping
+	SHADERPERMUTATION_ALPHAKILL = 1<<22, ///< (deferredgeometry) discard pixel if diffuse texture alpha below 0.5, (generic) apply global alpha
+	SHADERPERMUTATION_REFLECTCUBE = 1<<23, ///< fake reflections using global cubemap (not HDRI light probe)
+	SHADERPERMUTATION_NORMALMAPSCROLLBLEND = 1<<24, ///< (water) counter-direction normalmaps scrolling
+	SHADERPERMUTATION_BOUNCEGRID = 1<<25, ///< (lightmap) use Texture_BounceGrid as an additional source of ambient light
+	SHADERPERMUTATION_BOUNCEGRIDDIRECTIONAL = 1<<26, ///< (lightmap) use 16-component pixels in bouncegrid texture for directional lighting rather than standard 4-component
+	SHADERPERMUTATION_TRIPPY = 1<<27, ///< use trippy vertex shader effect
+	SHADERPERMUTATION_DEPTHRGB = 1<<28, ///< read/write depth values in RGB color coded format for older hardware without depth samplers
+	SHADERPERMUTATION_ALPHAGEN_VERTEX = 1<<29, ///< alphaGen vertex
 	SHADERPERMUTATION_COUNT = 30 ///< size of shaderpermutationinfo array
 }
 shaderpermutation_t;
@@ -226,7 +225,6 @@ typedef enum DPSOFTRAST_UNIFORM_e
 	DPSOFTRAST_UNIFORM_Texture_Reflection,
 	DPSOFTRAST_UNIFORM_Texture_ShadowMap2D,
 	DPSOFTRAST_UNIFORM_Texture_CubeProjection,
-	DPSOFTRAST_UNIFORM_Texture_ScreenDepth,
 	DPSOFTRAST_UNIFORM_Texture_ScreenNormalMap,
 	DPSOFTRAST_UNIFORM_Texture_ScreenDiffuse,
 	DPSOFTRAST_UNIFORM_Texture_ScreenSpecular,
@@ -309,6 +307,8 @@ typedef enum DPSOFTRAST_UNIFORM_e
 	DPSOFTRAST_UNIFORM_ShadowMapMatrixM4,
 	DPSOFTRAST_UNIFORM_BloomColorSubtract,
 	DPSOFTRAST_UNIFORM_NormalmapScrollBlend,
+	DPSOFTRAST_UNIFORM_OffsetMapping_LodDistance,
+	DPSOFTRAST_UNIFORM_OffsetMapping_Bias,
 	DPSOFTRAST_UNIFORM_TOTAL
 }
 DPSOFTRAST_UNIFORM;

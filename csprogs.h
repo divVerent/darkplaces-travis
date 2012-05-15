@@ -1,8 +1,6 @@
 #ifndef CSPROGS_H
 #define CSPROGS_H
 
-#define CL_NAME "client"
-
 // LordHavoc: changed to match MAX_EDICTS
 #define CL_MAX_EDICTS MAX_EDICTS
 
@@ -38,8 +36,27 @@
 #define VF_CL_VIEWANGLES_Y	35	//(float)
 #define VF_CL_VIEWANGLES_Z	36	//(float)
 
+// FTEQW's extension range
 #define VF_PERSPECTIVE		200 //(float)
+
+// what is this doing here? This is a DP extension introduced by Black, should be in 4xx range
 #define VF_CLEARSCREEN		201 //(float)
+
+// what is this doing here? This is a DP extension introduced by VorteX, should be in 4xx range
+#define VF_FOG_DENSITY		202 //(float)
+#define VF_FOG_COLOR		203 //(vector)
+#define VF_FOG_COLOR_R		204 //(float)
+#define VF_FOG_COLOR_G		205 //(float)
+#define VF_FOG_COLOR_B		206 //(float)
+#define VF_FOG_ALPHA		207 //(float)
+#define VF_FOG_START		208 //(float)
+#define VF_FOG_END   		209 //(float)
+#define VF_FOG_HEIGHT		210 //(float)
+#define VF_FOG_FADEDEPTH	211 //(float)
+
+// DP's extension range
+#define VF_MAINVIEW		400 //(float)
+#define VF_MINFPS_QUALITY	401 //(float)
 
 #define RF_VIEWMODEL		1	// The entity is never drawn in mirrors. In engines with realtime lighting, it casts no shadows.
 #define RF_EXTERNALMODEL	2	// The entity is appears in mirrors but not in the normal view. It does still cast shadows in engines with realtime lighting.
@@ -48,8 +65,10 @@
 #define RF_USEAXIS			16	// When set, the entity will use the v_forward, v_right and v_up globals instead of it's angles field for orientation. Angles will be ignored compleatly.
 								// Note that to use this properly, you'll NEED to use the predraw function to set the globals.
 //#define RF_DOUBLESIDED		32
-#define RF_USETRANSPARENTOFFSET 64 // Allows QC to customize origin used for transparent sorting via transparent_origin global, helps to fix transparent sorting bugs on a very large entities
-#define RF_NOCULL				128 // do not cull this entity using r_cullentities, for large outdoor entities (asteroids on the sky. etc)
+#define RF_USETRANSPARENTOFFSET 64   // Allows QC to customize origin used for transparent sorting via transparent_origin global, helps to fix transparent sorting bugs on a very large entities
+#define RF_WORLDOBJECT          128  // for large outdoor entities that should not be culled
+#define RF_MODELLIGHT           4096 // CSQC-set model light
+#define RF_DYNAMICMODELLIGHT    8192 // origin-dependent model light
 
 #define RF_FULLBRIGHT			256
 #define RF_NOSHADOW				512
@@ -65,5 +84,38 @@ qboolean MakeDownloadPacket(const char *filename, unsigned char *data, size_t le
 qboolean CL_VM_GetEntitySoundOrigin(int entnum, vec3_t out);
 
 qboolean CL_VM_TransformView(int entnum, matrix4x4_t *viewmatrix, mplane_t *clipplane, vec3_t visorigin);
+
+void CL_VM_Init(void);
+void CL_VM_ShutDown(void);
+void CL_VM_UpdateIntermissionState(int intermission);
+void CL_VM_UpdateShowingScoresState(int showingscores);
+qboolean CL_VM_InputEvent(int eventtype, int x, int y);
+qboolean CL_VM_ConsoleCommand(const char *cmd);
+void CL_VM_UpdateDmgGlobals(int dmg_take, int dmg_save, vec3_t dmg_origin);
+void CL_VM_UpdateIntermissionState(int intermission);
+qboolean CL_VM_Event_Sound(int sound_num, float volume, int channel, float attenuation, int ent, vec3_t pos, int flags, float speed);
+qboolean CL_VM_Parse_TempEntity(void);
+void CL_VM_Parse_StuffCmd(const char *msg);
+void CL_VM_Parse_CenterPrint(const char *msg);
+int CL_GetPitchSign(prvm_prog_t *prog, prvm_edict_t *ent);
+int CL_GetTagMatrix(prvm_prog_t *prog, matrix4x4_t *out, prvm_edict_t *ent, int tagindex);
+void CL_GetEntityMatrix(prvm_prog_t *prog, prvm_edict_t *ent, matrix4x4_t *out, qboolean viewmatrix);
+/* VMs exposing the polygon calls must call this on Init/Reset */
+void VM_Polygons_Reset(prvm_prog_t *prog);
+void QW_CL_StartUpload(unsigned char *data, int size);
+
+void CSQC_UpdateNetworkTimes(double newtime, double oldtime);
+void CSQC_AddPrintText(const char *msg);
+void CSQC_ReadEntities(void);
+void CSQC_RelinkAllEntities(int drawmask);
+void CSQC_RelinkCSQCEntities(void);
+void CSQC_Predraw(prvm_edict_t *ed);
+void CSQC_Think(prvm_edict_t *ed);
+qboolean CSQC_AddRenderEdict(prvm_edict_t *ed, int edictnum);//csprogs.c
+void CSQC_R_RecalcView(void);
+
+dp_model_t *CL_GetModelByIndex(int modelindex);
+
+int CL_VM_GetViewEntity(void);
 
 #endif

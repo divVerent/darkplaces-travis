@@ -39,6 +39,7 @@ cvar_t r_font_size_snapping = {CVAR_SAVE, "r_font_size_snapping", "1", "stick to
 cvar_t r_font_kerning = {CVAR_SAVE, "r_font_kerning", "1", "Use kerning if available"};
 cvar_t r_font_diskcache = {CVAR_SAVE, "r_font_diskcache", "0", "save font textures to disk for future loading rather than generating them every time"};
 cvar_t r_font_compress = {CVAR_SAVE, "r_font_compress", "0", "use texture compression on font textures to save video memory"};
+cvar_t r_font_nonpoweroftwo = {CVAR_SAVE, "r_font_nonpoweroftwo", "1", "use nonpoweroftwo textures for font (saves memory, potentially slower)"};
 cvar_t developer_font = {CVAR_SAVE, "developer_font", "0", "prints debug messages about fonts"};
 
 /*
@@ -334,6 +335,7 @@ void font_newmap(void)
 
 void Font_Init(void)
 {
+	Cvar_RegisterVariable(&r_font_nonpoweroftwo);
 	Cvar_RegisterVariable(&r_font_disable_freetype);
 	Cvar_RegisterVariable(&r_font_use_alpha_textures);
 	Cvar_RegisterVariable(&r_font_size_snapping);
@@ -361,7 +363,7 @@ ft2_font_t *Font_Alloc(void)
 	return (ft2_font_t *)Mem_Alloc(font_mempool, sizeof(ft2_font_t));
 }
 
-qboolean Font_Attach(ft2_font_t *font, ft2_attachment_t *attachment)
+static qboolean Font_Attach(ft2_font_t *font, ft2_attachment_t *attachment)
 {
 	ft2_attachment_t *na;
 
@@ -408,6 +410,7 @@ qboolean Font_LoadFont(const char *name, dp_font_t *dpfnt)
 {
 	int s, count, i;
 	ft2_font_t *ft2, *fbfont, *fb;
+	char vabuf[1024];
 
 	ft2 = Font_Alloc();
 	if (!ft2)
@@ -455,10 +458,10 @@ qboolean Font_LoadFont(const char *name, dp_font_t *dpfnt)
 
 		if (!Font_LoadFile(dpfnt->fallbacks[i], dpfnt->fallback_faces[i], &dpfnt->settings, fb))
 		{
-			if(!FS_FileExists(va("%s.tga", dpfnt->fallbacks[i])))
-			if(!FS_FileExists(va("%s.png", dpfnt->fallbacks[i])))
-			if(!FS_FileExists(va("%s.jpg", dpfnt->fallbacks[i])))
-			if(!FS_FileExists(va("%s.pcx", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va(vabuf, sizeof(vabuf), "%s.tga", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va(vabuf, sizeof(vabuf), "%s.png", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va(vabuf, sizeof(vabuf), "%s.jpg", dpfnt->fallbacks[i])))
+			if(!FS_FileExists(va(vabuf, sizeof(vabuf), "%s.pcx", dpfnt->fallbacks[i])))
 				Con_Printf("Failed to load font %s for fallback %i of font %s\n", dpfnt->fallbacks[i], i, name);
 			Mem_Free(fb);
 			continue;
@@ -580,7 +583,7 @@ static qboolean Font_LoadFile(const char *name, int _face, ft2_settings_t *setti
 	{
 		Con_Printf("Failed to load face %i of %s. Falling back to face 0\n", _face, name);
 		_face = 0;
-		status = qFT_New_Memory_Face(font_ft2lib, (FT_Bytes)data, datasize, 0, (FT_Face*)&font->face);
+		status = qFT_New_Memory_Face(font_ft2lib, (FT_Bytes)data, datasize, _face, (FT_Face*)&font->face);
 	}
 	font->data = data;
 	if (status)
@@ -610,7 +613,7 @@ static qboolean Font_LoadFile(const char *name, int _face, ft2_settings_t *setti
 	return true;
 }
 
-void Font_Postprocess_Update(ft2_font_t *fnt, int bpp, int w, int h)
+static void Font_Postprocess_Update(ft2_font_t *fnt, int bpp, int w, int h)
 {
 	int needed, x, y;
 	float gausstable[2*POSTPROCESS_MAXRADIUS+1];
@@ -664,7 +667,7 @@ void Font_Postprocess_Update(ft2_font_t *fnt, int bpp, int w, int h)
 	}
 }
 
-void Font_Postprocess(ft2_font_t *fnt, unsigned char *imagedata, int pitch, int bpp, int w, int h, int *pad_l, int *pad_r, int *pad_t, int *pad_b)
+static void Font_Postprocess(ft2_font_t *fnt, unsigned char *imagedata, int pitch, int bpp, int w, int h, int *pad_l, int *pad_r, int *pad_t, int *pad_b)
 {
 	int x, y;
 
@@ -828,7 +831,9 @@ static qboolean Font_LoadSize(ft2_font_t *font, float size, qboolean check_only)
 
 	memset(&temp, 0, sizeof(temp));
 	temp.size = size;
-	temp.glyphSize = CeilPowerOf2(size*2 + max(gpad_l + gpad_r, gpad_t + gpad_b));
+	temp.glyphSize = size*2 + max(gpad_l + gpad_r, gpad_t + gpad_b);
+	if (!(r_font_nonpoweroftwo.integer && vid.support.arb_texture_non_power_of_two))
+		temp.glyphSize = CeilPowerOf2(temp.glyphSize);
 	temp.sfx = (1.0/64.0)/(double)size;
 	temp.sfy = (1.0/64.0)/(double)size;
 	temp.intSize = -1; // negative value: LoadMap must search now :)
@@ -1105,6 +1110,7 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 	int tp;
 	FT_Int32 load_flags;
 	int gpad_l, gpad_r, gpad_t, gpad_b;
+	char vabuf[1024];
 
 	int pitch;
 	int gR, gC; // glyph position: row and column
@@ -1213,17 +1219,24 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 	dpsnprintf(map_identifier, sizeof(map_identifier),
 		"%s_cache_%g_%d_%g_%g_%g_%g_%g_%u",
 		font->name,
-		mapstart->intSize,
-		load_flags,
-		font->settings->blur,
-		font->settings->outline,
-		font->settings->shadowx,
-		font->settings->shadowy,
-		font->settings->shadowz,
-		(unsigned)map->start/FONT_CHARS_PER_MAP);
+		(double) mapstart->intSize,
+		(int) load_flags,
+		(double) font->settings->blur,
+		(double) font->settings->outline,
+		(double) font->settings->shadowx,
+		(double) font->settings->shadowy,
+		(double) font->settings->shadowz,
+		(unsigned) mapidx);
 
 	// create a cachepic_t from the data now, or reuse an existing one
 	map->pic = Draw_CachePic_Flags(map_identifier, CACHEPICFLAG_QUIET);
+	if (developer_font.integer)
+	{
+		if (map->pic->tex == r_texture_notexture)
+			Con_Printf("Generating font map %s (size: %.1f MB)\n", map_identifier, mapstart->glyphSize * (256 * 4 / 1048576.0) * mapstart->glyphSize);
+		else
+			Con_Printf("Using cached font map %s (size: %.1f MB)\n", map_identifier, mapstart->glyphSize * (256 * 4 / 1048576.0) * mapstart->glyphSize);
+	}
 
 	Font_Postprocess(font, NULL, 0, bytesPerPixel, mapstart->size*2, mapstart->size*2, &gpad_l, &gpad_r, &gpad_t, &gpad_b);
 
@@ -1534,9 +1547,11 @@ static qboolean Font_LoadMap(ft2_font_t *font, ft2_font_map_t *mapstart, Uchar _
 				data[x*4+0] = data[x*4+2];
 				data[x*4+2] = b;
 			}
-			Image_WriteTGABGRA(va("%s.tga", map_identifier), w, h, data);
+			Image_WriteTGABGRA(va(vabuf, sizeof(vabuf), "%s.tga", map_identifier), w, h, data);
+#ifndef USE_GLES2
 			if (r_font_compress.integer && qglGetCompressedTexImageARB && tex)
-				R_SaveTextureDDSFile(tex, va("dds/%s.dds", map_identifier), r_texture_dds_save.integer < 2, true);
+				R_SaveTextureDDSFile(tex, va(vabuf, sizeof(vabuf), "dds/%s.dds", map_identifier), r_texture_dds_save.integer < 2, true);
+#endif
 		}
 	}
 

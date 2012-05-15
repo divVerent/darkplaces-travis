@@ -432,6 +432,7 @@ typedef struct q3shaderinfo_s
 	char name[Q3PATHLENGTH];
 #define Q3SHADERINFO_COMPARE_START surfaceparms
 	int surfaceparms;
+	int surfaceflags;
 	int textureflags;
 	int numlayers;
 	qboolean lighting;
@@ -452,6 +453,9 @@ typedef struct q3shaderinfo_s
 	// add collisions to all triangles of the surface
 	qboolean dpmeshcollisions;
 
+	// kill shader based on cvar checks
+	qboolean dpshaderkill;
+
 	// fake reflection
 	char dpreflectcube[Q3PATHLENGTH];
 
@@ -468,6 +472,7 @@ typedef struct q3shaderinfo_s
 	// offsetmapping
 	dpoffsetmapping_technique_t offsetmapping;
 	float offsetscale;
+	float offsetbias; // 0 is normal, 1 leads to alpha 0 being neutral and alpha 1 pushing "out"
 
 	// polygonoffset (only used if Q3TEXTUREFLAG_POLYGONOFFSET)
 	float biaspolygonoffset, biaspolygonfactor;
@@ -475,7 +480,10 @@ typedef struct q3shaderinfo_s
 	// gloss
 	float specularscalemod;
 	float specularpowermod;
-#define Q3SHADERINFO_COMPARE_END specularpowermod
+
+	// rtlightning ambient addition
+	float rtlightambient;
+#define Q3SHADERINFO_COMPARE_END rtlightambient
 }
 q3shaderinfo_t;
 
@@ -592,7 +600,6 @@ typedef struct texture_s
 	char name[64];
 	int surfaceflags;
 	int supercontents;
-	int surfaceparms;
 	int textureflags;
 
 	// reflection
@@ -609,10 +616,14 @@ typedef struct texture_s
 	// offsetmapping
 	dpoffsetmapping_technique_t offsetmapping;
 	float offsetscale;
+	float offsetbias;
 
 	// gloss
 	float specularscalemod;
 	float specularpowermod;
+
+	// diffuse and ambient
+	float rtlightambient;
 }
  texture_t;
 
@@ -713,6 +724,8 @@ typedef struct model_brush_s
 {
 	// true if this model is a HalfLife .bsp file
 	qboolean ishlbsp;
+	// true if this model is a BSP2 .bsp file (expanded 32bit bsp format for DarkPlaces, RMQ, others?)
+	qboolean isbsp2;
 	// string of entity definitions (.map format)
 	char *entities;
 
@@ -788,7 +801,7 @@ typedef struct model_brush_s
 	int (*FindBoxClusters)(struct model_s *model, const vec3_t mins, const vec3_t maxs, int maxclusters, int *clusterlist);
 	void (*LightPoint)(struct model_s *model, const vec3_t p, vec3_t ambientcolor, vec3_t diffusecolor, vec3_t diffusenormal);
 	void (*FindNonSolidLocation)(struct model_s *model, const vec3_t in, vec3_t out, vec_t radius);
-	mleaf_t *(*PointInLeaf)(struct model_s *model, const float *p);
+	mleaf_t *(*PointInLeaf)(struct model_s *model, const vec3_t p);
 	// these are actually only found on brushq1, but NULL is handled gracefully
 	void (*AmbientSoundLevelsForPoint)(struct model_s *model, const vec3_t p, unsigned char *out, int outsize);
 	void (*RoundUpToHullSize)(struct model_s *cmodel, const vec3_t inmins, const vec3_t inmaxs, vec3_t outmins, vec3_t outmaxs);
@@ -810,7 +823,7 @@ model_brush_t;
 
 typedef struct model_brushq1_s
 {
-	dmodel_t		*submodels;
+	mmodel_t		*submodels;
 
 	int				numvertexes;
 	mvertex_t		*vertexes;
@@ -968,10 +981,10 @@ typedef struct model_s
 	// for skeletal models
 	int				num_bones;
 	aliasbone_t		*data_bones;
-	float			num_posescale; // scaling factor from origin in poses6s format (includes divide by 32767)
-	float			num_poseinvscale; // scaling factor to origin in poses6s format (includes multiply by 32767)
+	float			num_posescale; // scaling factor from origin in poses7s format (includes divide by 32767)
+	float			num_poseinvscale; // scaling factor to origin in poses7s format (includes multiply by 32767)
 	int				num_poses;
-	short			*data_poses6s; // origin xyz, quat xyz, w implied negative, unit length, values normalized to +/-32767 range
+	short			*data_poses7s; // origin xyz, quat xyzw, unit length, values normalized to +/-32767 range
 	float			*data_baseboneposeinverse;
 	// textures of this model
 	int				num_textures;
@@ -1038,6 +1051,7 @@ typedef struct model_s
 
 	// if set, the model contains light information (lightmap, or vertexlight)
 	qboolean lit;
+	float lightmapscale;
 }
 dp_model_t;
 
@@ -1098,13 +1112,6 @@ qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qbool
 
 extern cvar_t r_mipskins;
 extern cvar_t r_mipnormalmaps;
-
-typedef struct skeleton_s
-{
-	const dp_model_t *model;
-	matrix4x4_t *relativetransforms;
-}
-skeleton_t;
 
 typedef struct skinfileitem_s
 {

@@ -25,9 +25,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #if defined(__GNUC__) && (__GNUC__ > 2)
 #define DP_FUNC_PRINTF(n) __attribute__ ((format (printf, n, n+1)))
 #define DP_FUNC_PURE      __attribute__ ((pure))
+#define DP_FUNC_NORETURN  __attribute__ ((noreturn))
 #else
 #define DP_FUNC_PRINTF(n)
 #define DP_FUNC_PURE
+#define DP_FUNC_NORETURN
 #endif
 
 #include <sys/types.h>
@@ -86,7 +88,7 @@ extern char engineversion[128];
 #define MAX_NETWM_ICON 1026 // one 32x32
 
 #define	MAX_WATERPLANES			2
-#define	MAX_CUBEMAPS			64
+#define	MAX_CUBEMAPS			1024
 #define	MAX_EXPLOSIONS			8
 #define	MAX_DLIGHTS				16
 #define	MAX_CACHED_PICS			1024 // this is 144 bytes each (or 152 on 64bit)
@@ -95,7 +97,6 @@ extern char engineversion[128];
 #define	MAX_PARTICLEEFFECTINFO	1024
 #define	MAX_PARTICLETEXTURES	256
 #define	MAXCLVIDEOS				1
-#define	MAX_GECKO_INSTANCES		1
 #define	MAX_DYNAMIC_TEXTURE_COUNT	2
 #define	MAX_MAP_LEAFS			8192
 
@@ -116,6 +117,9 @@ extern char engineversion[128];
 #define	MAX_EFFECTS				16
 #define	MAX_BEAMS				16
 #define	MAX_TEMPENTITIES		256
+#define SERVERLIST_TOTALSIZE		1024
+#define SERVERLIST_ANDMASKCOUNT		5
+#define SERVERLIST_ORMASKCOUNT		5
 #else
 #define	MAX_INPUTLINE			16384 ///< maximum length of console commandline, QuakeC strings, and many other text processing buffers
 #define	CON_TEXTSIZE			1048576 ///< max scrollback buffer characters in console
@@ -153,7 +157,7 @@ extern char engineversion[128];
 #define MAX_NETWM_ICON 352822 // 16x16, 22x22, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256, 512x512
 
 #define	MAX_WATERPLANES			16 ///< max number of water planes visible (each one causes additional view renders)
-#define	MAX_CUBEMAPS			256 ///< max number of cubemap textures loaded for light filters
+#define	MAX_CUBEMAPS			1024 ///< max number of cubemap textures loaded for light filters
 #define	MAX_EXPLOSIONS			64 ///< max number of explosion shell effects active at once (not particle related)
 #define	MAX_DLIGHTS				256 ///< max number of dynamic lights (rocket flashes, etc) in scene at once
 #define	MAX_CACHED_PICS			1024 ///< max number of 2D pics loaded at once
@@ -162,7 +166,6 @@ extern char engineversion[128];
 #define	MAX_PARTICLEEFFECTINFO	4096 ///< maximum number of unique particle effects (each name may associate with several of these)
 #define	MAX_PARTICLETEXTURES	256 ///< maximum number of unique particle textures in the particle font
 #define	MAXCLVIDEOS				65 ///< maximum number of video streams being played back at once (1 is reserved for the playvideo command)
-#define	MAX_GECKO_INSTANCES		16 ///< maximum number of web browser textures active at once
 #define	MAX_DYNAMIC_TEXTURE_COUNT	64 ///< maximum number of dynamic textures (web browsers, playvideo, etc)
 #define	MAX_MAP_LEAFS			65536 ///< maximum number of BSP leafs in world (8192 in Quake)
 
@@ -186,6 +189,9 @@ extern char engineversion[128];
 #define	MAX_EFFECTS				256 ///< limit on size of cl.effects
 #define	MAX_BEAMS				256 ///< limit on size of cl.beams
 #define	MAX_TEMPENTITIES		4096 ///< max number of temporary models visible per frame (certain sprite effects, certain types of CSQC entities also use this)
+#define SERVERLIST_TOTALSIZE		2048 ///< max servers in the server list
+#define SERVERLIST_ANDMASKCOUNT		16 ///< max items in server list AND mask
+#define SERVERLIST_ORMASKCOUNT		16 ///< max items in server list OR mask
 #endif
 
 
@@ -229,6 +235,7 @@ extern char engineversion[128];
 //#define STAT_TIME			17 ///< FTE
 //#define STAT_VIEW2		20 ///< FTE
 #define STAT_VIEWZOOM		21 ///< DP
+#define STAT_MOVEVARS_AIRACCEL_QW_STRETCHFACTOR 220 ///< DP
 #define STAT_MOVEVARS_AIRCONTROL_PENALTY					221 ///< DP
 #define STAT_MOVEVARS_AIRSPEEDLIMIT_NONQW 222 ///< DP
 #define STAT_MOVEVARS_AIRSTRAFEACCEL_QW 223 ///< DP
@@ -390,10 +397,7 @@ extern char engineversion[128];
 #include "keys.h"
 #include "console.h"
 #include "menu.h"
-
-#include "glquake.h"
-
-#include "palette.h"
+#include "csprogs.h"
 
 extern qboolean noclip_anglehack;
 
@@ -402,6 +406,8 @@ extern cvar_t developer_extra;
 extern cvar_t developer_insane;
 extern cvar_t developer_loadfile;
 extern cvar_t developer_loading;
+
+extern cvar_t sessionid;
 
 #define STARTCONFIGFILENAME "quake.rc"
 #define CONFIGFILENAME "config.cfg"
@@ -480,10 +486,7 @@ extern cvar_t developer_loading;
 # undef SSE2_PRESENT
 #endif
 
-#ifdef SSE2_PRESENT
-#define Sys_HaveSSE() true
-#define Sys_HaveSSE2() true
-#elif defined(SSE_POSSIBLE)
+#ifdef SSE_POSSIBLE
 // runtime detection of SSE/SSE2 capabilities for x86
 qboolean Sys_HaveSSE(void);
 qboolean Sys_HaveSSE2(void);
@@ -492,21 +495,29 @@ qboolean Sys_HaveSSE2(void);
 #define Sys_HaveSSE2() false
 #endif
 
+#include "glquake.h"
+
+#include "palette.h"
+
 /// incremented every frame, never reset
 extern int host_framecount;
 /// not bounded in any way, changed at start of every frame, never reset
 extern double realtime;
+/// equal to Sys_DirtyTime() at the start of this host frame
+extern double host_dirtytime;
 
 void Host_InitCommands(void);
 void Host_Main(void);
 void Host_Shutdown(void);
 void Host_StartVideo(void);
-void Host_Error(const char *error, ...) DP_FUNC_PRINTF(1);
+void Host_Error(const char *error, ...) DP_FUNC_PRINTF(1) DP_FUNC_NORETURN;
 void Host_Quit_f(void);
 void Host_ClientCommands(const char *fmt, ...) DP_FUNC_PRINTF(1);
 void Host_ShutdownServer(void);
 void Host_Reconnect_f(void);
 void Host_NoOperation_f(void);
+void Host_LockSession(void);
+void Host_UnlockSession(void);
 
 void Host_AbortCurrentFrame(void);
 
@@ -542,7 +553,27 @@ void Sys_Shared_Init(void);
 #define ISWHITESPACEORCONTROL(ch) ((signed char) (ch) <= (signed char) ' ')
 
 
+#ifdef PRVM_64
+#define FLOAT_IS_TRUE_FOR_INT(x) ((x) & 0x7FFFFFFFFFFFFFFF) // also match "negative zero" doubles of value 0x8000000000000000
+#define FLOAT_LOSSLESS_FORMAT "%.17g"
+#define VECTOR_LOSSLESS_FORMAT "%.17g %.17g %.17g"
+#else
 #define FLOAT_IS_TRUE_FOR_INT(x) ((x) & 0x7FFFFFFF) // also match "negative zero" floats of value 0x80000000
+#define FLOAT_LOSSLESS_FORMAT "%.9g"
+#define VECTOR_LOSSLESS_FORMAT "%.9g %.9g %.9g"
+#endif
+
+// originally this was _MSC_VER
+// but here we want to test the system libc, which on win32 is borked, and NOT the compiler
+#ifdef WIN32
+#define INT_LOSSLESS_FORMAT_SIZE "I64"
+#define INT_LOSSLESS_FORMAT_CONVERT_S(x) ((__int64)(x))
+#define INT_LOSSLESS_FORMAT_CONVERT_U(x) ((unsigned __int64)(x))
+#else
+#define INT_LOSSLESS_FORMAT_SIZE "j"
+#define INT_LOSSLESS_FORMAT_CONVERT_S(x) ((intmax_t)(x))
+#define INT_LOSSLESS_FORMAT_CONVERT_U(x) ((uintmax_t)(x))
+#endif
 
 #endif
 

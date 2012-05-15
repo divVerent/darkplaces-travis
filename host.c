@@ -24,13 +24,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <time.h>
 #include "libcurl.h"
 #include "cdaudio.h"
-#include "cl_gecko.h"
 #include "cl_video.h"
 #include "progsvm.h"
 #include "csprogs.h"
 #include "sv_demo.h"
 #include "snd_main.h"
 #include "thread.h"
+#include "utf8lib.h"
 
 /*
 
@@ -49,26 +49,30 @@ int host_framecount = 0;
 // LordHavoc: set when quit is executed
 qboolean host_shuttingdown = false;
 
-// the real time since application started, without any slowmo or clamping
+// the accumulated mainloop time since application started (with filtering), without any slowmo or clamping
 double realtime;
+// the main loop wall time for this frame
+double host_dirtytime;
 
 // current client
 client_t *host_client;
 
 jmp_buf host_abortframe;
-double host_starttime = 0;
 
 // pretend frames take this amount of time (in seconds), 0 = realtime
 cvar_t host_framerate = {0, "host_framerate","0", "locks frame timing to this value in seconds, 0.05 is 20fps for example, note that this can easily run too fast, use cl_maxfps if you want to limit your framerate instead, or sys_ticrate to limit server speed"};
+cvar_t cl_maxphysicsframesperserverframe = {0, "cl_maxphysicsframesperserverframe","10", "maximum number of physics frames per server frame"};
 // shows time used by certain subsystems
 cvar_t host_speeds = {0, "host_speeds","0", "reports how much time is used in server/graphics/sound"};
 cvar_t host_maxwait = {0, "host_maxwait","1000", "maximum sleep time requested from the operating system in millisecond. Larger sleeps will be done using multiple host_maxwait length sleeps. Lowering this value will increase CPU load, but may help working around problems with accuracy of sleep times."};
 cvar_t cl_minfps = {CVAR_SAVE, "cl_minfps", "40", "minimum fps target - while the rendering performance is below this, it will drift toward lower quality"};
-cvar_t cl_minfps_fade = {CVAR_SAVE, "cl_minfps_fade", "0.2", "how fast the quality adapts to varying framerate"};
+cvar_t cl_minfps_fade = {CVAR_SAVE, "cl_minfps_fade", "1", "how fast the quality adapts to varying framerate"};
 cvar_t cl_minfps_qualitymax = {CVAR_SAVE, "cl_minfps_qualitymax", "1", "highest allowed drawdistance multiplier"};
 cvar_t cl_minfps_qualitymin = {CVAR_SAVE, "cl_minfps_qualitymin", "0.25", "lowest allowed drawdistance multiplier"};
-cvar_t cl_minfps_qualitypower = {CVAR_SAVE, "cl_minfps_qualitypower", "4", "raises quality value to a power of itself, higher values make quality drop more sharply in relation to framerate"};
-cvar_t cl_minfps_qualityscale = {CVAR_SAVE, "cl_minfps_qualityscale", "0.5", "multiplier for quality"};
+cvar_t cl_minfps_qualitymultiply = {CVAR_SAVE, "cl_minfps_qualitymultiply", "0.2", "multiplier for quality changes in quality change per second render time (1 assumes linearity of quality and render time)"};
+cvar_t cl_minfps_qualityhysteresis = {CVAR_SAVE, "cl_minfps_qualityhysteresis", "0.05", "reduce all quality increments by this to reduce flickering"};
+cvar_t cl_minfps_qualitystepmax = {CVAR_SAVE, "cl_minfps_qualitystepmax", "0.1", "maximum quality change in a single frame"};
+cvar_t cl_minfps_force = {0, "cl_minfps_force", "0", "also apply quality reductions in timedemo/capturevideo"};
 cvar_t cl_maxfps = {CVAR_SAVE, "cl_maxfps", "0", "maximum fps cap, 0 = unlimited, if game is running faster than this it will wait before running another frame (useful to make cpu time available to other programs)"};
 cvar_t cl_maxfps_alwayssleep = {0, "cl_maxfps_alwayssleep","1", "gives up some processing time to other applications each frame, value in milliseconds, disabled if cl_maxfps is 0"};
 cvar_t cl_maxidlefps = {CVAR_SAVE, "cl_maxidlefps", "20", "maximum fps cap when the game is not the active window (makes cpu time available to other programs"};
@@ -83,6 +87,9 @@ cvar_t developer_entityparsing = {0, "developer_entityparsing", "0", "prints det
 cvar_t timestamps = {CVAR_SAVE, "timestamps", "0", "prints timestamps on console messages"};
 cvar_t timeformat = {CVAR_SAVE, "timeformat", "[%Y-%m-%d %H:%M:%S] ", "time format to use on timestamped console messages"};
 
+cvar_t sessionid = {CVAR_READONLY, "sessionid", "", "ID of the current session (use the -sessionid parameter to set it); this is always either empty or begins with a dot (.)"};
+cvar_t locksession = {0, "locksession", "0", "Lock the session? 0 = no, 1 = yes and abort on failure, 2 = yes and continue on failure"};
+
 /*
 ================
 Host_AbortCurrentFrame
@@ -90,8 +97,12 @@ Host_AbortCurrentFrame
 aborts the current host frame and goes on with the next one
 ================
 */
+void Host_AbortCurrentFrame(void) DP_FUNC_NORETURN;
 void Host_AbortCurrentFrame(void)
 {
+	// in case we were previously nice, make us mean again
+	Sys_MakeProcessMean();
+
 	longjmp (host_abortframe, 1);
 }
 
@@ -104,8 +115,8 @@ This shuts down both the client and server
 */
 void Host_Error (const char *error, ...)
 {
-	static char hosterrorstring1[MAX_INPUTLINE];
-	static char hosterrorstring2[MAX_INPUTLINE];
+	static char hosterrorstring1[MAX_INPUTLINE]; // THREAD UNSAFE
+	static char hosterrorstring2[MAX_INPUTLINE]; // THREAD UNSAFE
 	static qboolean hosterror = false;
 	va_list argptr;
 
@@ -137,10 +148,17 @@ void Host_Error (const char *error, ...)
 	//PR_Crash();
 
 	// print out where the crash happened, if it was caused by QC (and do a cleanup)
-	PRVM_Crash();
+	PRVM_Crash(SVVM_prog);
+	PRVM_Crash(CLVM_prog);
+	PRVM_Crash(MVM_prog);
 
+	cl.csqc_loaded = false;
+	Cvar_SetValueQuick(&csqc_progcrc, -1);
+	Cvar_SetValueQuick(&csqc_progsize, -1);
 
+	SV_LockThreadMutex();
 	Host_ShutdownServer ();
+	SV_UnlockThreadMutex();
 
 	if (cls.state == ca_dedicated)
 		Sys_Error ("Host_Error: %s",hosterrorstring2);	// dedicated servers exit
@@ -153,7 +171,7 @@ void Host_Error (const char *error, ...)
 	Host_AbortCurrentFrame();
 }
 
-void Host_ServerOptions (void)
+static void Host_ServerOptions (void)
 {
 	int i;
 
@@ -217,6 +235,7 @@ static void Host_InitLocal (void)
 	Cmd_AddCommand("saveconfig", Host_SaveConfig_f, "save settings to config.cfg (or a specified filename) immediately (also automatic when quitting)");
 	Cmd_AddCommand("loadconfig", Host_LoadConfig_f, "reset everything and reload configs");
 
+	Cvar_RegisterVariable (&cl_maxphysicsframesperserverframe);
 	Cvar_RegisterVariable (&host_framerate);
 	Cvar_RegisterVariable (&host_speeds);
 	Cvar_RegisterVariable (&host_maxwait);
@@ -224,8 +243,10 @@ static void Host_InitLocal (void)
 	Cvar_RegisterVariable (&cl_minfps_fade);
 	Cvar_RegisterVariable (&cl_minfps_qualitymax);
 	Cvar_RegisterVariable (&cl_minfps_qualitymin);
-	Cvar_RegisterVariable (&cl_minfps_qualitypower);
-	Cvar_RegisterVariable (&cl_minfps_qualityscale);
+	Cvar_RegisterVariable (&cl_minfps_qualitystepmax);
+	Cvar_RegisterVariable (&cl_minfps_qualityhysteresis);
+	Cvar_RegisterVariable (&cl_minfps_qualitymultiply);
+	Cvar_RegisterVariable (&cl_minfps_force);
 	Cvar_RegisterVariable (&cl_maxfps);
 	Cvar_RegisterVariable (&cl_maxfps_alwayssleep);
 	Cvar_RegisterVariable (&cl_maxidlefps);
@@ -252,7 +273,7 @@ Host_SaveConfig_f
 Writes key bindings and archived cvars to config.cfg
 ===============
 */
-void Host_SaveConfig_to(const char *file)
+static void Host_SaveConfig_to(const char *file)
 {
 	qfile_t *f;
 
@@ -290,7 +311,7 @@ void Host_SaveConfig_f(void)
 	Host_SaveConfig_to(file);
 }
 
-void Host_AddConfigText(void)
+static void Host_AddConfigText(void)
 {
 	// set up the default startmap_sp and startmap_dm aliases (mods can
 	// override these) and then execute the quake.rc startup script
@@ -435,6 +456,7 @@ if (crash = true), don't bother sending signofs
 */
 void SV_DropClient(qboolean crash)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	int i;
 	Con_Printf("Client \"%s\" dropped\n", host_client->name);
 
@@ -468,11 +490,12 @@ void SV_DropClient(qboolean crash)
 	{
 		// call the prog function for removing a client
 		// this will set the body to a dead frame, among other things
-		int saveSelf = prog->globals.server->self;
+		int saveSelf = PRVM_serverglobaledict(self);
 		host_client->clientconnectcalled = false;
-		prog->globals.server->self = PRVM_EDICT_TO_PROG(host_client->edict);
-		PRVM_ExecuteProgram(prog->globals.server->ClientDisconnect, "QC function ClientDisconnect is missing");
-		prog->globals.server->self = saveSelf;
+		PRVM_serverglobalfloat(time) = sv.time;
+		PRVM_serverglobaledict(self) = PRVM_EDICT_TO_PROG(host_client->edict);
+		prog->ExecuteProgram(prog, PRVM_serverfunction(ClientDisconnect), "QC function ClientDisconnect is missing");
+		PRVM_serverglobaledict(self) = saveSelf;
 	}
 
 	if (host_client->netconnection)
@@ -521,7 +544,7 @@ void SV_DropClient(qboolean crash)
 	if (sv.active)
 	{
 		// clear a fields that matter to DP_SV_CLIENTNAME and DP_SV_CLIENTCOLORS, and also frags
-		PRVM_ED_ClearEdict(host_client->edict);
+		PRVM_ED_ClearEdict(prog, host_client->edict);
 	}
 
 	// clear the client struct (this sets active to false)
@@ -553,6 +576,7 @@ This only happens at the end of a game, not between levels
 */
 void Host_ShutdownServer(void)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	int i;
 
 	Con_DPrintf("Host_ShutdownServer\n");
@@ -564,19 +588,20 @@ void Host_ShutdownServer(void)
 	NetConn_Heartbeat(2);
 
 // make sure all the clients know we're disconnecting
-	SV_VM_Begin();
 	World_End(&sv.world);
 	if(prog->loaded)
-		if(prog->funcoffsets.SV_Shutdown)
+	{
+		if(PRVM_serverfunction(SV_Shutdown))
 		{
-			func_t s = prog->funcoffsets.SV_Shutdown;
-			prog->funcoffsets.SV_Shutdown = 0; // prevent it from getting called again
-			PRVM_ExecuteProgram(s,"SV_Shutdown() required");
+			func_t s = PRVM_serverfunction(SV_Shutdown);
+			PRVM_serverglobalfloat(time) = sv.time;
+			PRVM_serverfunction(SV_Shutdown) = 0; // prevent it from getting called again
+			prog->ExecuteProgram(prog, s,"SV_Shutdown() required");
 		}
+	}
 	for (i = 0, host_client = svs.clients;i < svs.maxclients;i++, host_client++)
 		if (host_client->active)
 			SV_DropClient(false); // server shutdown
-	SV_VM_End();
 
 	NetConn_CloseServerPorts();
 
@@ -586,6 +611,8 @@ void Host_ShutdownServer(void)
 //
 	memset(&sv, 0, sizeof(sv));
 	memset(svs.clients, 0, svs.maxclients*sizeof(client_t));
+
+	cl.islocalgame = false;
 }
 
 
@@ -598,7 +625,7 @@ Host_GetConsoleCommands
 Add them exactly as if they had been typed at the console
 ===================
 */
-void Host_GetConsoleCommands (void)
+static void Host_GetConsoleCommands (void)
 {
 	char *cmd;
 
@@ -618,9 +645,9 @@ Host_TimeReport
 Returns a time report string, for example for
 ==================
 */
-const char *Host_TimingReport(void)
+const char *Host_TimingReport(char *buf, size_t buflen)
 {
-	return va("%.1f%% CPU, %.2f%% lost, offset avg %.1fms, max %.1fms, sdev %.1fms", svs.perf_cpuload * 100, svs.perf_lost * 100, svs.perf_offset_avg * 1000, svs.perf_offset_max * 1000, svs.perf_offset_sdev * 1000);
+	return va(buf, buflen, "%.1f%% CPU, %.2f%% lost, offset avg %.1fms, max %.1fms, sdev %.1fms", svs.perf_cpuload * 100, svs.perf_lost * 100, svs.perf_offset_avg * 1000, svs.perf_offset_max * 1000, svs.perf_offset_sdev * 1000);
 }
 
 /*
@@ -636,17 +663,16 @@ void Host_Main(void)
 	double time1 = 0;
 	double time2 = 0;
 	double time3 = 0;
-	double cl_timer, sv_timer;
-	double clframetime, deltarealtime, oldrealtime;
+	double cl_timer = 0, sv_timer = 0;
+	double clframetime, deltacleantime, olddirtytime, dirtytime;
 	double wait;
 	int pass1, pass2, pass3, i;
+	char vabuf[1024];
+	qboolean playing;
 
 	Host_Init();
 
-	cl_timer = 0;
-	sv_timer = 0;
-
-	realtime = host_starttime = Sys_DoubleTime();
+	realtime = 0;
 	for (;;)
 	{
 		if (setjmp(host_abortframe))
@@ -655,39 +681,58 @@ void Host_Main(void)
 			continue;			// something bad happened, or the server disconnected
 		}
 
-		oldrealtime = realtime;
-		realtime = Sys_DoubleTime();
-
-		deltarealtime = realtime - oldrealtime;
-		cl_timer += deltarealtime;
-		sv_timer += deltarealtime;
-
-		svs.perf_acc_realtime += deltarealtime;
-
-		// Look for clients who have spawned
-		for (i = 0, host_client = svs.clients;i < svs.maxclients;i++, host_client++)
-			if(host_client->spawned)
-				if(host_client->netconnection)
-					break;
-		if(i == svs.maxclients)
+		olddirtytime = host_dirtytime;
+		dirtytime = Sys_DirtyTime();
+		deltacleantime = dirtytime - olddirtytime;
+		if (deltacleantime < 0)
 		{
-			// Nobody is looking? Then we won't do timing...
-			// Instead, reset it to zero
-			svs.perf_acc_realtime = svs.perf_acc_sleeptime = svs.perf_acc_lost = svs.perf_acc_offset = svs.perf_acc_offset_squared = svs.perf_acc_offset_max = svs.perf_acc_offset_samples = 0;
+			// warn if it's significant
+			if (deltacleantime < -0.01)
+				Con_Printf("Host_Mingled: time stepped backwards (went from %f to %f, difference %f)\n", olddirtytime, dirtytime, deltacleantime);
+			deltacleantime = 0;
 		}
-		else if(svs.perf_acc_realtime > 5)
+		else if (deltacleantime >= 1800)
 		{
-			svs.perf_cpuload = 1 - svs.perf_acc_sleeptime / svs.perf_acc_realtime;
-			svs.perf_lost = svs.perf_acc_lost / svs.perf_acc_realtime;
-			if(svs.perf_acc_offset_samples > 0)
+			Con_Printf("Host_Mingled: time stepped forward (went from %f to %f, difference %f)\n", olddirtytime, dirtytime, deltacleantime);
+			deltacleantime = 0;
+		}
+		realtime += deltacleantime;
+		host_dirtytime = dirtytime;
+
+		cl_timer += deltacleantime;
+		sv_timer += deltacleantime;
+
+		if (!svs.threaded)
+		{
+			svs.perf_acc_realtime += deltacleantime;
+
+			// Look for clients who have spawned
+			playing = false;
+			for (i = 0, host_client = svs.clients;i < svs.maxclients;i++, host_client++)
+				if(host_client->spawned)
+					if(host_client->netconnection)
+						playing = true;
+			if(sv.time < 10)
 			{
-				svs.perf_offset_max = svs.perf_acc_offset_max;
-				svs.perf_offset_avg = svs.perf_acc_offset / svs.perf_acc_offset_samples;
-				svs.perf_offset_sdev = sqrt(svs.perf_acc_offset_squared / svs.perf_acc_offset_samples - svs.perf_offset_avg * svs.perf_offset_avg);
+				// don't accumulate time for the first 10 seconds of a match
+				// so things can settle
+				svs.perf_acc_realtime = svs.perf_acc_sleeptime = svs.perf_acc_lost = svs.perf_acc_offset = svs.perf_acc_offset_squared = svs.perf_acc_offset_max = svs.perf_acc_offset_samples = 0;
 			}
-			if(svs.perf_lost > 0 && developer_extra.integer)
-				Con_DPrintf("Server can't keep up: %s\n", Host_TimingReport());
-			svs.perf_acc_realtime = svs.perf_acc_sleeptime = svs.perf_acc_lost = svs.perf_acc_offset = svs.perf_acc_offset_squared = svs.perf_acc_offset_max = svs.perf_acc_offset_samples = 0;
+			else if(svs.perf_acc_realtime > 5)
+			{
+				svs.perf_cpuload = 1 - svs.perf_acc_sleeptime / svs.perf_acc_realtime;
+				svs.perf_lost = svs.perf_acc_lost / svs.perf_acc_realtime;
+				if(svs.perf_acc_offset_samples > 0)
+				{
+					svs.perf_offset_max = svs.perf_acc_offset_max;
+					svs.perf_offset_avg = svs.perf_acc_offset / svs.perf_acc_offset_samples;
+					svs.perf_offset_sdev = sqrt(svs.perf_acc_offset_squared / svs.perf_acc_offset_samples - svs.perf_offset_avg * svs.perf_offset_avg);
+				}
+				if(svs.perf_lost > 0 && developer_extra.integer)
+					if(playing) // only complain if anyone is looking
+						Con_DPrintf("Server can't keep up: %s\n", Host_TimingReport(vabuf, sizeof(vabuf)));
+				svs.perf_acc_realtime = svs.perf_acc_sleeptime = svs.perf_acc_lost = svs.perf_acc_offset = svs.perf_acc_offset_squared = svs.perf_acc_offset_max = svs.perf_acc_offset_samples = 0;
+			}
 		}
 
 		if (slowmo.value < 0.00001 && slowmo.value != 0)
@@ -698,8 +743,6 @@ void Host_Main(void)
 		// keep the random time dependent, but not when playing demos/benchmarking
 		if(!*sv_random_seed.string && !cls.demoplayback)
 			rand();
-
-		cl.islocalgame = NetConn_IsLocalGame();
 
 		// get new key events
 		Key_EventQueue_Unblock();
@@ -712,7 +755,7 @@ void Host_Main(void)
 
 		// receive packets on each main loop iteration, as the main loop may
 		// be undersleeping due to select() detecting a new packet
-		if (sv.active)
+		if (sv.active && !svs.threaded)
 			NetConn_ServerFrame();
 
 		Curl_Run();
@@ -728,7 +771,7 @@ void Host_Main(void)
 			// process console commands
 //			R_TimeReport("preconsole");
 			CL_VM_PreventInformationLeaks();
-			Cbuf_Execute();
+			Cbuf_Frame();
 //			R_TimeReport("console");
 		}
 
@@ -737,14 +780,14 @@ void Host_Main(void)
 		// if the accumulators haven't become positive yet, wait a while
 		if (cls.state == ca_dedicated)
 			wait = sv_timer * -1000000.0;
-		else if (!sv.active)
+		else if (!sv.active || svs.threaded)
 			wait = cl_timer * -1000000.0;
 		else
 			wait = max(cl_timer, sv_timer) * -1000000.0;
 
 		if (!cls.timedemo && wait >= 1)
 		{
-			double time0;
+			double time0, delta;
 
 			if(host_maxwait.value <= 0)
 				wait = min(wait, 1000000.0);
@@ -753,14 +796,27 @@ void Host_Main(void)
 			if(wait < 1)
 				wait = 1; // because we cast to int
 
-			time0 = Sys_DoubleTime();
-			if (sv_checkforpacketsduringsleep.integer && !sys_usenoclockbutbenchmark.integer)
+			time0 = Sys_DirtyTime();
+			if (sv_checkforpacketsduringsleep.integer && !sys_usenoclockbutbenchmark.integer && !svs.threaded)
 				NetConn_SleepMicroseconds((int)wait);
 			else
 				Sys_Sleep((int)wait);
-			svs.perf_acc_sleeptime += Sys_DoubleTime() - time0;
+			delta = Sys_DirtyTime() - time0;
+			if (delta < 0 || delta >= 1800) delta = 0;
+			if (!svs.threaded)
+				svs.perf_acc_sleeptime += delta;
 //			R_TimeReport("sleep");
 			continue;
+		}
+
+		// limit the frametime steps to no more than 100ms each
+		if (cl_timer > 0.1)
+			cl_timer = 0.1;
+		if (sv_timer > 0.1)
+		{
+			if (!svs.threaded)
+				svs.perf_acc_lost += (sv_timer - 0.1);
+			sv_timer = 0.1;
 		}
 
 		R_TimeReport("---");
@@ -772,15 +828,7 @@ void Host_Main(void)
 	//-------------------
 
 		// limit the frametime steps to no more than 100ms each
-		if (cl_timer > 0.1)
-			cl_timer = 0.1;
-		if (sv_timer > 0.1)
-		{
-			svs.perf_acc_lost += (sv_timer - 0.1);
-			sv_timer = 0.1;
-		}
-
-		if (sv.active && sv_timer > 0)
+		if (sv.active && sv_timer > 0 && !svs.threaded)
 		{
 			// execute one or more server frames, with an upper limit on how much
 			// execution time to spend on server frames to avoid freezing the game if
@@ -789,9 +837,7 @@ void Host_Main(void)
 			int framecount, framelimit = 1;
 			double advancetime, aborttime = 0;
 			float offset;
-
-			if (cls.state == ca_dedicated)
-				Collision_Cache_NewFrame();
+			prvm_prog_t *prog = SVVM_prog;
 
 			// run the world state
 			// don't allow simulation to run too fast or too slow or logic glitches can occur
@@ -801,20 +847,15 @@ void Host_Main(void)
 				advancetime = sv_timer;
 			else if (cl.islocalgame && !sv_fixedframeratesingleplayer.integer)
 			{
-				// synchronize to the client frametime, but no less than 10ms and no more than sys_ticrate
-				advancetime = bound(0.01, cl_timer, sys_ticrate.value);
-				framelimit = 10;
-				aborttime = realtime + 0.1;
+				// synchronize to the client frametime, but no less than 10ms and no more than 100ms
+				advancetime = bound(0.01, cl_timer, 0.1);
 			}
 			else
 			{
 				advancetime = sys_ticrate.value;
 				// listen servers can run multiple server frames per client frame
-				if (cls.state == ca_connected)
-				{
-					framelimit = 10;
-					aborttime = realtime + 0.1;
-				}
+				framelimit = cl_maxphysicsframesperserverframe.integer;
+				aborttime = Sys_DirtyTime() + 0.1;
 			}
 			if(slowmo.value > 0 && slowmo.value < 1)
 				advancetime = min(advancetime, 0.1 / slowmo.value);
@@ -823,7 +864,8 @@ void Host_Main(void)
 
 			if(advancetime > 0)
 			{
-				offset = sv_timer + (Sys_DoubleTime() - realtime);
+				offset = Sys_DirtyTime() - dirtytime;if (offset < 0 || offset >= 1800) offset = 0;
+				offset += sv_timer;
 				++svs.perf_acc_offset_samples;
 				svs.perf_acc_offset += offset;
 				svs.perf_acc_offset_squared += offset * offset;
@@ -839,9 +881,6 @@ void Host_Main(void)
 			if (sv.paused || (cl.islocalgame && (key_dest != key_game || key_consoleactive || cl.csqc_paused)))
 				sv.frametime = 0;
 
-			// setup the VM frame
-			SV_VM_Begin();
-
 			for (framecount = 0;framecount < framelimit && sv_timer > 0;framecount++)
 			{
 				sv_timer -= advancetime;
@@ -851,27 +890,25 @@ void Host_Main(void)
 					SV_Physics();
 
 				// if this server frame took too long, break out of the loop
-				if (framelimit > 1 && Sys_DoubleTime() >= aborttime)
+				if (framelimit > 1 && Sys_DirtyTime() >= aborttime)
 					break;
 			}
 			R_TimeReport("serverphysics");
 
 			// send all messages to the clients
 			SV_SendClientMessages();
-			
-			if (sv.paused == 1 && realtime > sv.pausedstart && sv.pausedstart > 0) {
-				prog->globals.generic[OFS_PARM0] = realtime - sv.pausedstart;
-				PRVM_ExecuteProgram(prog->funcoffsets.SV_PausedTic, "QC function SV_PausedTic is missing");
-			}
 
-			// end the server VM frame
-			SV_VM_End();
+			if (sv.paused == 1 && realtime > sv.pausedstart && sv.pausedstart > 0) {
+				prog->globals.fp[OFS_PARM0] = realtime - sv.pausedstart;
+				PRVM_serverglobalfloat(time) = sv.time;
+				prog->ExecuteProgram(prog, PRVM_serverfunction(SV_PausedTic), "QC function SV_PausedTic is missing");
+			}
 
 			// send an heartbeat if enough time has passed since the last one
 			NetConn_Heartbeat(0);
 			R_TimeReport("servernetwork");
 		}
-		else
+		else if (!svs.threaded)
 		{
 			// don't let r_speeds display jump around
 			R_TimeReport("serverphysics");
@@ -943,7 +980,7 @@ void Host_Main(void)
 
 			// update video
 			if (host_speeds.integer)
-				time1 = Sys_DoubleTime();
+				time1 = Sys_DirtyTime();
 			R_TimeReport("pre-input");
 
 			// Collect input into cmd
@@ -967,7 +1004,6 @@ void Host_Main(void)
 			R_TimeReport("lerpworld");
 
 			CL_Video_Frame();
-			CL_Gecko_Frame();
 
 			R_TimeReport("client");
 
@@ -975,7 +1011,7 @@ void Host_Main(void)
 			R_TimeReport("render");
 
 			if (host_speeds.integer)
-				time2 = Sys_DoubleTime();
+				time2 = Sys_DirtyTime();
 
 			// update audio
 			if(cl.csqc_usecsqclistener)
@@ -995,7 +1031,7 @@ void Host_Main(void)
 			if (host_speeds.integer)
 			{
 				pass1 = (int)((time1 - time3)*1000000);
-				time3 = Sys_DoubleTime();
+				time3 = Sys_DirtyTime();
 				pass2 = (int)((time2 - time1)*1000000);
 				pass3 = (int)((time3 - time2)*1000000);
 				Con_Printf("%6ius total %6ius server %6ius gfx %6ius snd\n",
@@ -1015,7 +1051,8 @@ void Host_Main(void)
 			cl_timer = 0;
 		if (sv_timer >= 0)
 		{
-			svs.perf_acc_lost += sv_timer;
+			if (!svs.threaded)
+				svs.perf_acc_lost += sv_timer;
 			sv_timer = 0;
 		}
 
@@ -1042,16 +1079,66 @@ char engineversion[128];
 
 qboolean sys_nostdout = false;
 
-extern void u8_Init(void);
-extern void Render_Init(void);
-extern void Mathlib_Init(void);
-extern void FS_Init_SelfPack(void);
-extern void FS_Init(void);
-extern void FS_Shutdown(void);
-extern void PR_Cmd_Init(void);
-extern void COM_Init_Commands(void);
-extern void FS_Init_Commands(void);
 extern qboolean host_stuffcmdsrun;
+
+static qfile_t *locksession_fh = NULL;
+static qboolean locksession_run = false;
+static void Host_InitSession(void)
+{
+	int i;
+	Cvar_RegisterVariable(&sessionid);
+	Cvar_RegisterVariable(&locksession);
+
+	// load the session ID into the read-only cvar
+	if ((i = COM_CheckParm("-sessionid")) && (i + 1 < com_argc))
+	{
+		char vabuf[1024];
+		if(com_argv[i+1][0] == '.')
+			Cvar_SetQuick(&sessionid, com_argv[i+1]);
+		else
+			Cvar_SetQuick(&sessionid, va(vabuf, sizeof(vabuf), ".%s", com_argv[i+1]));
+	}
+}
+void Host_LockSession(void)
+{
+	if(locksession_run)
+		return;
+	locksession_run = true;
+	if(locksession.integer != 0)
+	{
+		char vabuf[1024];
+		char *p = va(vabuf, sizeof(vabuf), "%slock%s", *fs_userdir ? fs_userdir : fs_basedir, sessionid.string);
+		FS_CreatePath(p);
+		locksession_fh = FS_SysOpen(p, "wl", false);
+		// TODO maybe write the pid into the lockfile, while we are at it? may help server management tools
+		if(!locksession_fh)
+		{
+			if(locksession.integer == 2)
+			{
+				Con_Printf("WARNING: session lock %s could not be acquired. Please run with -sessionid and an unique session name. Continuing anyway.\n", p);
+			}
+			else
+			{
+				Sys_Error("session lock %s could not be acquired. Please run with -sessionid and an unique session name.\n", p);
+			}
+		}
+	}
+}
+void Host_UnlockSession(void)
+{
+	if(!locksession_run)
+		return;
+	locksession_run = false;
+
+	if(locksession_fh)
+	{
+		FS_Close(locksession_fh);
+		// NOTE: we can NOT unlink the lock here, as doing so would
+		// create a race condition if another process created it
+		// between our close and our unlink
+		locksession_fh = NULL;
+	}
+}
 
 /*
 ====================
@@ -1062,6 +1149,7 @@ static void Host_Init (void)
 {
 	int i;
 	const char* os;
+	char vabuf[1024];
 
 	if (COM_CheckParm("-profilegameonly"))
 		Sys_AllowProfiling(false);
@@ -1082,7 +1170,7 @@ static void Host_Init (void)
 		developer.string = "1";
 	}
 
-	if (COM_CheckParm("-developer2"))
+	if (COM_CheckParm("-developer2") || COM_CheckParm("-developer3"))
 	{
 		developer.value = developer.integer = 1;
 		developer.string = "1";
@@ -1094,6 +1182,12 @@ static void Host_Init (void)
 		developer_memory.string = "1";
 		developer_memorydebug.value = developer_memorydebug.integer = 1;
 		developer_memorydebug.string = "1";
+	}
+
+	if (COM_CheckParm("-developer3"))
+	{
+		gl_paranoid.integer = 1;gl_paranoid.string = "1";
+		gl_printcheckerror.integer = 1;gl_printcheckerror.string = "1";
 	}
 
 // COMMANDLINEOPTION: Console: -nostdout disables text output to the terminal the game was launched from
@@ -1134,11 +1228,17 @@ static void Host_Init (void)
 	dpsnprintf (engineversion, sizeof (engineversion), "%s %s %s", gamename, os, buildstring);
 	Con_Printf("%s\n", engineversion);
 
+	// initialize process nice level
+	Sys_InitProcessNice();
+
 	// initialize ixtable
 	Mathlib_Init();
 
 	// initialize filesystem (including fs_basedir, fs_gamedir, -game, scr_screenshot_name)
 	FS_Init();
+
+	// register the cvars for session locking
+	Host_InitSession();
 
 	// must be after FS_Init
 	Crypto_Init();
@@ -1157,6 +1257,8 @@ static void Host_Init (void)
 	Host_InitLocal();
 	Host_ServerOptions();
 
+	Thread_Init();
+
 	if (cls.state == ca_dedicated)
 		Cmd_AddCommand ("disconnect", CL_Disconnect_f, "disconnect from server (or disconnect all clients if running a server)");
 	else
@@ -1166,7 +1268,6 @@ static void Host_Init (void)
 		R_Modules_Init();
 		Palette_Init();
 		MR_Init_Commands();
-		Thread_Init();
 		VID_Shared_Init();
 		VID_Init();
 		Render_Init();
@@ -1199,7 +1300,7 @@ static void Host_Init (void)
 	}
 
 	// put up the loading image so the user doesn't stare at a black screen...
-	SCR_BeginLoadingPlaque();
+	SCR_BeginLoadingPlaque(true);
 
 	if (cls.state != ca_dedicated)
 	{
@@ -1212,7 +1313,7 @@ static void Host_Init (void)
 	if (i && i + 1 < com_argc)
 	if (!sv.active && !cls.demoplayback && !cls.connect_trying)
 	{
-		Cbuf_AddText(va("timedemo %s\n", com_argv[i + 1]));
+		Cbuf_AddText(va(vabuf, sizeof(vabuf), "timedemo %s\n", com_argv[i + 1]));
 		Cbuf_Execute();
 	}
 
@@ -1222,7 +1323,7 @@ static void Host_Init (void)
 	if (i && i + 1 < com_argc)
 	if (!sv.active && !cls.demoplayback && !cls.connect_trying)
 	{
-		Cbuf_AddText(va("playdemo %s\n", com_argv[i + 1]));
+		Cbuf_AddText(va(vabuf, sizeof(vabuf), "playdemo %s\n", com_argv[i + 1]));
 		Cbuf_Execute();
 	}
 
@@ -1231,7 +1332,7 @@ static void Host_Init (void)
 	if (i && i + 1 < com_argc)
 	if (!sv.active && !cls.demoplayback && !cls.connect_trying)
 	{
-		Cbuf_AddText(va("playdemo %s\ncl_capturevideo 1\n", com_argv[i + 1]));
+		Cbuf_AddText(va(vabuf, sizeof(vabuf), "playdemo %s\ncl_capturevideo 1\n", com_argv[i + 1]));
 		Cbuf_Execute();
 	}
 
@@ -1244,13 +1345,16 @@ static void Host_Init (void)
 
 	if (!sv.active && !cls.demoplayback && !cls.connect_trying)
 	{
-		Cbuf_AddText("togglemenu\n");
+		Cbuf_AddText("togglemenu 1\n");
 		Cbuf_Execute();
 	}
 
 	Con_DPrint("========Initialized=========\n");
 
 	//Host_StartVideo();
+
+	if (cls.state != ca_dedicated)
+		SV_StartThread();
 }
 
 
@@ -1281,11 +1385,17 @@ void Host_Shutdown(void)
 	// be quiet while shutting down
 	S_StopAllSounds();
 
+	// end the server thread
+	if (svs.threaded)
+		SV_StopThread();
+
 	// disconnect client from server if active
 	CL_Disconnect();
 
 	// shut down local server if active
+	SV_LockThreadMutex();
 	Host_ShutdownServer ();
+	SV_UnlockThreadMutex();
 
 	// Shutdown menu
 	if(MR_Shutdown)
@@ -1294,7 +1404,6 @@ void Host_Shutdown(void)
 	// AK shutdown PRVM
 	// AK hmm, no PRVM_Shutdown(); yet
 
-	CL_Gecko_Shutdown();
 	CL_Video_Shutdown();
 
 	Host_SaveConfig();
@@ -1309,16 +1418,20 @@ void Host_Shutdown(void)
 	{
 		R_Modules_Shutdown();
 		VID_Shutdown();
-		Thread_Shutdown();
 	}
 
+	SV_StopThread();
+	Thread_Shutdown();
 	Cmd_Shutdown();
 	Key_Shutdown();
 	CL_Shutdown();
 	Sys_Shutdown();
 	Log_Close();
 	Crypto_Shutdown();
-	FS_Shutdown();
+
+	Host_UnlockSession();
+
+	S_Shutdown();
 	Con_Shutdown();
 	Memory_Shutdown();
 }

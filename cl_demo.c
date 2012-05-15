@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t cl_capturevideo;
 int old_vsync = 0;
 
-void CL_FinishTimeDemo (void);
+static void CL_FinishTimeDemo (void);
 
 /*
 ==============================================================================
@@ -88,8 +88,9 @@ void CL_StopPlayback (void)
 	if (cls.timedemo)
 		CL_FinishTimeDemo ();
 
-	if (COM_CheckParm("-demo") || COM_CheckParm("-capturedemo"))
-		Host_Quit_f();
+	if (!cls.demostarting) // only quit if not starting another demo
+		if (COM_CheckParm("-demo") || COM_CheckParm("-capturedemo"))
+			Host_Quit_f();
 
 }
 
@@ -98,7 +99,7 @@ void CL_StopPlayback (void)
 CL_WriteDemoMessage
 
 Dumps the current net message, prefixed by the length and view angles
-====================
+#====================
 */
 void CL_WriteDemoMessage (sizebuf_t *message)
 {
@@ -138,7 +139,7 @@ void CL_CutDemo (unsigned char **buf, fs_offset_t *filesize)
 	// restart the demo recording
 	cls.demofile = FS_OpenRealFile(cls.demoname, "wb", false);
 	if(!cls.demofile)
-		Host_Error("failed to reopen the demo file");
+		Sys_Error("failed to reopen the demo file");
 	FS_Printf(cls.demofile, "%i\n", cls.forcetrack);
 }
 
@@ -238,16 +239,21 @@ void CL_ReadDemoMessage(void)
 		}
 
 		// get the next message
-		FS_Read(cls.demofile, &net_message.cursize, 4);
-		net_message.cursize = LittleLong(net_message.cursize);
-		if(net_message.cursize & DEMOMSG_CLIENT_TO_SERVER) // This is a client->server message! Ignore for now!
+		FS_Read(cls.demofile, &cl_message.cursize, 4);
+		cl_message.cursize = LittleLong(cl_message.cursize);
+		if(cl_message.cursize & DEMOMSG_CLIENT_TO_SERVER) // This is a client->server message! Ignore for now!
 		{
 			// skip over demo packet
-			FS_Seek(cls.demofile, 12 + (net_message.cursize & (~DEMOMSG_CLIENT_TO_SERVER)), SEEK_CUR);
+			FS_Seek(cls.demofile, 12 + (cl_message.cursize & (~DEMOMSG_CLIENT_TO_SERVER)), SEEK_CUR);
 			continue;
 		}
-		if (net_message.cursize > net_message.maxsize)
-			Host_Error("Demo message (%i) > net_message.maxsize (%i)", net_message.cursize, net_message.maxsize);
+		if (cl_message.cursize > cl_message.maxsize)
+		{
+			Con_Printf("Demo message (%i) > cl_message.maxsize (%i)", cl_message.cursize, cl_message.maxsize);
+			cl_message.cursize = 0;
+			CL_Disconnect();
+			return;
+		}
 		VectorCopy(cl.mviewangles[0], cl.mviewangles[1]);
 		for (i = 0;i < 3;i++)
 		{
@@ -255,9 +261,9 @@ void CL_ReadDemoMessage(void)
 			cl.mviewangles[0][i] = LittleFloat(f);
 		}
 
-		if (FS_Read(cls.demofile, net_message.data, net_message.cursize) == net_message.cursize)
+		if (FS_Read(cls.demofile, cl_message.data, cl_message.cursize) == cl_message.cursize)
 		{
-			MSG_BeginReading();
+			MSG_BeginReading(&cl_message);
 			CL_ParseServerMessage();
 
 			if (cls.signon != SIGNONS)
@@ -298,7 +304,7 @@ void CL_Stop_f (void)
 	}
 
 // write a disconnect message to the demo file
-	// LordHavoc: don't replace the net_message when doing this
+	// LordHavoc: don't replace the cl_message when doing this
 	buf.data = bufdata;
 	buf.maxsize = sizeof(bufdata);
 	SZ_Clear(&buf);
@@ -329,6 +335,7 @@ void CL_Record_f (void)
 {
 	int c, track;
 	char name[MAX_OSPATH];
+	char vabuf[1024];
 
 	c = Cmd_Argc();
 	if (c != 2 && c != 3 && c != 4)
@@ -367,7 +374,7 @@ void CL_Record_f (void)
 
 	// start the map up
 	if (c > 2)
-		Cmd_ExecuteString ( va("map %s", Cmd_Argv(2)), src_command);
+		Cmd_ExecuteString ( va(vabuf, sizeof(vabuf), "map %s", Cmd_Argv(2)), src_command, false);
 
 	// open the demo file
 	Con_Printf("recording to %s.\n", name);
@@ -400,12 +407,26 @@ void CL_PlayDemo_f (void)
 	char	name[MAX_QPATH];
 	int c;
 	qboolean neg = false;
+	qfile_t *f;
 
 	if (Cmd_Argc() != 2)
 	{
 		Con_Print("play <demoname> : plays a demo\n");
 		return;
 	}
+
+	// open the demo file
+	strlcpy (name, Cmd_Argv(1), sizeof (name));
+	FS_DefaultExtension (name, ".dem", sizeof (name));
+	f = FS_OpenVirtualFile(name, false);
+	if (!f)
+	{
+		Con_Printf("ERROR: couldn't open %s.\n", name);
+		cls.demonum = -1;		// stop demo loop
+		return;
+	}
+
+	cls.demostarting = true;
 
 	// disconnect from server
 	CL_Disconnect ();
@@ -414,19 +435,10 @@ void CL_PlayDemo_f (void)
 	// update networking ports (this is mainly just needed at startup)
 	NetConn_UpdateSockets();
 
-	// open the demo file
-	strlcpy (name, Cmd_Argv(1), sizeof (name));
-	FS_DefaultExtension (name, ".dem", sizeof (name));
 	cls.protocol = PROTOCOL_QUAKE;
 
 	Con_Printf("Playing demo %s.\n", name);
-	cls.demofile = FS_OpenVirtualFile(name, false);
-	if (!cls.demofile)
-	{
-		Con_Print("ERROR: couldn't open.\n");
-		cls.demonum = -1;		// stop demo loop
-		return;
-	}
+	cls.demofile = f;
 	strlcpy(cls.demoname, name, sizeof(cls.demoname));
 
 	cls.demoplayback = true;
@@ -441,6 +453,27 @@ void CL_PlayDemo_f (void)
 
 	if (neg)
 		cls.forcetrack = -cls.forcetrack;
+
+	cls.demostarting = false;
+}
+
+typedef struct
+{
+	int frames;
+	double time, totalfpsavg;
+	double fpsmin, fpsavg, fpsmax;
+}
+benchmarkhistory_t;
+static size_t doublecmp_offset;
+static int doublecmp_withoffset(const void *a_, const void *b_)
+{
+	const double *a = (const double *) ((const char *) a_ + doublecmp_offset);
+	const double *b = (const double *) ((const char *) b_ + doublecmp_offset);
+	if(*a > *b)
+		return +1;
+	if(*a < *b)
+		return -1;
+	return 0;
 }
 
 /*
@@ -449,13 +482,14 @@ CL_FinishTimeDemo
 
 ====================
 */
-void CL_FinishTimeDemo (void)
+static void CL_FinishTimeDemo (void)
 {
 	int frames;
 	int i;
 	double time, totalfpsavg;
 	double fpsmin, fpsavg, fpsmax; // report min/avg/max fps
 	static int benchmark_runs = 0;
+	char vabuf[1024];
 
 	cls.timedemo = false;
 
@@ -474,14 +508,71 @@ void CL_FinishTimeDemo (void)
 		i = COM_CheckParm("-benchmarkruns");
 		if(i && i + 1 < com_argc)
 		{
+			static benchmarkhistory_t *history = NULL;
+			if(!history)
+				history = (benchmarkhistory_t *)Z_Malloc(sizeof(*history) * atoi(com_argv[i + 1]));
+
+			history[benchmark_runs - 1].frames = frames;
+			history[benchmark_runs - 1].time = time;
+			history[benchmark_runs - 1].totalfpsavg = totalfpsavg;
+			history[benchmark_runs - 1].fpsmin = fpsmin;
+			history[benchmark_runs - 1].fpsavg = fpsavg;
+			history[benchmark_runs - 1].fpsmax = fpsmax;
+
 			if(atoi(com_argv[i + 1]) > benchmark_runs)
 			{
 				// restart the benchmark
-				Cbuf_AddText(va("timedemo %s\n", cls.demoname));
+				Cbuf_AddText(va(vabuf, sizeof(vabuf), "timedemo %s\n", cls.demoname));
 				// cannot execute here
 			}
 			else
+			{
+				// print statistics
+				int first = COM_CheckParm("-benchmarkruns_skipfirst") ? 1 : 0;
+				if(benchmark_runs > first)
+				{
+#define DO_MIN(f) \
+					for(i = first; i < benchmark_runs; ++i) if((i == first) || (history[i].f < f)) f = history[i].f
+
+#define DO_MAX(f) \
+					for(i = first; i < benchmark_runs; ++i) if((i == first) || (history[i].f > f)) f = history[i].f
+
+#define DO_MED(f) \
+					doublecmp_offset = (char *)&history->f - (char *)history; \
+					qsort(history + first, benchmark_runs - first, sizeof(*history), doublecmp_withoffset); \
+					if((first + benchmark_runs) & 1) \
+						f = history[(first + benchmark_runs - 1) / 2].f; \
+					else \
+						f = (history[(first + benchmark_runs - 2) / 2].f + history[(first + benchmark_runs) / 2].f) / 2
+
+					DO_MIN(frames);
+					DO_MAX(time);
+					DO_MIN(totalfpsavg);
+					DO_MIN(fpsmin);
+					DO_MIN(fpsavg);
+					DO_MIN(fpsmax);
+					Con_Printf("MIN: %i frames %5.7f seconds %5.7f fps, one-second fps min/avg/max: %.0f %.0f %.0f (%i seconds)\n", frames, time, totalfpsavg, fpsmin, fpsavg, fpsmax, cls.td_onesecondavgcount);
+
+					DO_MED(frames);
+					DO_MED(time);
+					DO_MED(totalfpsavg);
+					DO_MED(fpsmin);
+					DO_MED(fpsavg);
+					DO_MED(fpsmax);
+					Con_Printf("MED: %i frames %5.7f seconds %5.7f fps, one-second fps min/avg/max: %.0f %.0f %.0f (%i seconds)\n", frames, time, totalfpsavg, fpsmin, fpsavg, fpsmax, cls.td_onesecondavgcount);
+
+					DO_MAX(frames);
+					DO_MIN(time);
+					DO_MAX(totalfpsavg);
+					DO_MAX(fpsmin);
+					DO_MAX(fpsavg);
+					DO_MAX(fpsmax);
+					Con_Printf("MAX: %i frames %5.7f seconds %5.7f fps, one-second fps min/avg/max: %.0f %.0f %.0f (%i seconds)\n", frames, time, totalfpsavg, fpsmin, fpsavg, fpsmax, cls.td_onesecondavgcount);
+				}
+				Z_Free(history);
+				history = NULL;
 				Host_Quit_f();
+			}
 		}
 		else
 			Host_Quit_f();
@@ -517,7 +608,6 @@ void CL_TimeDemo_f (void)
 
 	cls.timedemo = true;
 	cls.td_frames = -2;		// skip the first frame
-	cls.demonum = -1;		// stop demo loop
 	cls.demonum = -1;		// stop demo loop
 }
 

@@ -17,6 +17,10 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
+#if !defined(__APPLE__) && !defined(__MACH__) && !defined(SUNOS)
+//#define USEDGA
+#endif
+
 #include <signal.h>
 
 #include <dlfcn.h>
@@ -35,7 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <X11/xpm.h>
 
 #include <X11/extensions/XShm.h>
-#if !defined(__APPLE__) && !defined(__MACH__) && !defined(SUNOS)
+#ifdef USEDGA
 #include <X11/extensions/xf86dga.h>
 #endif
 #include <X11/extensions/xf86vmode.h>
@@ -116,10 +120,12 @@ static qboolean vid_usinghidecursor = false;
 static qboolean vid_usingvsync = false;
 static qboolean vid_usevsync = false;
 static qboolean vid_x11_hardwaregammasupported = false;
+#ifdef USEDGA
 static qboolean vid_x11_dgasupported = false;
+#endif
 static int vid_x11_gammarampsize = 0;
 
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 cvar_t vid_dgamouse = {CVAR_SAVE, "vid_dgamouse", "0", "make use of DGA mouse input"};
 static qboolean vid_usingdgamouse = false;
 #endif
@@ -141,8 +147,8 @@ static Colormap vidx11_colormap;
 /*-----------------------------------------------------------------------*/
 //
 
-long keysym2ucs(KeySym keysym);
-void DP_Xutf8LookupString(XKeyEvent * ev,
+extern long keysym2ucs(KeySym keysym); // LordHavoc: suppress warning just in this case, it's not worth having a header file for this...
+static void DP_Xutf8LookupString(XKeyEvent * ev,
 			 Uchar *uch,
 			 KeySym * keysym_return,
 			 Status * status_return)
@@ -278,7 +284,9 @@ static int XLateKey(XKeyEvent *ev, Uchar *ascii)
 		case XK_KP_Subtract: key = K_KP_MINUS; break;
 		case XK_KP_Divide: key = K_KP_SLASH; break;
 
-		case XK_section:	key = '~'; break;
+		case XK_asciicircum:	*ascii = key = '^'; break; // for some reason, XLookupString returns "" on this one for Grunt|2
+
+		case XK_section:	*ascii = key = '~'; break;
 
 		default:
 			if (keysym < 32)
@@ -323,7 +331,7 @@ void VID_SetMouse(qboolean fullscreengrab, qboolean relative, qboolean hidecurso
 	static int originalmouseparms_threshold;
 	static qboolean restore_spi;
 
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 	qboolean usedgamouse;
 #endif
 
@@ -336,7 +344,7 @@ void VID_SetMouse(qboolean fullscreengrab, qboolean relative, qboolean hidecurso
 	if (!mouse_avail)
 		fullscreengrab = relative = hidecursor = false;
 
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 	usedgamouse = relative && vid_dgamouse.integer;
 	if (!vid_x11_dgasupported)
 		usedgamouse = false;
@@ -372,7 +380,7 @@ void VID_SetMouse(qboolean fullscreengrab, qboolean relative, qboolean hidecurso
 			attribs_2.event_mask = attribs_1.your_event_mask | KEY_MASK | MOUSE_MASK;
 			XChangeWindowAttributes(vidx11_display, win, CWEventMask, &attribs_2);
 
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 			vid_usingdgamouse = usedgamouse;
 			if (usedgamouse)
 			{
@@ -384,7 +392,7 @@ void VID_SetMouse(qboolean fullscreengrab, qboolean relative, qboolean hidecurso
 				XWarpPointer(vidx11_display, None, win, 0, 0, 0, 0, vid.width / 2, vid.height / 2);
 
 // COMMANDLINEOPTION: X11 Input: -noforcemparms disables setting of mouse parameters (not used with DGA, windows only)
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 			if (!COM_CheckParm ("-noforcemparms") && !usedgamouse)
 #else
 			if (!COM_CheckParm ("-noforcemparms"))
@@ -405,7 +413,7 @@ void VID_SetMouse(qboolean fullscreengrab, qboolean relative, qboolean hidecurso
 	{
 		if (vid_usingmouse)
 		{
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 			if (vid_usingdgamouse)
 				XF86DGADirectVideo(vidx11_display, DefaultScreen(vidx11_display), 0);
 			vid_usingdgamouse = false;
@@ -597,7 +605,7 @@ static void HandleEvents(void)
 			// mouse moved
 			if (vid_usingmouse)
 			{
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 				if (vid_usingdgamouse)
 				{
 					in_mouse_x += event.xmotion.x_root;
@@ -832,6 +840,7 @@ void VID_Shutdown(void)
 	if (!vidx11_display)
 		return;
 
+	VID_EnableJoystick(false);
 	VID_SetMouse(false, false, false);
 	VID_RestoreSystemGamma();
 
@@ -868,14 +877,14 @@ void VID_Shutdown(void)
 	Key_ClearStates ();
 }
 
-void signal_handler(int sig)
+static void signal_handler(int sig)
 {
 	Con_Printf("Received signal %d, exiting...\n", sig);
 	VID_RestoreSystemGamma();
 	Sys_Quit(1);
 }
 
-void InitSig(void)
+static void InitSig(void)
 {
 	signal(SIGHUP, signal_handler);
 	signal(SIGINT, signal_handler);
@@ -927,7 +936,7 @@ void VID_Finish (void)
 			if (vid_usingvsync != vid_usevsync)
 			{
 				vid_usingvsync = vid_usevsync;
-				if (qglXSwapIntervalSGI (vid_usevsync))
+				if (qglXSwapIntervalSGI && qglXSwapIntervalSGI (vid_usevsync))
 					Con_Print("glXSwapIntervalSGI didn't accept the vid_vsync change, it will take effect on next vid_restart (GLX_SGI_swap_control does not allow turning off vsync)\n");
 			}
 
@@ -962,7 +971,7 @@ int VID_GetGamma(unsigned short *ramps, int rampsize)
 
 void VID_Init(void)
 {
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 	Cvar_RegisterVariable (&vid_dgamouse);
 #endif
 	Cvar_RegisterVariable (&vid_netwmfullscreen);
@@ -974,7 +983,7 @@ void VID_Init(void)
 	vidx11_shminfo[1].shmid = -1;
 }
 
-void VID_BuildGLXAttrib(int *attrib, qboolean stencil, qboolean stereobuffer, int samples)
+static void VID_BuildGLXAttrib(int *attrib, qboolean stencil, qboolean stereobuffer, int samples)
 {
 	*attrib++ = GLX_RGBA;
 	*attrib++ = GLX_RED_SIZE;*attrib++ = stencil ? 8 : 5;
@@ -1000,7 +1009,7 @@ void VID_BuildGLXAttrib(int *attrib, qboolean stencil, qboolean stereobuffer, in
 	*attrib++ = None;
 }
 
-qboolean VID_InitModeSoft(viddef_mode_t *mode)
+static qboolean VID_InitModeSoft(viddef_mode_t *mode)
 {
 	int i, j;
 	XSetWindowAttributes attr;
@@ -1014,6 +1023,7 @@ qboolean VID_InitModeSoft(viddef_mode_t *mode)
 	unsigned char *data;
 	XGCValues gcval;
 	const char *dpyname;
+	char vabuf[1024];
 
 	vid_isfullscreen = false;
 	vid_isnetwmfullscreen = false;
@@ -1187,7 +1197,7 @@ qboolean VID_InitModeSoft(viddef_mode_t *mode)
 			}
 			++i;
 			Mem_Free(data);
-			data = loadimagepixelsbgra(va("darkplaces-icon%d", i), false, false, false, NULL);
+			data = loadimagepixelsbgra(va(vabuf, sizeof(vabuf), "darkplaces-icon%d", i), false, false, false, NULL);
 		}
 		XChangeProperty(vidx11_display, win, net_wm_icon, cardinal, 32, PropModeReplace, (const unsigned char *) netwm_icon, pos);
 	}
@@ -1287,7 +1297,7 @@ qboolean VID_InitModeSoft(viddef_mode_t *mode)
 	vid_hidden = false;
 	vid_activewindow = true;
 	vid_x11_hardwaregammasupported = XF86VidModeGetGammaRampSize(vidx11_display, vidx11_screen, &vid_x11_gammarampsize) != 0;
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 	vid_x11_dgasupported = XF86DGAQueryVersion(vidx11_display, &MajorVersion, &MinorVersion);
 	if (!vid_x11_dgasupported)
 		Con_Print( "Failed to detect XF86DGA Mouse extension\n" );
@@ -1297,7 +1307,8 @@ qboolean VID_InitModeSoft(viddef_mode_t *mode)
 
 	return true;
 }
-qboolean VID_InitModeGL(viddef_mode_t *mode)
+
+static qboolean VID_InitModeGL(viddef_mode_t *mode)
 {
 	int i, j;
 	int attrib[32];
@@ -1312,6 +1323,7 @@ qboolean VID_InitModeGL(viddef_mode_t *mode)
 	char *xpm;
 	char **idata;
 	unsigned char *data;
+	char vabuf[1024];
 
 	vid_isfullscreen = false;
 	vid_isnetwmfullscreen = false;
@@ -1520,7 +1532,7 @@ qboolean VID_InitModeGL(viddef_mode_t *mode)
 			}
 			++i;
 			Mem_Free(data);
-			data = loadimagepixelsbgra(va("darkplaces-icon%d", i), false, false, false, NULL);
+			data = loadimagepixelsbgra(va(vabuf, sizeof(vabuf), "darkplaces-icon%d", i), false, false, false, NULL);
 		}
 		XChangeProperty(vidx11_display, win, net_wm_icon, cardinal, 32, PropModeReplace, (const unsigned char *) netwm_icon, pos);
 	}
@@ -1625,7 +1637,7 @@ qboolean VID_InitModeGL(viddef_mode_t *mode)
 	vid_hidden = false;
 	vid_activewindow = true;
 	vid_x11_hardwaregammasupported = XF86VidModeGetGammaRampSize(vidx11_display, vidx11_screen, &vid_x11_gammarampsize) != 0;
-#if !defined(__APPLE__) && !defined(SUNOS)
+#ifdef USEDGA
 	vid_x11_dgasupported = XF86DGAQueryVersion(vidx11_display, &MajorVersion, &MinorVersion);
 	if (!vid_x11_dgasupported)
 		Con_Print( "Failed to detect XF86DGA Mouse extension\n" );
@@ -1670,8 +1682,34 @@ void Sys_SendKeyEvents(void)
 	HandleEvents();
 }
 
+void VID_BuildJoyState(vid_joystate_t *joystate)
+{
+	VID_Shared_BuildJoyState_Begin(joystate);
+	VID_Shared_BuildJoyState_Finish(joystate);
+}
+
+void VID_EnableJoystick(qboolean enable)
+{
+	int index = joy_enable.integer > 0 ? joy_index.integer : -1;
+	qboolean success = false;
+	int sharedcount = 0;
+	sharedcount = VID_Shared_SetJoystick(index);
+	if (index >= 0 && index < sharedcount)
+		success = true;
+
+	// update cvar containing count of XInput joysticks
+	if (joy_detected.integer != sharedcount)
+		Cvar_SetValueQuick(&joy_detected, sharedcount);
+
+	Cvar_SetValueQuick(&joy_active, success ? 1 : 0);
+}
+
 void IN_Move (void)
 {
+	vid_joystate_t joystate;
+	VID_EnableJoystick(true);
+	VID_BuildJoyState(&joystate);
+	VID_ApplyJoyState(&joystate);
 }
 
 size_t VID_ListModes(vid_mode_t *modes, size_t maxcount)

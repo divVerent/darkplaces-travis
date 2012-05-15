@@ -102,13 +102,14 @@ World_SetSize
 
 ===============
 */
-void World_SetSize(world_t *world, const char *filename, const vec3_t mins, const vec3_t maxs)
+void World_SetSize(world_t *world, const char *filename, const vec3_t mins, const vec3_t maxs, prvm_prog_t *prog)
 {
 	int i;
 
 	strlcpy(world->filename, filename, sizeof(world->filename));
 	VectorCopy(mins, world->mins);
 	VectorCopy(maxs, world->maxs);
+	world->prog = prog;
 
 	// the areagrid_marknumber is not allowed to be 0
 	if (world->areagrid_marknumber < 1)
@@ -144,6 +145,7 @@ World_UnlinkAll
 */
 void World_UnlinkAll(world_t *world)
 {
+	prvm_prog_t *prog = world->prog;
 	int i;
 	link_t *grid;
 	// unlink all entities one by one
@@ -173,24 +175,32 @@ void World_UnlinkEdict(prvm_edict_t *ent)
 	}
 }
 
-int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, int maxlist, prvm_edict_t **list)
+int World_EntitiesInBox(world_t *world, const vec3_t requestmins, const vec3_t requestmaxs, int maxlist, prvm_edict_t **list)
 {
+	prvm_prog_t *prog = world->prog;
 	int numlist;
 	link_t *grid;
 	link_t *l;
 	prvm_edict_t *ent;
+	vec3_t paddedmins, paddedmaxs;
 	int igrid[3], igridmins[3], igridmaxs[3];
+
+	// LordHavoc: discovered this actually causes its own bugs (dm6 teleporters being too close to info_teleport_destination)
+	//VectorSet(paddedmins, requestmins[0] - 1.0f, requestmins[1] - 1.0f, requestmins[2] - 1.0f);
+	//VectorSet(paddedmaxs, requestmaxs[0] + 1.0f, requestmaxs[1] + 1.0f, requestmaxs[2] + 1.0f);
+	VectorCopy(requestmins, paddedmins);
+	VectorCopy(requestmaxs, paddedmaxs);
 
 	// FIXME: if areagrid_marknumber wraps, all entities need their
 	// ent->priv.server->areagridmarknumber reset
 	world->areagrid_stats_calls++;
 	world->areagrid_marknumber++;
-	igridmins[0] = (int) floor((mins[0] + world->areagrid_bias[0]) * world->areagrid_scale[0]);
-	igridmins[1] = (int) floor((mins[1] + world->areagrid_bias[1]) * world->areagrid_scale[1]);
-	//igridmins[2] = (int) ((mins[2] + world->areagrid_bias[2]) * world->areagrid_scale[2]);
-	igridmaxs[0] = (int) floor((maxs[0] + world->areagrid_bias[0]) * world->areagrid_scale[0]) + 1;
-	igridmaxs[1] = (int) floor((maxs[1] + world->areagrid_bias[1]) * world->areagrid_scale[1]) + 1;
-	//igridmaxs[2] = (int) ((maxs[2] + world->areagrid_bias[2]) * world->areagrid_scale[2]) + 1;
+	igridmins[0] = (int) floor((paddedmins[0] + world->areagrid_bias[0]) * world->areagrid_scale[0]);
+	igridmins[1] = (int) floor((paddedmins[1] + world->areagrid_bias[1]) * world->areagrid_scale[1]);
+	//igridmins[2] = (int) ((paddedmins[2] + world->areagrid_bias[2]) * world->areagrid_scale[2]);
+	igridmaxs[0] = (int) floor((paddedmaxs[0] + world->areagrid_bias[0]) * world->areagrid_scale[0]) + 1;
+	igridmaxs[1] = (int) floor((paddedmaxs[1] + world->areagrid_bias[1]) * world->areagrid_scale[1]) + 1;
+	//igridmaxs[2] = (int) ((paddedmaxs[2] + world->areagrid_bias[2]) * world->areagrid_scale[2]) + 1;
 	igridmins[0] = max(0, igridmins[0]);
 	igridmins[1] = max(0, igridmins[1]);
 	//igridmins[2] = max(0, igridmins[2]);
@@ -198,10 +208,13 @@ int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, in
 	igridmaxs[1] = min(AREA_GRID, igridmaxs[1]);
 	//igridmaxs[2] = min(AREA_GRID, igridmaxs[2]);
 
+	// paranoid debugging
+	//VectorSet(igridmins, 0, 0, 0);VectorSet(igridmaxs, AREA_GRID, AREA_GRID, AREA_GRID);
+
 	numlist = 0;
 	// add entities not linked into areagrid because they are too big or
 	// outside the grid bounds
-	if (world->areagrid_outside.next != &world->areagrid_outside)
+	if (world->areagrid_outside.next)
 	{
 		grid = &world->areagrid_outside;
 		for (l = grid->next;l != grid;l = l->next)
@@ -210,7 +223,7 @@ int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, in
 			if (ent->priv.server->areagridmarknumber != world->areagrid_marknumber)
 			{
 				ent->priv.server->areagridmarknumber = world->areagrid_marknumber;
-				if (!ent->priv.server->free && BoxesOverlap(mins, maxs, ent->priv.server->areamins, ent->priv.server->areamaxs))
+				if (!ent->priv.server->free && BoxesOverlap(paddedmins, paddedmaxs, ent->priv.server->areamins, ent->priv.server->areamaxs))
 				{
 					if (numlist < maxlist)
 						list[numlist] = ent;
@@ -226,7 +239,7 @@ int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, in
 		grid = world->areagrid + igrid[1] * AREA_GRID + igridmins[0];
 		for (igrid[0] = igridmins[0];igrid[0] < igridmaxs[0];igrid[0]++, grid++)
 		{
-			if (grid->next != grid)
+			if (grid->next)
 			{
 				for (l = grid->next;l != grid;l = l->next)
 				{
@@ -234,7 +247,7 @@ int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, in
 					if (ent->priv.server->areagridmarknumber != world->areagrid_marknumber)
 					{
 						ent->priv.server->areagridmarknumber = world->areagrid_marknumber;
-						if (!ent->priv.server->free && BoxesOverlap(mins, maxs, ent->priv.server->areamins, ent->priv.server->areamaxs))
+						if (!ent->priv.server->free && BoxesOverlap(paddedmins, paddedmaxs, ent->priv.server->areamins, ent->priv.server->areamaxs))
 						{
 							if (numlist < maxlist)
 								list[numlist] = ent;
@@ -250,8 +263,9 @@ int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, in
 	return numlist;
 }
 
-void World_LinkEdict_AreaGrid(world_t *world, prvm_edict_t *ent)
+static void World_LinkEdict_AreaGrid(world_t *world, prvm_edict_t *ent)
 {
+	prvm_prog_t *prog = world->prog;
 	link_t *grid;
 	int igrid[3], igridmins[3], igridmaxs[3], gridnum, entitynumber = PRVM_NUM_FOR_EDICT(ent);
 
@@ -291,6 +305,7 @@ World_LinkEdict
 */
 void World_LinkEdict(world_t *world, prvm_edict_t *ent, const vec3_t mins, const vec3_t maxs)
 {
+	prvm_prog_t *prog = world->prog;
 	// unlink from old position first
 	if (ent->priv.server->areagrid[0].prev)
 		World_UnlinkEdict(ent);
@@ -315,44 +330,36 @@ void World_LinkEdict(world_t *world, prvm_edict_t *ent, const vec3_t mins, const
 // physics engine support
 //============================================================================
 
-#ifndef ODE_STATIC
-# define ODE_DYNAMIC 1
-#endif
-
-#if defined(ODE_STATIC) || defined(ODE_DYNAMIC)
-#define USEODE 1
-#endif
-
-// recent ODE trunk has dWorldStepFast1 removed
-//#define ODE_USE_STEPFAST
-
 #ifdef USEODE
 cvar_t physics_ode_quadtree_depth = {0, "physics_ode_quadtree_depth","5", "desired subdivision level of quadtree culling space"};
+cvar_t physics_ode_allowconvex = {0, "physics_ode_allowconvex", "0", "allow usage of Convex Hull primitive type on trimeshes that have custom 'collisionconvex' mesh. If disabled, trimesh primitive type are used."};
 cvar_t physics_ode_contactsurfacelayer = {0, "physics_ode_contactsurfacelayer","1", "allows objects to overlap this many units to reduce jitter"};
-cvar_t physics_ode_worldstep = {0, "physics_ode_worldstep","2", "step function to use, 0 - dWorldStep, 1 - dWorldStepFast1, 2 - dWorldQuickStep"};
-cvar_t physics_ode_worldstep_iterations = {0, "physics_ode_worldstep_iterations", "20", "parameter to dWorldQuickStep and dWorldStepFast1"};
+cvar_t physics_ode_worldstep_iterations = {0, "physics_ode_worldstep_iterations", "20", "parameter to dWorldQuickStep"};
 cvar_t physics_ode_contact_mu = {0, "physics_ode_contact_mu", "1", "contact solver mu parameter - friction pyramid approximation 1 (see ODE User Guide)"};
 cvar_t physics_ode_contact_erp = {0, "physics_ode_contact_erp", "0.96", "contact solver erp parameter - Error Restitution Percent (see ODE User Guide)"};
 cvar_t physics_ode_contact_cfm = {0, "physics_ode_contact_cfm", "0", "contact solver cfm parameter - Constraint Force Mixing (see ODE User Guide)"};
+cvar_t physics_ode_contact_maxpoints = {0, "physics_ode_contact_maxpoints", "16", "maximal number of contact points between 2 objects, higher = stable (and slower), can be up to 32"};
 cvar_t physics_ode_world_erp = {0, "physics_ode_world_erp", "-1", "world solver erp parameter - Error Restitution Percent (see ODE User Guide); use defaults when set to -1"};
 cvar_t physics_ode_world_cfm = {0, "physics_ode_world_cfm", "-1", "world solver cfm parameter - Constraint Force Mixing (see ODE User Guide); not touched when -1"};
 cvar_t physics_ode_world_damping = {0, "physics_ode_world_damping", "1", "enabled damping scale (see ODE User Guide), this scales all damping values, be aware that behavior depends of step type"};
-cvar_t physics_ode_world_damping_linear = {0, "physics_ode_world_damping_linear", "0.005", "world linear damping scale (see ODE User Guide); use defaults when set to -1"};
-cvar_t physics_ode_world_damping_linear_threshold = {0, "physics_ode_world_damping_linear_threshold", "0.01", "world linear damping threshold (see ODE User Guide); use defaults when set to -1"};
-cvar_t physics_ode_world_damping_angular = {0, "physics_ode_world_damping_angular", "0.005", "world angular damping scale (see ODE User Guide); use defaults when set to -1"};
-cvar_t physics_ode_world_damping_angular_threshold = {0, "physics_ode_world_damping_angular_threshold", "0.01", "world angular damping threshold (see ODE User Guide); use defaults when set to -1"};
+cvar_t physics_ode_world_damping_linear = {0, "physics_ode_world_damping_linear", "0.01", "world linear damping scale (see ODE User Guide); use defaults when set to -1"};
+cvar_t physics_ode_world_damping_linear_threshold = {0, "physics_ode_world_damping_linear_threshold", "0.1", "world linear damping threshold (see ODE User Guide); use defaults when set to -1"};
+cvar_t physics_ode_world_damping_angular = {0, "physics_ode_world_damping_angular", "0.05", "world angular damping scale (see ODE User Guide); use defaults when set to -1"};
+cvar_t physics_ode_world_damping_angular_threshold = {0, "physics_ode_world_damping_angular_threshold", "0.1", "world angular damping threshold (see ODE User Guide); use defaults when set to -1"};
+cvar_t physics_ode_world_gravitymod = {0, "physics_ode_world_gravitymod", "1", "multiplies gravity got from sv_gravity, this may be needed to tweak if strong damping is used"};
 cvar_t physics_ode_iterationsperframe = {0, "physics_ode_iterationsperframe", "1", "divisor for time step, runs multiple physics steps per frame"};
-cvar_t physics_ode_constantstep = {0, "physics_ode_constantstep", "1", "use constant step (sys_ticrate value) instead of variable step which tends to increase stability"};
+cvar_t physics_ode_constantstep = {0, "physics_ode_constantstep", "0", "use constant step instead of variable step which tends to increase stability, if set to 1 uses sys_ticrate, instead uses it's own value"};
 cvar_t physics_ode_autodisable = {0, "physics_ode_autodisable", "1", "automatic disabling of objects which dont move for long period of time, makes object stacking a lot faster"};
 cvar_t physics_ode_autodisable_steps = {0, "physics_ode_autodisable_steps", "10", "how many steps object should be dormant to be autodisabled"};
 cvar_t physics_ode_autodisable_time = {0, "physics_ode_autodisable_time", "0", "how many seconds object should be dormant to be autodisabled"};
-cvar_t physics_ode_autodisable_threshold_linear = {0, "physics_ode_autodisable_threshold_linear", "0.2", "body will be disabled if it's linear move below this value"};
-cvar_t physics_ode_autodisable_threshold_angular = {0, "physics_ode_autodisable_threshold_angular", "0.3", "body will be disabled if it's angular move below this value"};
+cvar_t physics_ode_autodisable_threshold_linear = {0, "physics_ode_autodisable_threshold_linear", "0.6", "body will be disabled if it's linear move below this value"};
+cvar_t physics_ode_autodisable_threshold_angular = {0, "physics_ode_autodisable_threshold_angular", "6", "body will be disabled if it's angular move below this value"};
 cvar_t physics_ode_autodisable_threshold_samples = {0, "physics_ode_autodisable_threshold_samples", "5", "average threshold with this number of samples"};
 cvar_t physics_ode_movelimit = {0, "physics_ode_movelimit", "0.5", "clamp velocity if a single move would exceed this percentage of object thickness, to prevent flying through walls, be aware that behavior depends of step type"};
 cvar_t physics_ode_spinlimit = {0, "physics_ode_spinlimit", "10000", "reset spin velocity if it gets too large"};
 cvar_t physics_ode_trick_fixnan = {0, "physics_ode_trick_fixnan", "1", "engine trick that checks and fixes NaN velocity/origin/angles on objects, a value of 2 makes console prints on each fix"};
 cvar_t physics_ode_printstats = {0, "physics_ode_printstats", "0", "print ODE stats each frame"};
+
 cvar_t physics_ode = {0, "physics_ode", "0", "run ODE physics (VERY experimental and potentially buggy)"};
 
 // LordHavoc: this large chunk of definitions comes from the ODE library
@@ -542,7 +549,7 @@ typedef void dNearCallback (void *data, dGeomID o1, dGeomID o2);
 #define dSAP_AXES_ZXY  ((2)|(0<<2)|(1<<4))
 #define dSAP_AXES_ZYX  ((2)|(1<<2)|(0<<4))
 
-//const char*     (ODE_API *dGetConfiguration)(void);
+const char*     (ODE_API *dGetConfiguration)(void);
 int             (ODE_API *dCheckConfiguration)( const char* token );
 int             (ODE_API *dInitODE)(void);
 //int             (ODE_API *dInitODE2)(unsigned int uiInitFlags);
@@ -558,7 +565,7 @@ void            (ODE_API *dMassSetSphereTotal)(dMass *, dReal total_mass, dReal 
 //void            (ODE_API *dMassSetCapsule)(dMass *, dReal density, int direction, dReal radius, dReal length);
 void            (ODE_API *dMassSetCapsuleTotal)(dMass *, dReal total_mass, int direction, dReal radius, dReal length);
 //void            (ODE_API *dMassSetCylinder)(dMass *, dReal density, int direction, dReal radius, dReal length);
-//void            (ODE_API *dMassSetCylinderTotal)(dMass *, dReal total_mass, int direction, dReal radius, dReal length);
+void            (ODE_API *dMassSetCylinderTotal)(dMass *, dReal total_mass, int direction, dReal radius, dReal length);
 //void            (ODE_API *dMassSetBox)(dMass *, dReal density, dReal lx, dReal ly, dReal lz);
 void            (ODE_API *dMassSetBoxTotal)(dMass *, dReal total_mass, dReal lx, dReal ly, dReal lz);
 //void            (ODE_API *dMassSetTrimesh)(dMass *, dReal density, dGeomID g);
@@ -576,7 +583,7 @@ void            (ODE_API *dWorldSetERP)(dWorldID, dReal erp);
 //dReal           (ODE_API *dWorldGetERP)(dWorldID);
 void            (ODE_API *dWorldSetCFM)(dWorldID, dReal cfm);
 //dReal           (ODE_API *dWorldGetCFM)(dWorldID);
-void            (ODE_API *dWorldStep)(dWorldID, dReal stepsize);
+//void            (ODE_API *dWorldStep)(dWorldID, dReal stepsize);
 //void            (ODE_API *dWorldImpulseToForce)(dWorldID, dReal stepsize, dReal ix, dReal iy, dReal iz, dVector3 force);
 void            (ODE_API *dWorldQuickStep)(dWorldID w, dReal stepsize);
 void            (ODE_API *dWorldSetQuickStepNumIterations)(dWorldID, int num);
@@ -587,9 +594,7 @@ void            (ODE_API *dWorldSetQuickStepNumIterations)(dWorldID, int num);
 //dReal           (ODE_API *dWorldGetContactMaxCorrectingVel)(dWorldID);
 void            (ODE_API *dWorldSetContactSurfaceLayer)(dWorldID, dReal depth);
 //dReal           (ODE_API *dWorldGetContactSurfaceLayer)(dWorldID);
-#ifdef ODE_USE_STEPFAST
-void            (ODE_API *dWorldStepFast1)(dWorldID, dReal stepsize, int maxiterations);
-#endif
+//void            (ODE_API *dWorldStepFast1)(dWorldID, dReal stepsize, int maxiterations);
 //void            (ODE_API *dWorldSetAutoEnableDepthSF1)(dWorldID, int autoEnableDepth);
 //int             (ODE_API *dWorldGetAutoEnableDepthSF1)(dWorldID);
 //dReal           (ODE_API *dWorldGetAutoDisableLinearThreshold)(dWorldID);
@@ -652,12 +657,12 @@ const dReal *   (ODE_API *dBodyGetLinearVel)(dBodyID);
 const dReal *   (ODE_API *dBodyGetAngularVel)(dBodyID);
 void            (ODE_API *dBodySetMass)(dBodyID, const dMass *mass);
 //void            (ODE_API *dBodyGetMass)(dBodyID, dMass *mass);
-//void            (ODE_API *dBodyAddForce)(dBodyID, dReal fx, dReal fy, dReal fz);
-//void            (ODE_API *dBodyAddTorque)(dBodyID, dReal fx, dReal fy, dReal fz);
+void            (ODE_API *dBodyAddForce)(dBodyID, dReal fx, dReal fy, dReal fz);
+void            (ODE_API *dBodyAddTorque)(dBodyID, dReal fx, dReal fy, dReal fz);
 //void            (ODE_API *dBodyAddRelForce)(dBodyID, dReal fx, dReal fy, dReal fz);
-void            (ODE_API *dBodyAddRelTorque)(dBodyID, dReal fx, dReal fy, dReal fz);
-//void            (ODE_API *dBodyAddForceAtPos)(dBodyID, dReal fx, dReal fy, dReal fz, dReal px, dReal py, dReal pz);
-void            (ODE_API *dBodyAddForceAtRelPos)(dBodyID, dReal fx, dReal fy, dReal fz, dReal px, dReal py, dReal pz);
+//void            (ODE_API *dBodyAddRelTorque)(dBodyID, dReal fx, dReal fy, dReal fz);
+void            (ODE_API *dBodyAddForceAtPos)(dBodyID, dReal fx, dReal fy, dReal fz, dReal px, dReal py, dReal pz);
+//void            (ODE_API *dBodyAddForceAtRelPos)(dBodyID, dReal fx, dReal fy, dReal fz, dReal px, dReal py, dReal pz);
 //void            (ODE_API *dBodyAddRelForceAtPos)(dBodyID, dReal fx, dReal fy, dReal fz, dReal px, dReal py, dReal pz);
 //void            (ODE_API *dBodyAddRelForceAtRelPos)(dBodyID, dReal fx, dReal fy, dReal fz, dReal px, dReal py, dReal pz);
 //const dReal *   (ODE_API *dBodyGetForce)(dBodyID);
@@ -930,7 +935,7 @@ dGeomID         (ODE_API *dCreateSphere)(dSpaceID space, dReal radius);
 //dReal           (ODE_API *dGeomSphereGetRadius)(dGeomID sphere);
 //dReal           (ODE_API *dGeomSpherePointDepth)(dGeomID sphere, dReal x, dReal y, dReal z);
 //
-//dGeomID         (ODE_API *dCreateConvex)(dSpaceID space, dReal *_planes, unsigned int _planecount, dReal *_points, unsigned int _pointcount,unsigned int *_polygons);
+dGeomID         (ODE_API *dCreateConvex)(dSpaceID space, dReal *_planes, unsigned int _planecount, dReal *_points, unsigned int _pointcount,unsigned int *_polygons);
 //void            (ODE_API *dGeomSetConvex)(dGeomID g, dReal *_planes, unsigned int _count, dReal *_points, unsigned int _pointcount,unsigned int *_polygons);
 //
 dGeomID         (ODE_API *dCreateBox)(dSpaceID space, dReal lx, dReal ly, dReal lz);
@@ -949,7 +954,7 @@ dGeomID         (ODE_API *dCreateCapsule)(dSpaceID space, dReal radius, dReal le
 //void            (ODE_API *dGeomCapsuleGetParams)(dGeomID ccylinder, dReal *radius, dReal *length);
 //dReal           (ODE_API *dGeomCapsulePointDepth)(dGeomID ccylinder, dReal x, dReal y, dReal z);
 //
-//dGeomID         (ODE_API *dCreateCylinder)(dSpaceID space, dReal radius, dReal length);
+dGeomID         (ODE_API *dCreateCylinder)(dSpaceID space, dReal radius, dReal length);
 //void            (ODE_API *dGeomCylinderSetParams)(dGeomID cylinder, dReal radius, dReal length);
 //void            (ODE_API *dGeomCylinderGetParams)(dGeomID cylinder, dReal *radius, dReal *length);
 //
@@ -1010,7 +1015,7 @@ dGeomID         (ODE_API *dCreateTriMesh)(dSpaceID space, dTriMeshDataID Data, d
 
 static dllfunction_t odefuncs[] =
 {
-//	{"dGetConfiguration",							(void **) &dGetConfiguration},
+	{"dGetConfiguration",							(void **) &dGetConfiguration},
 	{"dCheckConfiguration",							(void **) &dCheckConfiguration},
 	{"dInitODE",									(void **) &dInitODE},
 //	{"dInitODE2",									(void **) &dInitODE2},
@@ -1025,7 +1030,7 @@ static dllfunction_t odefuncs[] =
 //	{"dMassSetCapsule",								(void **) &dMassSetCapsule},
 	{"dMassSetCapsuleTotal",						(void **) &dMassSetCapsuleTotal},
 //	{"dMassSetCylinder",							(void **) &dMassSetCylinder},
-//	{"dMassSetCylinderTotal",						(void **) &dMassSetCylinderTotal},
+	{"dMassSetCylinderTotal",						(void **) &dMassSetCylinderTotal},
 //	{"dMassSetBox",									(void **) &dMassSetBox},
 	{"dMassSetBoxTotal",							(void **) &dMassSetBoxTotal},
 //	{"dMassSetTrimesh",								(void **) &dMassSetTrimesh},
@@ -1043,7 +1048,7 @@ static dllfunction_t odefuncs[] =
 //	{"dWorldGetERP",								(void **) &dWorldGetERP},
 	{"dWorldSetCFM",								(void **) &dWorldSetCFM},
 //	{"dWorldGetCFM",								(void **) &dWorldGetCFM},
-	{"dWorldStep",									(void **) &dWorldStep},
+//	{"dWorldStep",									(void **) &dWorldStep},
 //	{"dWorldImpulseToForce",						(void **) &dWorldImpulseToForce},
 	{"dWorldQuickStep",								(void **) &dWorldQuickStep},
 	{"dWorldSetQuickStepNumIterations",				(void **) &dWorldSetQuickStepNumIterations},
@@ -1054,9 +1059,7 @@ static dllfunction_t odefuncs[] =
 //	{"dWorldGetContactMaxCorrectingVel",			(void **) &dWorldGetContactMaxCorrectingVel},
 	{"dWorldSetContactSurfaceLayer",				(void **) &dWorldSetContactSurfaceLayer},
 //	{"dWorldGetContactSurfaceLayer",				(void **) &dWorldGetContactSurfaceLayer},
-#ifdef ODE_USE_STEPFAST
-	{"dWorldStepFast1",								(void **) &dWorldStepFast1},
-#endif
+//	{"dWorldStepFast1",								(void **) &dWorldStepFast1},
 //	{"dWorldSetAutoEnableDepthSF1",					(void **) &dWorldSetAutoEnableDepthSF1},
 //	{"dWorldGetAutoEnableDepthSF1",					(void **) &dWorldGetAutoEnableDepthSF1},
 //	{"dWorldGetAutoDisableLinearThreshold",			(void **) &dWorldGetAutoDisableLinearThreshold},
@@ -1119,12 +1122,12 @@ static dllfunction_t odefuncs[] =
 	{"dBodyGetAngularVel",							(void **) &dBodyGetAngularVel},
 	{"dBodySetMass",								(void **) &dBodySetMass},
 //	{"dBodyGetMass",								(void **) &dBodyGetMass},
-//	{"dBodyAddForce",								(void **) &dBodyAddForce},
-//	{"dBodyAddTorque",								(void **) &dBodyAddTorque},
+	{"dBodyAddForce",								(void **) &dBodyAddForce},
+	{"dBodyAddTorque",								(void **) &dBodyAddTorque},
 //	{"dBodyAddRelForce",							(void **) &dBodyAddRelForce},
-	{"dBodyAddRelTorque",							(void **) &dBodyAddRelTorque},
-//	{"dBodyAddForceAtPos",							(void **) &dBodyAddForceAtPos},
-	{"dBodyAddForceAtRelPos",						(void **) &dBodyAddForceAtRelPos},
+//	{"dBodyAddRelTorque",							(void **) &dBodyAddRelTorque},
+	{"dBodyAddForceAtPos",							(void **) &dBodyAddForceAtPos},
+//	{"dBodyAddForceAtRelPos",						(void **) &dBodyAddForceAtRelPos},
 //	{"dBodyAddRelForceAtPos",						(void **) &dBodyAddRelForceAtPos},
 //	{"dBodyAddRelForceAtRelPos",					(void **) &dBodyAddRelForceAtRelPos},
 //	{"dBodyGetForce",								(void **) &dBodyGetForce},
@@ -1392,7 +1395,7 @@ static dllfunction_t odefuncs[] =
 //	{"dGeomSphereSetRadius",						(void **) &dGeomSphereSetRadius},
 //	{"dGeomSphereGetRadius",						(void **) &dGeomSphereGetRadius},
 //	{"dGeomSpherePointDepth",						(void **) &dGeomSpherePointDepth},
-//	{"dCreateConvex",								(void **) &dCreateConvex},
+	{"dCreateConvex",								(void **) &dCreateConvex},
 //	{"dGeomSetConvex",								(void **) &dGeomSetConvex},
 	{"dCreateBox",									(void **) &dCreateBox},
 //	{"dGeomBoxSetLengths",							(void **) &dGeomBoxSetLengths},
@@ -1407,7 +1410,7 @@ static dllfunction_t odefuncs[] =
 //	{"dGeomCapsuleSetParams",						(void **) &dGeomCapsuleSetParams},
 //	{"dGeomCapsuleGetParams",						(void **) &dGeomCapsuleGetParams},
 //	{"dGeomCapsulePointDepth",						(void **) &dGeomCapsulePointDepth},
-//	{"dCreateCylinder",								(void **) &dCreateCylinder},
+	{"dCreateCylinder",								(void **) &dCreateCylinder},
 //	{"dGeomCylinderSetParams",						(void **) &dGeomCylinderSetParams},
 //	{"dGeomCylinderGetParams",						(void **) &dGeomCylinderGetParams},
 //	{"dCreateRay",									(void **) &dCreateRay},
@@ -1483,11 +1486,11 @@ static void World_Physics_Init(void)
 
 	Cvar_RegisterVariable(&physics_ode_quadtree_depth);
 	Cvar_RegisterVariable(&physics_ode_contactsurfacelayer);
-	Cvar_RegisterVariable(&physics_ode_worldstep);
 	Cvar_RegisterVariable(&physics_ode_worldstep_iterations);
 	Cvar_RegisterVariable(&physics_ode_contact_mu);
 	Cvar_RegisterVariable(&physics_ode_contact_erp);
 	Cvar_RegisterVariable(&physics_ode_contact_cfm);
+	Cvar_RegisterVariable(&physics_ode_contact_maxpoints);
 	Cvar_RegisterVariable(&physics_ode_world_erp);
 	Cvar_RegisterVariable(&physics_ode_world_cfm);
 	Cvar_RegisterVariable(&physics_ode_world_damping);
@@ -1495,6 +1498,7 @@ static void World_Physics_Init(void)
 	Cvar_RegisterVariable(&physics_ode_world_damping_linear_threshold);
 	Cvar_RegisterVariable(&physics_ode_world_damping_angular);
 	Cvar_RegisterVariable(&physics_ode_world_damping_angular_threshold);
+	Cvar_RegisterVariable(&physics_ode_world_gravitymod);
 	Cvar_RegisterVariable(&physics_ode_iterationsperframe);
 	Cvar_RegisterVariable(&physics_ode_constantstep);
 	Cvar_RegisterVariable(&physics_ode_movelimit);
@@ -1507,6 +1511,7 @@ static void World_Physics_Init(void)
 	Cvar_RegisterVariable(&physics_ode_autodisable_threshold_angular);
 	Cvar_RegisterVariable(&physics_ode_autodisable_threshold_samples);
 	Cvar_RegisterVariable(&physics_ode_printstats);
+	Cvar_RegisterVariable(&physics_ode_allowconvex);
 	Cvar_RegisterVariable(&physics_ode);
 
 #ifdef ODE_DYNAMIC
@@ -1538,6 +1543,7 @@ static void World_Physics_Init(void)
 # else
 			Con_Printf("ODE library loaded with double precision.\n");
 # endif
+			Con_Printf("ODE configuration list: %s\n", dGetConfiguration());
 		}
 #endif
 	}
@@ -1721,13 +1727,13 @@ void World_Physics_ApplyCmd(prvm_edict_t *ed, edict_odefunc_t *f)
 	case ODEFUNC_DISABLE:
 		dBodyDisable(body);
 		break;
-	case ODEFUNC_RELFORCEATPOS:
+	case ODEFUNC_FORCE:
 		dBodyEnable(body);
-		dBodyAddForceAtRelPos(body, f->v1[0], f->v1[1], f->v1[2], f->v2[0], f->v2[1], f->v2[2]);
+		dBodyAddForceAtPos(body, f->v1[0], f->v1[1], f->v1[2], f->v2[0], f->v2[1], f->v2[2]);
 		break;
-	case ODEFUNC_RELTORQUE:
+	case ODEFUNC_TORQUE:
 		dBodyEnable(body);
-		dBodyAddRelTorque(body, f->v1[0], f->v1[1], f->v1[2]);
+		dBodyAddTorque(body, f->v1[0], f->v1[1], f->v1[2]);
 		break;
 	default:
 		break;
@@ -1738,6 +1744,7 @@ void World_Physics_ApplyCmd(prvm_edict_t *ed, edict_odefunc_t *f)
 #ifdef USEODE
 static void World_Physics_Frame_BodyToEntity(world_t *world, prvm_edict_t *ed)
 {
+	prvm_prog_t *prog = world->prog;
 	const dReal *avel;
 	const dReal *o;
 	const dReal *r; // for some reason dBodyGetRotation returns a [3][4] matrix
@@ -1746,7 +1753,6 @@ static void World_Physics_Frame_BodyToEntity(world_t *world, prvm_edict_t *ed)
 	int movetype;
 	matrix4x4_t bodymatrix;
 	matrix4x4_t entitymatrix;
-	prvm_eval_t *val;
 	vec3_t angles;
 	vec3_t avelocity;
 	vec3_t forward, left, up;
@@ -1756,11 +1762,10 @@ static void World_Physics_Frame_BodyToEntity(world_t *world, prvm_edict_t *ed)
 	int jointtype;
 	if (!body)
 		return;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.movetype);
-	movetype = (int)val->_float;
+	movetype = (int)PRVM_gameedictfloat(ed, movetype);
 	if (movetype != MOVETYPE_PHYSICS)
 	{
-		jointtype = 0;val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.jointtype);if (val) jointtype = (int)val->_float;
+		jointtype = (int)PRVM_gameedictfloat(ed, jointtype);
 		switch(jointtype)
 		{
 			// TODO feed back data from physics
@@ -1805,26 +1810,26 @@ static void World_Physics_Frame_BodyToEntity(world_t *world, prvm_edict_t *ed)
 
 	{
 		float pitchsign = 1;
-		if(!strcmp(prog->name, "server")) // FIXME some better way?
+		if(prog == SVVM_prog) // FIXME some better way?
 		{
-			pitchsign = SV_GetPitchSign(ed);
+			pitchsign = SV_GetPitchSign(prog, ed);
 		}
-		else if(!strcmp(prog->name, "client"))
+		else if(prog == CLVM_prog)
 		{
-			pitchsign = CL_GetPitchSign(ed);
+			pitchsign = CL_GetPitchSign(prog, ed);
 		}
 		angles[PITCH] *= pitchsign;
 		avelocity[PITCH] *= pitchsign;
 	}
 
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.origin);if (val) VectorCopy(origin, val->vector);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.velocity);if (val) VectorCopy(velocity, val->vector);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.axis_forward);if (val) VectorCopy(forward, val->vector);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.axis_left);if (val) VectorCopy(left, val->vector);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.axis_up);if (val) VectorCopy(up, val->vector);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.spinvelocity);if (val) VectorCopy(spinvelocity, val->vector);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.angles);if (val) VectorCopy(angles, val->vector);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.avelocity);if (val) VectorCopy(avelocity, val->vector);
+	VectorCopy(origin, PRVM_gameedictvector(ed, origin));
+	VectorCopy(velocity, PRVM_gameedictvector(ed, velocity));
+	//VectorCopy(forward, PRVM_gameedictvector(ed, axis_forward));
+	//VectorCopy(left, PRVM_gameedictvector(ed, axis_left));
+	//VectorCopy(up, PRVM_gameedictvector(ed, axis_up));
+	//VectorCopy(spinvelocity, PRVM_gameedictvector(ed, spinvelocity));
+	VectorCopy(angles, PRVM_gameedictvector(ed, angles));
+	VectorCopy(avelocity, PRVM_gameedictvector(ed, avelocity));
 
 	// values for BodyFromEntity to check if the qc modified anything later
 	VectorCopy(origin, ed->priv.server->ode_origin);
@@ -1833,15 +1838,55 @@ static void World_Physics_Frame_BodyToEntity(world_t *world, prvm_edict_t *ed)
 	VectorCopy(avelocity, ed->priv.server->ode_avelocity);
 	ed->priv.server->ode_gravity = dBodyGetGravityMode(body) != 0;
 
-	if(!strcmp(prog->name, "server")) // FIXME some better way?
+	if(prog == SVVM_prog) // FIXME some better way?
 	{
 		SV_LinkEdict(ed);
 		SV_LinkEdict_TouchAreaGrid(ed);
 	}
 }
 
+static void World_Physics_Frame_ForceFromEntity(world_t *world, prvm_edict_t *ed)
+{
+	prvm_prog_t *prog = world->prog;
+	int forcetype = 0, movetype = 0, enemy = 0;
+	vec3_t movedir, origin;
+
+	movetype = (int)PRVM_gameedictfloat(ed, movetype);
+	forcetype = (int)PRVM_gameedictfloat(ed, forcetype);
+	if (movetype == MOVETYPE_PHYSICS)
+		forcetype = FORCETYPE_NONE; // can't have both
+	if (!forcetype)
+		return;
+	enemy = PRVM_gameedictedict(ed, enemy);
+	if (enemy <= 0 || enemy >= prog->num_edicts || prog->edicts[enemy].priv.required->free || prog->edicts[enemy].priv.server->ode_body == 0)
+		return;
+	VectorCopy(PRVM_gameedictvector(ed, movedir), movedir);
+	VectorCopy(PRVM_gameedictvector(ed, origin), origin);
+	dBodyEnable((dBodyID)prog->edicts[enemy].priv.server->ode_body);
+	switch(forcetype)
+	{
+		case FORCETYPE_FORCE:
+			if (movedir[0] || movedir[1] || movedir[2])
+				dBodyAddForce((dBodyID)prog->edicts[enemy].priv.server->ode_body, movedir[0], movedir[1], movedir[2]);
+			break;
+		case FORCETYPE_FORCEATPOS:
+			if (movedir[0] || movedir[1] || movedir[2])
+				dBodyAddForceAtPos((dBodyID)prog->edicts[enemy].priv.server->ode_body, movedir[0], movedir[1], movedir[2], origin[0], origin[1], origin[2]);
+			break;
+		case FORCETYPE_TORQUE:
+			if (movedir[0] || movedir[1] || movedir[2])
+				dBodyAddTorque((dBodyID)prog->edicts[enemy].priv.server->ode_body, movedir[0], movedir[1], movedir[2]);
+			break;
+		case FORCETYPE_NONE:
+		default:
+			// bad force
+			break;
+	}
+}
+
 static void World_Physics_Frame_JointFromEntity(world_t *world, prvm_edict_t *ed)
 {
+	prvm_prog_t *prog = world->prog;
 	dJointID j = 0;
 	dBodyID b1 = 0;
 	dBodyID b2 = 0;
@@ -1850,21 +1895,21 @@ static void World_Physics_Frame_JointFromEntity(world_t *world, prvm_edict_t *ed
 	int enemy = 0, aiment = 0;
 	vec3_t origin, velocity, angles, forward, left, up, movedir;
 	vec_t CFM, ERP, FMax, Stop, Vel;
-	prvm_eval_t *val;
+
+	movetype = (int)PRVM_gameedictfloat(ed, movetype);
+	jointtype = (int)PRVM_gameedictfloat(ed, jointtype);
 	VectorClear(origin);
 	VectorClear(velocity);
 	VectorClear(angles);
 	VectorClear(movedir);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.movetype);if (val) movetype = (int)val->_float;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.jointtype);if (val) jointtype = (int)val->_float;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.enemy);if (val) enemy = val->_int;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.aiment);if (val) aiment = val->_int;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.origin);if (val) VectorCopy(val->vector, origin);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.velocity);if (val) VectorCopy(val->vector, velocity);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.angles);if (val) VectorCopy(val->vector, angles);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.movedir);if (val) VectorCopy(val->vector, movedir);
+	enemy = PRVM_gameedictedict(ed, enemy);
+	aiment = PRVM_gameedictedict(ed, aiment);
+	VectorCopy(PRVM_gameedictvector(ed, origin), origin);
+	VectorCopy(PRVM_gameedictvector(ed, velocity), velocity);
+	VectorCopy(PRVM_gameedictvector(ed, angles), angles);
+	VectorCopy(PRVM_gameedictvector(ed, movedir), movedir);
 	if(movetype == MOVETYPE_PHYSICS)
-		jointtype = 0; // can't have both
+		jointtype = JOINTTYPE_NONE; // can't have both
 	if(enemy <= 0 || enemy >= prog->num_edicts || prog->edicts[enemy].priv.required->free || prog->edicts[enemy].priv.server->ode_body == 0)
 		enemy = 0;
 	if(aiment <= 0 || aiment >= prog->num_edicts || prog->edicts[aiment].priv.required->free || prog->edicts[aiment].priv.server->ode_body == 0)
@@ -1922,7 +1967,7 @@ static void World_Physics_Frame_JointFromEntity(world_t *world, prvm_edict_t *ed
 		case JOINTTYPE_FIXED:
 			j = dJointCreateFixed((dWorldID)world->physics.ode_world, 0);
 			break;
-		case 0:
+		case JOINTTYPE_NONE:
 		default:
 			// no joint
 			j = 0;
@@ -2022,16 +2067,51 @@ static void World_Physics_Frame_JointFromEntity(world_t *world, prvm_edict_t *ed
 	}
 }
 
+// test convex geometry data
+// planes for a cube, these should coincide with the 
+dReal test_convex_planes[] = 
+{
+    1.0f ,0.0f ,0.0f ,2.25f,
+    0.0f ,1.0f ,0.0f ,2.25f,
+    0.0f ,0.0f ,1.0f ,2.25f,
+    -1.0f,0.0f ,0.0f ,2.25f,
+    0.0f ,-1.0f,0.0f ,2.25f,
+    0.0f ,0.0f ,-1.0f,2.25f
+};
+const unsigned int test_convex_planecount = 6;
+// points for a cube
+dReal test_convex_points[] = 
+{
+	2.25f,2.25f,2.25f,    // point 0
+	-2.25f,2.25f,2.25f,   // point 1
+    2.25f,-2.25f,2.25f,   // point 2
+    -2.25f,-2.25f,2.25f,  // point 3
+    2.25f,2.25f,-2.25f,   // point 4
+    -2.25f,2.25f,-2.25f,  // point 5
+    2.25f,-2.25f,-2.25f,  // point 6
+    -2.25f,-2.25f,-2.25f, // point 7
+};
+const unsigned int test_convex_pointcount = 8;
+// polygons for a cube (6 squares), index 
+unsigned int test_convex_polygons[] = 
+{
+	4,0,2,6,4, // positive X
+    4,1,0,4,5, // positive Y
+    4,0,1,3,2, // positive Z
+    4,3,1,5,7, // negative X
+    4,2,3,7,6, // negative Y
+    4,5,4,6,7, // negative Z
+};
+
 static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 {
+	prvm_prog_t *prog = world->prog;
 	const float *iv;
 	const int *ie;
-	dBodyID body = (dBodyID)ed->priv.server->ode_body;
+	dBodyID body;
 	dMass mass;
-	dReal test;
 	const dReal *ovelocity, *ospinvelocity;
 	void *dataID;
-	dVector3 capsulerot[3];
 	dp_model_t *model;
 	float *ov;
 	int *oe;
@@ -2040,11 +2120,10 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 	int movetype = MOVETYPE_NONE;
 	int numtriangles;
 	int numvertices;
-	int solid = SOLID_NOT;
+	int solid = SOLID_NOT, geomtype = 0;
 	int triangleindex;
 	int vertexindex;
 	mempool_t *mempool;
-	prvm_eval_t *val;
 	qboolean modified = false;
 	vec3_t angles;
 	vec3_t avelocity;
@@ -2063,10 +2142,17 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 	vec_t massval = 1.0f;
 	vec_t movelimit;
 	vec_t radius;
-	vec_t scale = 1.0f;
+	vec3_t scale;
 	vec_t spinlimit;
+	vec_t test;
 	qboolean gravity;
+	qboolean geom_modified = false;
 	edict_odefunc_t *func, *nextf;
+
+	dReal *planes, *planesData, *pointsData;
+	unsigned int *polygons, *polygonsData, polyvert;
+	qboolean *mapped, *used, convex_compatible;
+	int numplanes = 0, numpoints = 0, i;
 
 #ifdef ODE_DYNAMIC
 	if (!ode_dll)
@@ -2074,23 +2160,45 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 #endif
 	VectorClear(entmins);
 	VectorClear(entmaxs);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.solid);if (val) solid = (int)val->_float;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.movetype);if (val) movetype = (int)val->_float;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.scale);if (val && val->_float) scale = val->_float;
-	modelindex = 0;
-	if (world == &sv.world)
-		mempool = sv_mempool;
-	else if (world == &cl.world)
-		mempool = cls.levelmempool;
+
+	solid = (int)PRVM_gameedictfloat(ed, solid);
+	geomtype = (int)PRVM_gameedictfloat(ed, geomtype);
+	movetype = (int)PRVM_gameedictfloat(ed, movetype);
+	// support scale and q3map/radiant's modelscale_vec
+	if (PRVM_gameedictvector(ed, modelscale_vec)[0] != 0.0 || PRVM_gameedictvector(ed, modelscale_vec)[1] != 0.0 || PRVM_gameedictvector(ed, modelscale_vec)[2] != 0.0)
+		VectorCopy(PRVM_gameedictvector(ed, modelscale_vec), scale);
+	else if (PRVM_gameedictfloat(ed, scale))
+		VectorSet(scale, PRVM_gameedictfloat(ed, scale), PRVM_gameedictfloat(ed, scale), PRVM_gameedictfloat(ed, scale));
 	else
-		mempool = NULL;
+		VectorSet(scale, 1.0f, 1.0f, 1.0f);
+	modelindex = 0;
+	if (PRVM_gameedictfloat(ed, mass))
+		massval = PRVM_gameedictfloat(ed, mass);
+	if (movetype != MOVETYPE_PHYSICS)
+		massval = 1.0f;
+	mempool = prog->progs_mempool;
 	model = NULL;
-	switch(solid)
+	if (!geomtype)
 	{
-	case SOLID_BSP:
-		val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.modelindex);
-		if (val)
-			modelindex = (int)val->_float;
+		// VorteX: keep support for deprecated solid fields to not break mods
+		if (solid == SOLID_PHYSICS_TRIMESH || solid == SOLID_BSP)
+			geomtype = GEOMTYPE_TRIMESH;
+		else if (solid == SOLID_NOT || solid == SOLID_TRIGGER)
+			geomtype = GEOMTYPE_NONE;
+		else if (solid == SOLID_PHYSICS_SPHERE)
+			geomtype = GEOMTYPE_SPHERE;
+		else if (solid == SOLID_PHYSICS_CAPSULE)
+			geomtype = GEOMTYPE_CAPSULE;
+		else if (solid == SOLID_PHYSICS_CYLINDER)
+			geomtype = GEOMTYPE_CYLINDER;
+		else if (solid == SOLID_PHYSICS_BOX)
+			geomtype = GEOMTYPE_BOX;
+		else
+			geomtype = GEOMTYPE_BOX;
+	}
+	if (geomtype == GEOMTYPE_TRIMESH)
+	{
+		modelindex = (int)PRVM_gameedictfloat(ed, modelindex);
 		if (world == &sv.world)
 			model = SV_GetModelByIndex(modelindex);
 		else if (world == &cl.world)
@@ -2099,27 +2207,33 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 			model = NULL;
 		if (model)
 		{
-			VectorScale(model->normalmins, scale, entmins);
-			VectorScale(model->normalmaxs, scale, entmaxs);
-			val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.mass);if (val) massval = val->_float;
+			entmins[0] = model->normalmins[0] * scale[0];
+			entmins[1] = model->normalmins[1] * scale[1];
+			entmins[2] = model->normalmins[2] * scale[2];
+			entmaxs[0] = model->normalmaxs[0] * scale[0];
+			entmaxs[1] = model->normalmaxs[1] * scale[1];
+			entmaxs[2] = model->normalmaxs[2] * scale[2];
+			geom_modified = !VectorCompare(ed->priv.server->ode_scale, scale) || ed->priv.server->ode_modelindex != modelindex;
 		}
 		else
 		{
+			Con_Printf("entity %i (classname %s) has no model\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(prog, PRVM_gameedictstring(ed, classname)));
+			geomtype = GEOMTYPE_BOX;
+			VectorCopy(PRVM_gameedictvector(ed, mins), entmins);
+			VectorCopy(PRVM_gameedictvector(ed, maxs), entmaxs);
 			modelindex = 0;
-			massval = 1.0f;
+			geom_modified = !VectorCompare(ed->priv.server->ode_mins, entmins) || !VectorCompare(ed->priv.server->ode_maxs, entmaxs);
 		}
-		break;
-	case SOLID_BBOX:
-	//case SOLID_SLIDEBOX:
-	case SOLID_CORPSE:
-	case SOLID_PHYSICS_BOX:
-	case SOLID_PHYSICS_SPHERE:
-	case SOLID_PHYSICS_CAPSULE:
-		val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.mins);if (val) VectorCopy(val->vector, entmins);
-		val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.maxs);if (val) VectorCopy(val->vector, entmaxs);
-		val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.mass);if (val) massval = val->_float;
-		break;
-	default:
+	}
+	else if (geomtype && geomtype != GEOMTYPE_NONE)
+	{
+		VectorCopy(PRVM_gameedictvector(ed, mins), entmins);
+		VectorCopy(PRVM_gameedictvector(ed, maxs), entmaxs);
+		geom_modified = !VectorCompare(ed->priv.server->ode_mins, entmins) || !VectorCompare(ed->priv.server->ode_maxs, entmaxs);
+	}
+	else
+	{
+		// geometry type not set, falling back
 		if (ed->priv.server->ode_physics)
 			World_Physics_RemoveFromEntity(world, ed);
 		return;
@@ -2134,51 +2248,51 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 		return;
 	}
 
-	if (movetype != MOVETYPE_PHYSICS)
-		massval = 1.0f;
+	// get friction
+	ed->priv.server->ode_friction = PRVM_gameedictfloat(ed, friction) ? PRVM_gameedictfloat(ed, friction) : 1.0f;
 
 	// check if we need to create or replace the geom
-	if (!ed->priv.server->ode_physics
-	 || !VectorCompare(ed->priv.server->ode_mins, entmins)
-	 || !VectorCompare(ed->priv.server->ode_maxs, entmaxs)
-	 || ed->priv.server->ode_mass != massval
-	 || ed->priv.server->ode_modelindex != modelindex)
+	if (!ed->priv.server->ode_physics || ed->priv.server->ode_mass != massval || geom_modified)
 	{
 		modified = true;
 		World_Physics_RemoveFromEntity(world, ed);
 		ed->priv.server->ode_physics = true;
-		VectorCopy(entmins, ed->priv.server->ode_mins);
-		VectorCopy(entmaxs, ed->priv.server->ode_maxs);
-		ed->priv.server->ode_mass = massval;
-		ed->priv.server->ode_modelindex = modelindex;
 		VectorMAM(0.5f, entmins, 0.5f, entmaxs, geomcenter);
-		ed->priv.server->ode_movelimit = min(geomsize[0], min(geomsize[1], geomsize[2]));
+		if (PRVM_gameedictvector(ed, massofs))
+			VectorCopy(geomcenter, PRVM_gameedictvector(ed, massofs));
 
-		if (massval * geomsize[0] * geomsize[1] * geomsize[2] == 0)
+		// check geomsize
+		if (geomsize[0] * geomsize[1] * geomsize[2] == 0)
 		{
 			if (movetype == MOVETYPE_PHYSICS)
-				Con_Printf("entity %i (classname %s) .mass * .size_x * .size_y * .size_z == 0\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.classname)->string));
-			massval = 1.0f;
+				Con_Printf("entity %i (classname %s) .mass * .size_x * .size_y * .size_z == 0\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(prog, PRVM_gameedictstring(ed, classname)));
 			VectorSet(geomsize, 1.0f, 1.0f, 1.0f);
 		}
 
-		switch(solid)
+		// greate geom
+		switch(geomtype)
 		{
-		case SOLID_BSP:
-			ed->priv.server->ode_offsetmatrix = identitymatrix;
-			if (!model)
-			{
-				Con_Printf("entity %i (classname %s) has no model\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.classname)->string));
-				goto treatasbox;
-			}
+		case GEOMTYPE_TRIMESH:
 			// add an optimized mesh to the model containing only the SUPERCONTENTS_SOLID surfaces
 			if (!model->brush.collisionmesh)
 				Mod_CreateCollisionMesh(model);
-			if (!model->brush.collisionmesh || !model->brush.collisionmesh->numtriangles)
+			if (!model->brush.collisionmesh)
 			{
-				Con_Printf("entity %i (classname %s) has no geometry\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.classname)->string));
+				Con_Printf("entity %i (classname %s) has no geometry\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(prog, PRVM_gameedictstring(ed, classname)));
 				goto treatasbox;
 			}
+
+			// check if trimesh can be defined with convex
+			convex_compatible = false;
+			for (i = 0;i < model->nummodelsurfaces;i++)
+			{
+				if (!strcmp(((msurface_t *)(model->data_surfaces + model->firstmodelsurface + i))->texture->name, "collisionconvex"))
+				{
+					convex_compatible = true;
+					break;
+				}
+			}
+
 			// ODE requires persistent mesh storage, so we need to copy out
 			// the data from the model because renderer restarts could free it
 			// during the game, additionally we need to flip the triangles...
@@ -2186,11 +2300,36 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 			// concave edges, etc., so this is not a lightweight operation
 			ed->priv.server->ode_numvertices = numvertices = model->brush.collisionmesh->numverts;
 			ed->priv.server->ode_vertex3f = (float *)Mem_Alloc(mempool, numvertices * sizeof(float[3]));
+
+			// VorteX: rebuild geomsize based on entity's collision mesh, honor scale
+			VectorSet(entmins, 0, 0, 0);
+			VectorSet(entmaxs, 0, 0, 0);
 			for (vertexindex = 0, ov = ed->priv.server->ode_vertex3f, iv = model->brush.collisionmesh->vertex3f;vertexindex < numvertices;vertexindex++, ov += 3, iv += 3)
 			{
-				ov[0] = iv[0] - geomcenter[0];
-				ov[1] = iv[1] - geomcenter[1];
-				ov[2] = iv[2] - geomcenter[2];
+				ov[0] = iv[0] * scale[0];
+				ov[1] = iv[1] * scale[1];
+				ov[2] = iv[2] * scale[2];
+				entmins[0] = min(entmins[0], ov[0]);
+				entmins[1] = min(entmins[1], ov[1]);
+				entmins[2] = min(entmins[2], ov[2]);
+				entmaxs[0] = max(entmaxs[0], ov[0]);
+				entmaxs[1] = max(entmaxs[1], ov[1]);
+				entmaxs[2] = max(entmaxs[2], ov[2]);
+			}
+			if (!PRVM_gameedictvector(ed, massofs))
+				VectorMAM(0.5f, entmins, 0.5f, entmaxs, geomcenter);
+			for (vertexindex = 0, ov = ed->priv.server->ode_vertex3f, iv = model->brush.collisionmesh->vertex3f;vertexindex < numvertices;vertexindex++, ov += 3, iv += 3)
+			{
+				ov[0] = ov[0] - geomcenter[0];
+				ov[1] = ov[1] - geomcenter[1];
+				ov[2] = ov[2] - geomcenter[2];
+			}
+			VectorSubtract(entmaxs, entmins, geomsize);
+			if (VectorLength2(geomsize) == 0)
+			{
+				if (movetype == MOVETYPE_PHYSICS)
+					Con_Printf("entity %i collision mesh has null geomsize\n", PRVM_NUM_FOR_EDICT(ed));
+				VectorSet(geomsize, 1.0f, 1.0f, 1.0f);
 			}
 			ed->priv.server->ode_numtriangles = numtriangles = model->brush.collisionmesh->numtriangles;
 			ed->priv.server->ode_element3i = (int *)Mem_Alloc(mempool, numtriangles * sizeof(int[3]));
@@ -2201,28 +2340,159 @@ static void World_Physics_Frame_BodyFromEntity(world_t *world, prvm_edict_t *ed)
 				oe[1] = ie[1];
 				oe[2] = ie[0];
 			}
+			// create geom
 			Matrix4x4_CreateTranslate(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2]);
-			// now create the geom
-			dataID = dGeomTriMeshDataCreate();
-			dGeomTriMeshDataBuildSingle((dTriMeshDataID)dataID, (void*)ed->priv.server->ode_vertex3f, sizeof(float[3]), ed->priv.server->ode_numvertices, ed->priv.server->ode_element3i, ed->priv.server->ode_numtriangles*3, sizeof(int[3]));
-			ed->priv.server->ode_geom = (void *)dCreateTriMesh((dSpaceID)world->physics.ode_space, (dTriMeshDataID)dataID, NULL, NULL, NULL);
-			dMassSetBoxTotal(&mass, massval, geomsize[0], geomsize[1], geomsize[2]);
+			if (!convex_compatible || !physics_ode_allowconvex.integer)
+			{
+				// trimesh
+				dataID = dGeomTriMeshDataCreate();
+				dGeomTriMeshDataBuildSingle((dTriMeshDataID)dataID, (void*)ed->priv.server->ode_vertex3f, sizeof(float[3]), ed->priv.server->ode_numvertices, ed->priv.server->ode_element3i, ed->priv.server->ode_numtriangles*3, sizeof(int[3]));
+				ed->priv.server->ode_geom = (void *)dCreateTriMesh((dSpaceID)world->physics.ode_space, (dTriMeshDataID)dataID, NULL, NULL, NULL);
+				dMassSetBoxTotal(&mass, massval, geomsize[0], geomsize[1], geomsize[2]);
+			}
+			else
+			{
+				// VorteX: this code is unfinished in two ways
+				// - no duplicate vertex merging are done
+				// - triangles that shares same edge and havee sam plane are not merget into poly
+				// so, currently it only works for geosphere meshes with no UV
+
+				Con_Printf("Build convex hull for model %s...\n", model->name);
+				// build convex geometry from trimesh data
+				// this ensures that trimesh's triangles can form correct convex geometry
+				// not many of error checking is performed
+				// ODE's conve hull data consist of:
+				//    planes  : an array of planes in the form: normal X, normal Y, normal Z, distance
+				//    points  : an array of points X,Y,Z
+				//    polygons: an array of indices to the points of each  polygon,it should be the number of vertices
+				//              followed by that amount of indices to "points" in counter clockwise order
+				polygonsData = polygons = (unsigned int *)Mem_Alloc(mempool, numtriangles*sizeof(int)*4);
+				planesData = planes = (dReal *)Mem_Alloc(mempool, numtriangles*sizeof(dReal)*4);
+				mapped = (qboolean *)Mem_Alloc(mempool, numvertices*sizeof(qboolean));
+				used = (qboolean *)Mem_Alloc(mempool, numtriangles*sizeof(qboolean));
+				memset(mapped, 0, numvertices*sizeof(qboolean));
+				memset(used, 0, numtriangles*sizeof(qboolean));
+				numplanes = numpoints = polyvert = 0;
+				// build convex hull
+				// todo: merge duplicated verts here
+				Con_Printf("Building...\n");
+				iv = ed->priv.server->ode_vertex3f;
+				for (triangleindex = 0; triangleindex < numtriangles; triangleindex++)
+				{
+					// already formed a polygon?
+					if (used[triangleindex])
+						continue; 
+					// init polygon
+					// switch clockwise->counterclockwise
+					ie = &model->brush.collisionmesh->element3i[triangleindex*3];
+					used[triangleindex] = true;
+					TriangleNormal(&iv[ie[0]*3], &iv[ie[1]*3], &iv[ie[2]*3], planes);
+					VectorNormalize(planes);
+					polygons[0] = 3;
+					polygons[3] = (unsigned int)ie[0]; mapped[polygons[3]] = true;
+					polygons[2] = (unsigned int)ie[1]; mapped[polygons[2]] = true;
+					polygons[1] = (unsigned int)ie[2]; mapped[polygons[1]] = true;
+
+					// now find and include concave triangles
+					for (i = triangleindex; i < numtriangles; i++)
+					{
+						if (used[i])
+							continue;
+						// should share at least 2 vertexes
+						for (polyvert = 1; polyvert <= polygons[0]; polyvert++)
+						{
+							// todo: merge in triangles that shares an edge and have same plane here
+						}
+					}
+
+					// add polygon to overall stats
+					planes[3] = DotProduct(&iv[polygons[1]*3], planes);
+					polygons += (polygons[0]+1);
+					planes += 4;
+					numplanes++;
+				}
+				Mem_Free(used);
+				// save points
+				for (vertexindex = 0, numpoints = 0; vertexindex < numvertices; vertexindex++)
+					if (mapped[vertexindex])
+						numpoints++;
+				pointsData = (dReal *)Mem_Alloc(mempool, numpoints*sizeof(dReal)*3 + numplanes*sizeof(dReal)*4); // planes is appended
+				for (vertexindex = 0, numpoints = 0; vertexindex < numvertices; vertexindex++)
+				{
+					if (mapped[vertexindex])
+					{
+						VectorCopy(&iv[vertexindex*3], &pointsData[numpoints*3]);
+						numpoints++;
+					}
+				}
+				Mem_Free(mapped);
+				Con_Printf("Points: \n");
+				for (i = 0; i < (int)numpoints; i++)
+					Con_Printf("%3i: %3.1f %3.1f %3.1f\n", i, pointsData[i*3], pointsData[i*3+1], pointsData[i*3+2]);
+				// save planes
+				planes = planesData;
+				planesData = pointsData + numpoints*3;
+				memcpy(planesData, planes, numplanes*sizeof(dReal)*4);
+				Mem_Free(planes);
+				Con_Printf("planes...\n");
+				for (i = 0; i < numplanes; i++)
+					Con_Printf("%3i: %1.1f %1.1f %1.1f %1.1f\n", i, planesData[i*4], planesData[i*4 + 1], planesData[i*4 + 2], planesData[i*4 + 3]);
+				// save polygons
+				polyvert = polygons - polygonsData;
+				polygons = polygonsData;
+				polygonsData = (unsigned int *)Mem_Alloc(mempool, polyvert*sizeof(int));
+				memcpy(polygonsData, polygons, polyvert*sizeof(int));
+				Mem_Free(polygons);
+				Con_Printf("Polygons: \n");
+				polygons = polygonsData;
+				for (i = 0; i < numplanes; i++)
+				{
+					Con_Printf("%3i : %i ", i, polygons[0]);
+					for (triangleindex = 1; triangleindex <= (int)polygons[0]; triangleindex++)
+						Con_Printf("%3i ", polygons[triangleindex]);
+					polygons += (polygons[0]+1);
+					Con_Printf("\n");
+				}
+				Mem_Free(ed->priv.server->ode_element3i);
+				ed->priv.server->ode_element3i = (int *)polygonsData;
+				Mem_Free(ed->priv.server->ode_vertex3f);
+				ed->priv.server->ode_vertex3f = (float *)pointsData;
+				// check for properly build polygons by calculating the determinant of the 3x3 matrix composed of the first 3 points in the polygon
+				// this code is picked from ODE Source
+				Con_Printf("Check...\n");
+				polygons = polygonsData;
+				for (i = 0; i < numplanes; i++)
+				{
+					if((pointsData[(polygons[1]*3)+0]*pointsData[(polygons[2]*3)+1]*pointsData[(polygons[3]*3)+2] +
+						pointsData[(polygons[1]*3)+1]*pointsData[(polygons[2]*3)+2]*pointsData[(polygons[3]*3)+0] +
+						pointsData[(polygons[1]*3)+2]*pointsData[(polygons[2]*3)+0]*pointsData[(polygons[3]*3)+1] -
+						pointsData[(polygons[1]*3)+2]*pointsData[(polygons[2]*3)+1]*pointsData[(polygons[3]*3)+0] -
+						pointsData[(polygons[1]*3)+1]*pointsData[(polygons[2]*3)+0]*pointsData[(polygons[3]*3)+2] -
+						pointsData[(polygons[1]*3)+0]*pointsData[(polygons[2]*3)+2]*pointsData[(polygons[3]*3)+1]) < 0)
+						Con_Printf("WARNING: Polygon %d is not defined counterclockwise\n", i);
+					if (planesData[(i*4)+3] < 0)
+						Con_Printf("WARNING: Plane %d does not contain the origin\n", i);
+					polygons += (*polygons + 1);
+				}
+				// create geom
+				Con_Printf("Create geom...\n");
+				ed->priv.server->ode_geom = (void *)dCreateConvex((dSpaceID)world->physics.ode_space, planesData, numplanes, pointsData, numpoints, polygonsData);
+				dMassSetBoxTotal(&mass, massval, geomsize[0], geomsize[1], geomsize[2]);
+				Con_Printf("Done!\n");
+			}
 			break;
-		case SOLID_BBOX:
-		case SOLID_SLIDEBOX:
-		case SOLID_CORPSE:
-		case SOLID_PHYSICS_BOX:
+		case GEOMTYPE_BOX:
 treatasbox:
 			Matrix4x4_CreateTranslate(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2]);
 			ed->priv.server->ode_geom = (void *)dCreateBox((dSpaceID)world->physics.ode_space, geomsize[0], geomsize[1], geomsize[2]);
 			dMassSetBoxTotal(&mass, massval, geomsize[0], geomsize[1], geomsize[2]);
 			break;
-		case SOLID_PHYSICS_SPHERE:
+		case GEOMTYPE_SPHERE:
 			Matrix4x4_CreateTranslate(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2]);
 			ed->priv.server->ode_geom = (void *)dCreateSphere((dSpaceID)world->physics.ode_space, geomsize[0] * 0.5f);
 			dMassSetSphereTotal(&mass, massval, geomsize[0] * 0.5f);
 			break;
-		case SOLID_PHYSICS_CAPSULE:
+		case GEOMTYPE_CAPSULE:
 			axisindex = 0;
 			if (geomsize[axisindex] < geomsize[1])
 				axisindex = 1;
@@ -2232,14 +2502,21 @@ treatasbox:
 			// axis, since ODE doesn't like this idea we have to create a
 			// capsule which uses the standard orientation, and apply a
 			// transform to it
-			memset(capsulerot, 0, sizeof(capsulerot));
 			if (axisindex == 0)
+			{
 				Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 90, 1);
+				radius = min(geomsize[1], geomsize[2]) * 0.5f;
+			}
 			else if (axisindex == 1)
+			{
 				Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 90, 0, 0, 1);
+				radius = min(geomsize[0], geomsize[2]) * 0.5f;
+			}
 			else
+			{
 				Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 0, 1);
-			radius = geomsize[!axisindex] * 0.5f; // any other axis is the radius
+				radius = min(geomsize[0], geomsize[1]) * 0.5f;
+			}
 			length = geomsize[axisindex] - radius*2;
 			// because we want to support more than one axisindex, we have to
 			// create a transform, and turn on its cleanup setting (which will
@@ -2247,22 +2524,124 @@ treatasbox:
 			ed->priv.server->ode_geom = (void *)dCreateCapsule((dSpaceID)world->physics.ode_space, radius, length);
 			dMassSetCapsuleTotal(&mass, massval, axisindex+1, radius, length);
 			break;
+		case GEOMTYPE_CAPSULE_X:
+			Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 90, 1);
+			radius = min(geomsize[1], geomsize[2]) * 0.5f;
+			length = geomsize[0] - radius*2;
+			// check if length is not enough, reduce radius then
+			if (length <= 0)
+			{
+				radius -= (1 - length)*0.5;
+				length = 1;
+			}
+			ed->priv.server->ode_geom = (void *)dCreateCapsule((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCapsuleTotal(&mass, massval, 1, radius, length);
+			break;
+		case GEOMTYPE_CAPSULE_Y:
+			Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 90, 0, 0, 1);
+			radius = min(geomsize[0], geomsize[2]) * 0.5f;
+			length = geomsize[1] - radius*2;
+			// check if length is not enough, reduce radius then
+			if (length <= 0)
+			{
+				radius -= (1 - length)*0.5;
+				length = 1;
+			}
+			ed->priv.server->ode_geom = (void *)dCreateCapsule((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCapsuleTotal(&mass, massval, 2, radius, length);
+			break;
+		case GEOMTYPE_CAPSULE_Z:
+			Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 0, 1);
+			radius = min(geomsize[1], geomsize[0]) * 0.5f;
+			length = geomsize[2] - radius*2;
+			// check if length is not enough, reduce radius then
+			if (length <= 0)
+			{
+				radius -= (1 - length)*0.5;
+				length = 1;
+			}
+			ed->priv.server->ode_geom = (void *)dCreateCapsule((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCapsuleTotal(&mass, massval, 3, radius, length);
+			break;
+		case GEOMTYPE_CYLINDER:
+			axisindex = 0;
+			if (geomsize[axisindex] < geomsize[1])
+				axisindex = 1;
+			if (geomsize[axisindex] < geomsize[2])
+				axisindex = 2;
+			// the qc gives us 3 axis radius, the longest axis is the capsule
+			// axis, since ODE doesn't like this idea we have to create a
+			// capsule which uses the standard orientation, and apply a
+			// transform to it
+			if (axisindex == 0)
+			{
+				Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 90, 1);
+				radius = min(geomsize[1], geomsize[2]) * 0.5f;
+			}
+			else if (axisindex == 1)
+			{
+				Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 90, 0, 0, 1);
+				radius = min(geomsize[0], geomsize[2]) * 0.5f;
+			}
+			else
+			{
+				Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 0, 1);
+				radius = min(geomsize[0], geomsize[1]) * 0.5f;
+			}
+			length = geomsize[axisindex];
+			// check if length is not enough, reduce radius then
+			if (length <= 0)
+			{
+				radius -= (1 - length)*0.5;
+				length = 1;
+			}
+			ed->priv.server->ode_geom = (void *)dCreateCylinder((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCylinderTotal(&mass, massval, axisindex+1, radius, length);
+			break;
+		case GEOMTYPE_CYLINDER_X:
+			Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 90, 1);
+			radius = min(geomsize[1], geomsize[2]) * 0.5f;
+			length = geomsize[0];
+			ed->priv.server->ode_geom = (void *)dCreateCylinder((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCylinderTotal(&mass, massval, 1, radius, length);
+			break;
+		case GEOMTYPE_CYLINDER_Y:
+			Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 90, 0, 0, 1);
+			radius = min(geomsize[0], geomsize[2]) * 0.5f;
+			length = geomsize[1];
+			ed->priv.server->ode_geom = (void *)dCreateCylinder((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCylinderTotal(&mass, massval, 2, radius, length);
+			break;
+		case GEOMTYPE_CYLINDER_Z:
+			Matrix4x4_CreateFromQuakeEntity(&ed->priv.server->ode_offsetmatrix, geomcenter[0], geomcenter[1], geomcenter[2], 0, 0, 0, 1);
+			radius = min(geomsize[0], geomsize[1]) * 0.5f;
+			length = geomsize[2];
+			ed->priv.server->ode_geom = (void *)dCreateCylinder((dSpaceID)world->physics.ode_space, radius, length);
+			dMassSetCylinderTotal(&mass, massval, 3, radius, length);
+			break;
 		default:
-			Sys_Error("World_Physics_BodyFromEntity: unrecognized solid value %i was accepted by filter\n", solid);
+			Sys_Error("World_Physics_BodyFromEntity: unrecognized geomtype value %i was accepted by filter\n", solid);
 			// this goto only exists to prevent warnings from the compiler
 			// about uninitialized variables (mass), while allowing it to
 			// catch legitimate uninitialized variable warnings
 			goto treatasbox;
 		}
+		ed->priv.server->ode_mass = massval;
+		ed->priv.server->ode_modelindex = modelindex;
+		VectorCopy(entmins, ed->priv.server->ode_mins);
+		VectorCopy(entmaxs, ed->priv.server->ode_maxs);
+		VectorCopy(scale, ed->priv.server->ode_scale);
+		ed->priv.server->ode_movelimit = min(geomsize[0], min(geomsize[1], geomsize[2]));
 		Matrix4x4_Invert_Simple(&ed->priv.server->ode_offsetimatrix, &ed->priv.server->ode_offsetmatrix);
 		ed->priv.server->ode_massbuf = Mem_Alloc(mempool, sizeof(mass));
 		memcpy(ed->priv.server->ode_massbuf, &mass, sizeof(dMass));
 	}
 
-	if(ed->priv.server->ode_geom)
+	if (ed->priv.server->ode_geom)
 		dGeomSetData((dGeomID)ed->priv.server->ode_geom, (void*)ed);
 	if (movetype == MOVETYPE_PHYSICS && ed->priv.server->ode_geom)
 	{
+		// entity is dynamic
 		if (ed->priv.server->ode_body == NULL)
 		{
 			ed->priv.server->ode_body = (void *)(body = dBodyCreate((dWorldID)world->physics.ode_world));
@@ -2274,6 +2653,7 @@ treatasbox:
 	}
 	else
 	{
+		// entity is deactivated
 		if (ed->priv.server->ode_body != NULL)
 		{
 			if(ed->priv.server->ode_geom)
@@ -2294,16 +2674,16 @@ treatasbox:
 	VectorClear(angles);
 	VectorClear(avelocity);
 	gravity = true;
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.origin);if (val) VectorCopy(val->vector, origin);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.velocity);if (val) VectorCopy(val->vector, velocity);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.axis_forward);if (val) VectorCopy(val->vector, forward);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.axis_left);if (val) VectorCopy(val->vector, left);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.axis_up);if (val) VectorCopy(val->vector, up);
-	//val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.spinvelocity);if (val) VectorCopy(val->vector, spinvelocity);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.angles);if (val) VectorCopy(val->vector, angles);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.avelocity);if (val) VectorCopy(val->vector, avelocity);
-	val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.gravity);if (val) { if(val->_float != 0.0f && val->_float < 0.5f) gravity = false; }
-	if(ed == prog->edicts)
+	VectorCopy(PRVM_gameedictvector(ed, origin), origin);
+	VectorCopy(PRVM_gameedictvector(ed, velocity), velocity);
+	//VectorCopy(PRVM_gameedictvector(ed, axis_forward), forward);
+	//VectorCopy(PRVM_gameedictvector(ed, axis_left), left);
+	//VectorCopy(PRVM_gameedictvector(ed, axis_up), up);
+	//VectorCopy(PRVM_gameedictvector(ed, spinvelocity), spinvelocity);
+	VectorCopy(PRVM_gameedictvector(ed, angles), angles);
+	VectorCopy(PRVM_gameedictvector(ed, avelocity), avelocity);
+	if (PRVM_gameedictfloat(ed, gravity) != 0.0f && PRVM_gameedictfloat(ed, gravity) < 0.5f) gravity = false;
+	if (ed == prog->edicts)
 		gravity = false;
 
 	// compatibility for legacy entities
@@ -2314,13 +2694,13 @@ treatasbox:
 		VectorCopy(angles, qangles);
 		VectorCopy(avelocity, qavelocity);
 
-		if(!strcmp(prog->name, "server")) // FIXME some better way?
+		if(prog == SVVM_prog) // FIXME some better way?
 		{
-			pitchsign = SV_GetPitchSign(ed);
+			pitchsign = SV_GetPitchSign(prog, ed);
 		}
-		else if(!strcmp(prog->name, "client"))
+		else if(prog == CLVM_prog)
 		{
-			pitchsign = CL_GetPitchSign(ed);
+			pitchsign = CL_GetPitchSign(prog, ed);
 		}
 		qangles[PITCH] *= pitchsign;
 		qavelocity[PITCH] *= pitchsign;
@@ -2349,17 +2729,17 @@ treatasbox:
 	if (physics_ode_trick_fixnan.integer)
 	{
 		test = VectorLength2(origin) + VectorLength2(forward) + VectorLength2(left) + VectorLength2(up) + VectorLength2(velocity) + VectorLength2(spinvelocity);
-		if (IS_NAN(test))
+		if (VEC_IS_NAN(test))
 		{
 			modified = true;
-			//Con_Printf("Fixing NAN values on entity %i : .classname = \"%s\" .origin = '%f %f %f' .velocity = '%f %f %f' .axis_forward = '%f %f %f' .axis_left = '%f %f %f' .axis_up = %f %f %f' .spinvelocity = '%f %f %f'\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.classname)->string), origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], forward[0], forward[1], forward[2], left[0], left[1], left[2], up[0], up[1], up[2], spinvelocity[0], spinvelocity[1], spinvelocity[2]);
+			//Con_Printf("Fixing NAN values on entity %i : .classname = \"%s\" .origin = '%f %f %f' .velocity = '%f %f %f' .axis_forward = '%f %f %f' .axis_left = '%f %f %f' .axis_up = %f %f %f' .spinvelocity = '%f %f %f'\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(PRVM_gameedictstring(ed, classname)), origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], forward[0], forward[1], forward[2], left[0], left[1], left[2], up[0], up[1], up[2], spinvelocity[0], spinvelocity[1], spinvelocity[2]);
 			if (physics_ode_trick_fixnan.integer >= 2)
-				Con_Printf("Fixing NAN values on entity %i : .classname = \"%s\" .origin = '%f %f %f' .velocity = '%f %f %f' .angles = '%f %f %f' .avelocity = '%f %f %f'\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.classname)->string), origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], angles[0], angles[1], angles[2], avelocity[0], avelocity[1], avelocity[2]);
+				Con_Printf("Fixing NAN values on entity %i : .classname = \"%s\" .origin = '%f %f %f' .velocity = '%f %f %f' .angles = '%f %f %f' .avelocity = '%f %f %f'\n", PRVM_NUM_FOR_EDICT(ed), PRVM_GetString(prog, PRVM_gameedictstring(ed, classname)), origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], angles[0], angles[1], angles[2], avelocity[0], avelocity[1], avelocity[2]);
 			test = VectorLength2(origin);
-			if (IS_NAN(test))
+			if (VEC_IS_NAN(test))
 				VectorClear(origin);
 			test = VectorLength2(forward) * VectorLength2(left) * VectorLength2(up);
-			if (IS_NAN(test))
+			if (VEC_IS_NAN(test))
 			{
 				VectorSet(angles, 0, 0, 0);
 				VectorSet(forward, 1, 0, 0);
@@ -2367,10 +2747,10 @@ treatasbox:
 				VectorSet(up, 0, 0, 1);
 			}
 			test = VectorLength2(velocity);
-			if (IS_NAN(test))
+			if (VEC_IS_NAN(test))
 				VectorClear(velocity);
 			test = VectorLength2(spinvelocity);
-			if (IS_NAN(test))
+			if (VEC_IS_NAN(test))
 			{
 				VectorClear(avelocity);
 				VectorClear(spinvelocity);
@@ -2407,7 +2787,6 @@ treatasbox:
 		if(gravity != ed->priv.server->ode_gravity)
 			Con_Printf("  gravity: %i -> %i\n", ed->priv.server->ode_gravity, gravity);
 #endif
-
 		// values for BodyFromEntity to check if the qc modified anything later
 		VectorCopy(origin, ed->priv.server->ode_origin);
 		VectorCopy(velocity, ed->priv.server->ode_velocity);
@@ -2427,9 +2806,9 @@ treatasbox:
 		r[0][2] = up[0];
 		r[1][2] = up[1];
 		r[2][2] = up[2];
-		if(body)
+		if (body)
 		{
-			if(movetype == MOVETYPE_PHYSICS)
+			if (movetype == MOVETYPE_PHYSICS)
 			{
 				dGeomSetBody((dGeomID)ed->priv.server->ode_geom, body);
 				dBodySetPosition(body, origin[0], origin[1], origin[2]);
@@ -2458,7 +2837,7 @@ treatasbox:
 		}
 	}
 
-	if(body)
+	if (body)
 	{
 
 		// limit movement speed to prevent missed collisions at high speed
@@ -2496,21 +2875,22 @@ treatasbox:
 	}
 }
 
-#define MAX_CONTACTS 16
+#define MAX_CONTACTS 32
 static void nearCallback (void *data, dGeomID o1, dGeomID o2)
 {
 	world_t *world = (world_t *)data;
+	prvm_prog_t *prog = world->prog;
 	dContact contact[MAX_CONTACTS]; // max contacts per collision pair
-	dBodyID b1;
-	dBodyID b2;
+	int b1enabled = 0, b2enabled = 0;
+	dBodyID b1, b2;
 	dJointID c;
 	int i;
 	int numcontacts;
-	prvm_eval_t *val;
 	float bouncefactor1 = 0.0f;
 	float bouncestop1 = 60.0f / 800.0f;
 	float bouncefactor2 = 0.0f;
 	float bouncestop2 = 60.0f / 800.0f;
+	float erp;
 	dVector3 grav;
 	prvm_edict_t *ed1, *ed2;
 
@@ -2526,12 +2906,16 @@ static void nearCallback (void *data, dGeomID o1, dGeomID o2)
 	}
 
 	b1 = dGeomGetBody(o1);
+	if (b1)
+		b1enabled = dBodyIsEnabled(b1);
 	b2 = dGeomGetBody(o2);
+	if (b2)
+		b2enabled = dBodyIsEnabled(b2);
 
-	// at least one object has to be using MOVETYPE_PHYSICS or we just don't care
-	if (!b1 && !b2)
+	// at least one object has to be using MOVETYPE_PHYSICS and should be enabled or we just don't care
+	if (!b1enabled && !b2enabled)
 		return;
-
+	
 	// exit without doing anything if the two bodies are connected by a joint
 	if (b1 && b2 && dAreConnectedExcluding(b1, b2, dJointTypeContact))
 		return;
@@ -2541,13 +2925,10 @@ static void nearCallback (void *data, dGeomID o1, dGeomID o2)
 		ed1 = NULL;
 	if(ed1)
 	{
-		val = PRVM_EDICTFIELDVALUE(ed1, prog->fieldoffsets.bouncefactor);
-		if (val!=0 && val->_float)
-			bouncefactor1 = val->_float;
-
-		val = PRVM_EDICTFIELDVALUE(ed1, prog->fieldoffsets.bouncestop);
-		if (val!=0 && val->_float)
-			bouncestop1 = val->_float;
+		bouncefactor1 = PRVM_gameedictfloat(ed1, bouncefactor);
+		bouncestop1 = PRVM_gameedictfloat(ed1, bouncestop);
+		if (!bouncestop1)
+			bouncestop1 = 60.0f / 800.0f;
 	}
 
 	ed2 = (prvm_edict_t *) dGeomGetData(o2);
@@ -2555,22 +2936,19 @@ static void nearCallback (void *data, dGeomID o1, dGeomID o2)
 		ed2 = NULL;
 	if(ed2)
 	{
-		val = PRVM_EDICTFIELDVALUE(ed2, prog->fieldoffsets.bouncefactor);
-		if (val!=0 && val->_float)
-			bouncefactor2 = val->_float;
-
-		val = PRVM_EDICTFIELDVALUE(ed2, prog->fieldoffsets.bouncestop);
-		if (val!=0 && val->_float)
-			bouncestop2 = val->_float;
+		bouncefactor2 = PRVM_gameedictfloat(ed2, bouncefactor);
+		bouncestop2 = PRVM_gameedictfloat(ed2, bouncestop);
+		if (!bouncestop2)
+			bouncestop2 = 60.0f / 800.0f;
 	}
 
-	if(!strcmp(prog->name, "server"))
+	if(prog == SVVM_prog)
 	{
-		if(ed1 && ed1->fields.server->touch)
+		if(ed1 && PRVM_serveredictfunction(ed1, touch))
 		{
 			SV_LinkEdict_TouchAreaGrid_Call(ed1, ed2 ? ed2 : prog->edicts);
 		}
-		if(ed2 && ed2->fields.server->touch)
+		if(ed2 && PRVM_serveredictfunction(ed2, touch))
 		{
 			SV_LinkEdict_TouchAreaGrid_Call(ed2, ed1 ? ed1 : prog->edicts);
 		}
@@ -2596,14 +2974,27 @@ static void nearCallback (void *data, dGeomID o1, dGeomID o2)
 	dWorldGetGravity((dWorldID)world->physics.ode_world, grav);
 	bouncestop1 *= fabs(grav[2]);
 
+	// get erp
+	// select object that moves faster ang get it's erp
+	erp = (VectorLength2(PRVM_gameedictvector(ed1, velocity)) > VectorLength2(PRVM_gameedictvector(ed2, velocity))) ? PRVM_gameedictfloat(ed1, erp) : PRVM_gameedictfloat(ed2, erp);
+
+	// get max contact points for this collision
+	numcontacts = (int)PRVM_gameedictfloat(ed1, maxcontacts);
+	if (!numcontacts)
+		numcontacts = physics_ode_contact_maxpoints.integer;
+	if (PRVM_gameedictfloat(ed2, maxcontacts))
+		numcontacts = max(numcontacts, (int)PRVM_gameedictfloat(ed2, maxcontacts));
+	else
+		numcontacts = max(numcontacts, physics_ode_contact_maxpoints.integer);
+
 	// generate contact points between the two non-space geoms
-	numcontacts = dCollide(o1, o2, MAX_CONTACTS, &(contact[0].geom), sizeof(contact[0]));
+	numcontacts = dCollide(o1, o2, min(MAX_CONTACTS, numcontacts), &(contact[0].geom), sizeof(contact[0]));
 	// add these contact points to the simulation
 	for (i = 0;i < numcontacts;i++)
 	{
 		contact[i].surface.mode = (physics_ode_contact_mu.value != -1 ? dContactApprox1 : 0) | (physics_ode_contact_erp.value != -1 ? dContactSoftERP : 0) | (physics_ode_contact_cfm.value != -1 ? dContactSoftCFM : 0) | (bouncefactor1 > 0 ? dContactBounce : 0);
-		contact[i].surface.mu = physics_ode_contact_mu.value;
-		contact[i].surface.soft_erp = physics_ode_contact_erp.value;
+		contact[i].surface.mu = physics_ode_contact_mu.value * ed1->priv.server->ode_friction * ed2->priv.server->ode_friction;
+		contact[i].surface.soft_erp = physics_ode_contact_erp.value + erp;
 		contact[i].surface.soft_cfm = physics_ode_contact_cfm.value;
 		contact[i].surface.bounce = bouncefactor1;
 		contact[i].surface.bounce_vel = bouncestop1;
@@ -2615,20 +3006,39 @@ static void nearCallback (void *data, dGeomID o1, dGeomID o2)
 
 void World_Physics_Frame(world_t *world, double frametime, double gravity)
 {
+	prvm_prog_t *prog = world->prog;
 	double tdelta, tdelta2, tdelta3, simulationtime, collisiontime;
 
-	tdelta = Sys_DoubleTime();
+	tdelta = Sys_DirtyTime();
 #ifdef USEODE
 	if (world->physics.ode && physics_ode.integer)
 	{
 		int i;
 		prvm_edict_t *ed;
 
-		world->physics.ode_iterations = bound(1, physics_ode_iterationsperframe.integer, 1000);
-		if (physics_ode_constantstep.integer)
-			world->physics.ode_step = sys_ticrate.value / world->physics.ode_iterations;
-		else
+		if (!physics_ode_constantstep.value)
+		{
+			world->physics.ode_iterations = bound(1, physics_ode_iterationsperframe.integer, 1000);
 			world->physics.ode_step = frametime / world->physics.ode_iterations;
+		}
+		else
+		{
+			world->physics.ode_time += frametime;
+			// step size
+			if (physics_ode_constantstep.value > 0 && physics_ode_constantstep.value < 1)
+				world->physics.ode_step = physics_ode_constantstep.value;
+			else
+				world->physics.ode_step = sys_ticrate.value;
+			if (world->physics.ode_time > 0.2f)
+				world->physics.ode_time = world->physics.ode_step;
+			// set number of iterations to process
+			world->physics.ode_iterations = 0;
+			while(world->physics.ode_time >= world->physics.ode_step)
+			{
+				world->physics.ode_iterations++;
+				world->physics.ode_time -= world->physics.ode_step;
+			}
+		}	
 		world->physics.ode_movelimit = physics_ode_movelimit.value / world->physics.ode_step;
 		World_Physics_UpdateODE(world);
 
@@ -2644,37 +3054,35 @@ void World_Physics_Frame(world_t *world, double frametime, double gravity)
 					World_Physics_Frame_JointFromEntity(world, ed);
 		}
 
-		tdelta2 = Sys_DoubleTime();
+		tdelta2 = Sys_DirtyTime();
 		collisiontime = 0;
 		for (i = 0;i < world->physics.ode_iterations;i++)
 		{
 			// set the gravity
-			dWorldSetGravity((dWorldID)world->physics.ode_world, 0, 0, -gravity);
+			dWorldSetGravity((dWorldID)world->physics.ode_world, 0, 0, -gravity * physics_ode_world_gravitymod.value);
 			// set the tolerance for closeness of objects
 			dWorldSetContactSurfaceLayer((dWorldID)world->physics.ode_world, max(0, physics_ode_contactsurfacelayer.value));
-
 			// run collisions for the current world state, creating JointGroup
-			tdelta3 = Sys_DoubleTime();
+			tdelta3 = Sys_DirtyTime();
 			dSpaceCollide((dSpaceID)world->physics.ode_space, (void *)world, nearCallback);
-			collisiontime += (Sys_DoubleTime() - tdelta3)*10000;
-
-			// run physics (move objects, calculate new velocities)
-			if (physics_ode_worldstep.integer == 2)
+			collisiontime += (Sys_DirtyTime() - tdelta3)*10000;
+			// apply forces
+			if (prog)
 			{
-				dWorldSetQuickStepNumIterations((dWorldID)world->physics.ode_world, bound(1, physics_ode_worldstep_iterations.integer, 200));
-				dWorldQuickStep((dWorldID)world->physics.ode_world, world->physics.ode_step);
+				int j;
+				for (j = 0, ed = prog->edicts + j;j < prog->num_edicts;j++, ed++)
+					if (!prog->edicts[j].priv.required->free)
+						World_Physics_Frame_ForceFromEntity(world, ed);
 			}
-#ifdef ODE_USE_STEPFAST
-			else if (physics_ode_worldstep.integer == 1)
-				dWorldStepFast1((dWorldID)world->physics.ode_world, world->physics.ode_step, bound(1, physics_ode_worldstep_iterations.integer, 200));
-#endif
-			else
-				dWorldStep((dWorldID)world->physics.ode_world, world->physics.ode_step);
-
+			// run physics (move objects, calculate new velocities)
+			// be sure not to pass 0 as step time because that causes an ODE error
+			dWorldSetQuickStepNumIterations((dWorldID)world->physics.ode_world, bound(1, physics_ode_worldstep_iterations.integer, 200));
+			if (world->physics.ode_step > 0)
+				dWorldQuickStep((dWorldID)world->physics.ode_world, world->physics.ode_step);
 			// clear the JointGroup now that we're done with it
 			dJointGroupEmpty((dJointGroupID)world->physics.ode_contactgroup);
 		}
-		simulationtime = (Sys_DoubleTime() - tdelta2)*10000;
+		simulationtime = (Sys_DirtyTime() - tdelta2)*10000;
 
 		// copy physics properties from physics engine to entities and do some stats
 		if (prog)
@@ -2701,7 +3109,7 @@ void World_Physics_Frame(world_t *world, double frametime, double gravity)
 					if (dBodyIsEnabled(body))
 						world->physics.ode_activeovjects++;
 				}
-				Con_Printf("ODE Stats(%s): %3.01f (%3.01f collision) %3.01f total : %i objects %i active %i disabled\n", prog->name, simulationtime, collisiontime, (Sys_DoubleTime() - tdelta)*10000, world->physics.ode_numobjects, world->physics.ode_activeovjects, (world->physics.ode_numobjects - world->physics.ode_activeovjects));
+				Con_Printf("ODE Stats(%s): %i iterations, %3.01f (%3.01f collision) %3.01f total : %i objects %i active %i disabled\n", prog->name, world->physics.ode_iterations, simulationtime, collisiontime, (Sys_DirtyTime() - tdelta)*10000, world->physics.ode_numobjects, world->physics.ode_activeovjects, (world->physics.ode_numobjects - world->physics.ode_activeovjects));
 			}
 		}
 	}

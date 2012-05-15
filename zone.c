@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // Z_zone.c
 
 #include "quakedef.h"
+#include "thread.h"
 
 #ifdef WIN32
 #include <windows.h>
@@ -37,16 +38,28 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 unsigned int sentinel_seed;
 
 qboolean mem_bigendian = false;
+void *mem_mutex = NULL;
+
+// divVerent: enables file backed malloc using mmap to conserve swap space (instead of malloc)
+#ifndef FILE_BACKED_MALLOC
+# define FILE_BACKED_MALLOC 0
+#endif
 
 // LordHavoc: enables our own low-level allocator (instead of malloc)
-#define MEMCLUMPING 0
-#define MEMCLUMPING_FREECLUMPS 0
+#ifndef MEMCLUMPING
+# define MEMCLUMPING 0
+#endif
+#ifndef MEMCLUMPING_FREECLUMPS
+# define MEMCLUMPING_FREECLUMPS 0
+#endif
 
 #if MEMCLUMPING
 // smallest unit we care about is this many bytes
 #define MEMUNIT 128
 // try to do 32MB clumps, but overhead eats into this
-#define MEMWANTCLUMPSIZE (1<<27)
+#ifndef MEMWANTCLUMPSIZE
+# define MEMWANTCLUMPSIZE (1<<27)
+#endif
 // give malloc padding so we can't waste most of a page at the end
 #define MEMCLUMPSIZE (MEMWANTCLUMPSIZE - MEMWANTCLUMPSIZE/MEMUNIT/32 - 128)
 #define MEMBITS (MEMCLUMPSIZE / MEMUNIT)
@@ -89,6 +102,46 @@ static mempool_t *poolchain = NULL;
 
 void Mem_PrintStats(void);
 void Mem_PrintList(size_t minallocationsize);
+
+#if FILE_BACKED_MALLOC
+#include <stdlib.h>
+#include <sys/mman.h>
+typedef struct mmap_data_s
+{
+	size_t len;
+}
+mmap_data_t;
+static void *mmap_malloc(size_t size)
+{
+	char vabuf[MAX_OSPATH + 1];
+	char *tmpdir = getenv("TEMP");
+	mmap_data_t *data;
+	int fd;
+	size += sizeof(mmap_data_t); // waste block
+	dpsnprintf(vabuf, sizeof(vabuf), "%s/darkplaces.XXXXXX", tmpdir ? tmpdir : "/tmp");
+	fd = mkstemp(vabuf);
+	if(fd < 0)
+		return NULL;
+	ftruncate(fd, size);
+	data = (unsigned char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_NORESERVE, fd, 0);
+	close(fd);
+	unlink(vabuf);
+	if(!data)
+		return NULL;
+	data->len = size;
+	return (void *) (data + 1);
+}
+static void mmap_free(void *mem)
+{
+	mmap_data_t *data;
+	if(!mem)
+		return;
+	data = ((mmap_data_t *) mem) - 1;
+	munmap(data, data->len);
+}
+#define malloc mmap_malloc
+#define free mmap_free
+#endif
 
 #if MEMCLUMPING != 2
 // some platforms have a malloc that returns NULL but succeeds later
@@ -330,6 +383,8 @@ void *_Mem_Alloc(mempool_t *pool, void *olddata, size_t size, size_t alignment, 
 	}
 	if (pool == NULL)
 		Sys_Error("Mem_Alloc: pool == NULL (alloc at %s:%i)", filename, fileline);
+	if (mem_mutex)
+		Thread_LockMutex(mem_mutex);
 	if (developer_memory.integer)
 		Con_DPrintf("Mem_Alloc: pool %s, file %s:%i, size %i bytes\n", pool->name, filename, fileline, (int)size);
 	//if (developer.integer > 0 && developer_memorydebug.integer)
@@ -366,6 +421,9 @@ void *_Mem_Alloc(mempool_t *pool, void *olddata, size_t size, size_t alignment, 
 	pool->chain = mem;
 	if (mem->next)
 		mem->next->prev = mem;
+
+	if (mem_mutex)
+		Thread_UnlockMutex(mem_mutex);
 
 	// copy the shared portion in the case of a realloc, then memset the rest
 	sharedsize = 0;
@@ -405,6 +463,8 @@ static void _Mem_FreeBlock(memheader_t *mem, const char *filename, int fileline)
 	// unlink memheader from doubly linked list
 	if ((mem->prev ? mem->prev->next != mem : pool->chain != mem) || (mem->next && mem->next->prev != mem))
 		Sys_Error("Mem_Free: not allocated or double freed (free at %s:%i)", filename, fileline);
+	if (mem_mutex)
+		Thread_LockMutex(mem_mutex);
 	if (mem->prev)
 		mem->prev->next = mem->next;
 	else
@@ -417,6 +477,8 @@ static void _Mem_FreeBlock(memheader_t *mem, const char *filename, int fileline)
 	pool->totalsize -= size;
 	pool->realsize -= realsize;
 	Clump_FreeBlock(mem->baseaddress, realsize);
+	if (mem_mutex)
+		Thread_UnlockMutex(mem_mutex);
 }
 
 void _Mem_Free(void *data, const char *filename, int fileline)
@@ -634,7 +696,7 @@ void Mem_ExpandableArray_FreeArray(memexpandablearray_t *l)
 void *Mem_ExpandableArray_AllocRecordAtIndex(memexpandablearray_t *l, size_t index)
 {
 	size_t j;
-	if (index == l->numarrays)
+	if (index >= l->numarrays)
 	{
 		if (l->numarrays == l->maxarrays)
 		{
@@ -813,7 +875,7 @@ void Mem_PrintList(size_t minallocationsize)
 	}
 }
 
-void MemList_f(void)
+static void MemList_f(void)
 {
 	switch(Cmd_Argc())
 	{
@@ -831,8 +893,7 @@ void MemList_f(void)
 	}
 }
 
-extern void R_TextureStats_Print(qboolean printeach, qboolean printpool, qboolean printtotal);
-void MemStats_f(void)
+static void MemStats_f(void)
 {
 	Mem_CheckSentinelsGlobal();
 	R_TextureStats_Print(false, false, true);
@@ -868,12 +929,19 @@ void Memory_Init (void)
 	poolchain = NULL;
 	tempmempool = Mem_AllocPool("Temporary Memory", POOLFLAG_TEMP, NULL);
 	zonemempool = Mem_AllocPool("Zone", 0, NULL);
+
+	if (Thread_HasThreads())
+		mem_mutex = Thread_CreateMutex();
 }
 
 void Memory_Shutdown (void)
 {
 //	Mem_FreePool (&zonemempool);
 //	Mem_FreePool (&tempmempool);
+
+	if (mem_mutex)
+		Thread_DestroyMutex(mem_mutex);
+	mem_mutex = NULL;
 }
 
 void Memory_Init_Commands (void)

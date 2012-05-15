@@ -20,6 +20,9 @@ cvar_t collision_endposnudge = {0, "collision_endposnudge", "0", "workaround to 
 #endif
 cvar_t collision_debug_tracelineasbox = {0, "collision_debug_tracelineasbox", "0", "workaround for any bugs in Collision_TraceLineBrushFloat by using Collision_TraceBrushBrushFloat"};
 cvar_t collision_cache = {0, "collision_cache", "1", "store results of collision traces for next frame to reuse if possible (optimization)"};
+//cvar_t collision_triangle_neighborsides = {0, "collision_triangle_neighborsides", "1", "override automatic side generation if triangle has neighbors with face planes that form a convex edge (perfect solution, but can not work for all edges)"};
+cvar_t collision_triangle_bevelsides = {0, "collision_triangle_bevelsides", "1", "generate sloped edge planes on triangles - if 0, see axialedgeplanes"};
+cvar_t collision_triangle_axialsides = {0, "collision_triangle_axialsides", "1", "generate axially-aligned edge planes on triangles - otherwise use perpendicular edge planes"};
 
 mempool_t *collision_mempool;
 
@@ -36,6 +39,9 @@ void Collision_Init (void)
 #endif
 	Cvar_RegisterVariable(&collision_debug_tracelineasbox);
 	Cvar_RegisterVariable(&collision_cache);
+//	Cvar_RegisterVariable(&collision_triangle_neighborsides);
+	Cvar_RegisterVariable(&collision_triangle_bevelsides);
+	Cvar_RegisterVariable(&collision_triangle_axialsides);
 	collision_mempool = Mem_AllocPool("collision cache", 0, NULL);
 	Collision_Cache_Init(collision_mempool);
 }
@@ -53,7 +59,7 @@ void Collision_Init (void)
 
 
 
-void Collision_PrintBrushAsQHull(colbrushf_t *brush, const char *name)
+static void Collision_PrintBrushAsQHull(colbrushf_t *brush, const char *name)
 {
 	int i;
 	Con_Printf("3 %s\n%i\n", name, brush->numpoints);
@@ -65,7 +71,7 @@ void Collision_PrintBrushAsQHull(colbrushf_t *brush, const char *name)
 		Con_Printf("%f %f %f %f\n", brush->planes[i].normal[0], brush->planes[i].normal[1], brush->planes[i].normal[2], brush->planes[i].dist);
 }
 
-void Collision_ValidateBrush(colbrushf_t *brush)
+static void Collision_ValidateBrush(colbrushf_t *brush)
 {
 	int j, k, pointsoffplanes, pointonplanes, pointswithinsufficientplanes, printbrush;
 	float d;
@@ -124,7 +130,7 @@ void Collision_ValidateBrush(colbrushf_t *brush)
 		Collision_PrintBrushAsQHull(brush, "unnamed");
 }
 
-float nearestplanedist_float(const float *normal, const colpointf_t *points, int numpoints)
+static float nearestplanedist_float(const float *normal, const colpointf_t *points, int numpoints)
 {
 	float dist, bestdist;
 	if (!numpoints)
@@ -140,7 +146,7 @@ float nearestplanedist_float(const float *normal, const colpointf_t *points, int
 	return bestdist;
 }
 
-float furthestplanedist_float(const float *normal, const colpointf_t *points, int numpoints)
+static float furthestplanedist_float(const float *normal, const colpointf_t *points, int numpoints)
 {
 	float dist, bestdist;
 	if (!numpoints)
@@ -156,7 +162,7 @@ float furthestplanedist_float(const float *normal, const colpointf_t *points, in
 	return bestdist;
 }
 
-void Collision_CalcEdgeDirsForPolygonBrushFloat(colbrushf_t *brush)
+static void Collision_CalcEdgeDirsForPolygonBrushFloat(colbrushf_t *brush)
 {
 	int i, j;
 	for (i = 0, j = brush->numpoints - 1;i < brush->numpoints;j = i, i++)
@@ -448,164 +454,98 @@ colbrushf_t *Collision_NewBrushFromPlanes(mempool_t *mempool, int numoriginalpla
 
 
 
-void Collision_CalcPlanesForPolygonBrushFloat(colbrushf_t *brush)
+void Collision_CalcPlanesForTriangleBrushFloat(colbrushf_t *brush)
 {
 	int i;
-	float edge0[3], edge1[3], edge2[3], normal[3], dist, bestdist;
-	colpointf_t *p, *p2;
+	float edge0[3], edge1[3], edge2[3];
+	colpointf_t *p;
 
-	// FIXME: these probably don't actually need to be normalized if the collision code does not care
-	if (brush->numpoints == 3)
+	TriangleNormal(brush->points[0].v, brush->points[1].v, brush->points[2].v, brush->planes[0].normal);
+	if (DotProduct(brush->planes[0].normal, brush->planes[0].normal) < 0.0001f)
 	{
-		// optimized triangle case
-		TriangleNormal(brush->points[0].v, brush->points[1].v, brush->points[2].v, brush->planes[0].normal);
-		if (DotProduct(brush->planes[0].normal, brush->planes[0].normal) < 0.0001f)
+		// there's no point in processing a degenerate triangle (GIGO - Garbage In, Garbage Out)
+		// note that some of these exist in q3bsp bspline patches
+		brush->numplanes = 0;
+		return;
+	}
+
+	// there are 5 planes (front, back, sides) and 3 edges
+	brush->numplanes = 5;
+	brush->numedgedirs = 3;
+	VectorNormalize(brush->planes[0].normal);
+	brush->planes[0].dist = DotProduct(brush->points->v, brush->planes[0].normal);
+	VectorNegate(brush->planes[0].normal, brush->planes[1].normal);
+	brush->planes[1].dist = -brush->planes[0].dist;
+	// edge directions are easy to calculate
+	VectorSubtract(brush->points[2].v, brush->points[0].v, edge0);
+	VectorSubtract(brush->points[0].v, brush->points[1].v, edge1);
+	VectorSubtract(brush->points[1].v, brush->points[2].v, edge2);
+	VectorCopy(edge0, brush->edgedirs[0].v);
+	VectorCopy(edge1, brush->edgedirs[1].v);
+	VectorCopy(edge2, brush->edgedirs[2].v);
+	// now select an algorithm to generate the side planes
+	if (collision_triangle_bevelsides.integer)
+	{
+		// use 45 degree slopes at the edges of the triangle to make a sinking trace error turn into "riding up" the slope rather than getting stuck
+		CrossProduct(edge0, brush->planes->normal, brush->planes[2].normal);
+		CrossProduct(edge1, brush->planes->normal, brush->planes[3].normal);
+		CrossProduct(edge2, brush->planes->normal, brush->planes[4].normal);
+		VectorNormalize(brush->planes[2].normal);
+		VectorNormalize(brush->planes[3].normal);
+		VectorNormalize(brush->planes[4].normal);
+		VectorAdd(brush->planes[2].normal, brush->planes[0].normal, brush->planes[2].normal);
+		VectorAdd(brush->planes[3].normal, brush->planes[0].normal, brush->planes[3].normal);
+		VectorAdd(brush->planes[4].normal, brush->planes[0].normal, brush->planes[4].normal);
+		VectorNormalize(brush->planes[2].normal);
+		VectorNormalize(brush->planes[3].normal);
+		VectorNormalize(brush->planes[4].normal);
+	}
+	else if (collision_triangle_axialsides.integer)
+	{
+		float projectionnormal[3], projectionedge0[3], projectionedge1[3], projectionedge2[3];
+		int i, best;
+		float dist, bestdist;
+		bestdist = fabs(brush->planes[0].normal[0]);
+		best = 0;
+		for (i = 1;i < 3;i++)
 		{
-			// there's no point in processing a degenerate triangle (GIGO - Garbage In, Garbage Out)
-			brush->numplanes = 0;
-			return;
+			dist = fabs(brush->planes[0].normal[i]);
+			if (bestdist < dist)
+			{
+				bestdist = dist;
+				best = i;
+			}
 		}
+		VectorClear(projectionnormal);
+		if (brush->planes[0].normal[best] < 0)
+			projectionnormal[best] = -1;
 		else
-		{
-			brush->numplanes = 5;
-			brush->numedgedirs = 3;
-			VectorNormalize(brush->planes[0].normal);
-			brush->planes[0].dist = DotProduct(brush->points->v, brush->planes[0].normal);
-			VectorNegate(brush->planes[0].normal, brush->planes[1].normal);
-			brush->planes[1].dist = -brush->planes[0].dist;
-			VectorSubtract(brush->points[2].v, brush->points[0].v, edge0);
-			VectorSubtract(brush->points[0].v, brush->points[1].v, edge1);
-			VectorSubtract(brush->points[1].v, brush->points[2].v, edge2);
-			VectorCopy(edge0, brush->edgedirs[0].v);
-			VectorCopy(edge1, brush->edgedirs[1].v);
-			VectorCopy(edge2, brush->edgedirs[2].v);
-#if 1
-			{
-				float projectionnormal[3], projectionedge0[3], projectionedge1[3], projectionedge2[3];
-				int i, best;
-				float dist, bestdist;
-				bestdist = fabs(brush->planes[0].normal[0]);
-				best = 0;
-				for (i = 1;i < 3;i++)
-				{
-					dist = fabs(brush->planes[0].normal[i]);
-					if (bestdist < dist)
-					{
-						bestdist = dist;
-						best = i;
-					}
-				}
-				VectorClear(projectionnormal);
-				if (brush->planes[0].normal[best] < 0)
-					projectionnormal[best] = -1;
-				else
-					projectionnormal[best] = 1;
-				VectorCopy(edge0, projectionedge0);
-				VectorCopy(edge1, projectionedge1);
-				VectorCopy(edge2, projectionedge2);
-				projectionedge0[best] = 0;
-				projectionedge1[best] = 0;
-				projectionedge2[best] = 0;
-				CrossProduct(projectionedge0, projectionnormal, brush->planes[2].normal);
-				CrossProduct(projectionedge1, projectionnormal, brush->planes[3].normal);
-				CrossProduct(projectionedge2, projectionnormal, brush->planes[4].normal);
-			}
-#else
-			CrossProduct(edge0, brush->planes->normal, brush->planes[2].normal);
-			CrossProduct(edge1, brush->planes->normal, brush->planes[3].normal);
-			CrossProduct(edge2, brush->planes->normal, brush->planes[4].normal);
-#endif
-			VectorNormalize(brush->planes[2].normal);
-			VectorNormalize(brush->planes[3].normal);
-			VectorNormalize(brush->planes[4].normal);
-			brush->planes[2].dist = DotProduct(brush->points[2].v, brush->planes[2].normal);
-			brush->planes[3].dist = DotProduct(brush->points[0].v, brush->planes[3].normal);
-			brush->planes[4].dist = DotProduct(brush->points[1].v, brush->planes[4].normal);
-
-			if (developer_extra.integer)
-			{
-				// validation code
-#if 0
-				float temp[3];
-
-				VectorSubtract(brush->points[0].v, brush->points[1].v, edge0);
-				VectorSubtract(brush->points[2].v, brush->points[1].v, edge1);
-				CrossProduct(edge0, edge1, normal);
-				VectorNormalize(normal);
-				VectorSubtract(normal, brush->planes[0].normal, temp);
-				if (VectorLength(temp) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: TriangleNormal gave wrong answer (%f %f %f != correct answer %f %f %f)\n", brush->planes->normal[0], brush->planes->normal[1], brush->planes->normal[2], normal[0], normal[1], normal[2]);
-				if (fabs(DotProduct(brush->planes[1].normal, brush->planes[0].normal) - -1.0f) > 0.01f || fabs(brush->planes[1].dist - -brush->planes[0].dist) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 1 (%f %f %f %f) is not opposite plane 0 (%f %f %f %f)\n", brush->planes[1].normal[0], brush->planes[1].normal[1], brush->planes[1].normal[2], brush->planes[1].dist, brush->planes[0].normal[0], brush->planes[0].normal[1], brush->planes[0].normal[2], brush->planes[0].dist);
-#if 0
-				if (fabs(DotProduct(brush->planes[2].normal, brush->planes[0].normal)) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 2 (%f %f %f %f) is not perpendicular to plane 0 (%f %f %f %f)\n", brush->planes[2].normal[0], brush->planes[2].normal[1], brush->planes[2].normal[2], brush->planes[2].dist, brush->planes[0].normal[0], brush->planes[0].normal[1], brush->planes[0].normal[2], brush->planes[2].dist);
-				if (fabs(DotProduct(brush->planes[3].normal, brush->planes[0].normal)) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 3 (%f %f %f %f) is not perpendicular to plane 0 (%f %f %f %f)\n", brush->planes[3].normal[0], brush->planes[3].normal[1], brush->planes[3].normal[2], brush->planes[3].dist, brush->planes[0].normal[0], brush->planes[0].normal[1], brush->planes[0].normal[2], brush->planes[3].dist);
-				if (fabs(DotProduct(brush->planes[4].normal, brush->planes[0].normal)) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 4 (%f %f %f %f) is not perpendicular to plane 0 (%f %f %f %f)\n", brush->planes[4].normal[0], brush->planes[4].normal[1], brush->planes[4].normal[2], brush->planes[4].dist, brush->planes[0].normal[0], brush->planes[0].normal[1], brush->planes[0].normal[2], brush->planes[4].dist);
-				if (fabs(DotProduct(brush->planes[2].normal, edge0)) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 2 (%f %f %f %f) is not perpendicular to edge 0 (%f %f %f to %f %f %f)\n", brush->planes[2].normal[0], brush->planes[2].normal[1], brush->planes[2].normal[2], brush->planes[2].dist, brush->points[2].v[0], brush->points[2].v[1], brush->points[2].v[2], brush->points[0].v[0], brush->points[0].v[1], brush->points[0].v[2]);
-				if (fabs(DotProduct(brush->planes[3].normal, edge1)) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 3 (%f %f %f %f) is not perpendicular to edge 1 (%f %f %f to %f %f %f)\n", brush->planes[3].normal[0], brush->planes[3].normal[1], brush->planes[3].normal[2], brush->planes[3].dist, brush->points[0].v[0], brush->points[0].v[1], brush->points[0].v[2], brush->points[1].v[0], brush->points[1].v[1], brush->points[1].v[2]);
-				if (fabs(DotProduct(brush->planes[4].normal, edge2)) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: plane 4 (%f %f %f %f) is not perpendicular to edge 2 (%f %f %f to %f %f %f)\n", brush->planes[4].normal[0], brush->planes[4].normal[1], brush->planes[4].normal[2], brush->planes[4].dist, brush->points[1].v[0], brush->points[1].v[1], brush->points[1].v[2], brush->points[2].v[0], brush->points[2].v[1], brush->points[2].v[2]);
-#endif
-#endif
-				if (fabs(DotProduct(brush->points[0].v, brush->planes[0].normal) - brush->planes[0].dist) > 0.01f || fabs(DotProduct(brush->points[1].v, brush->planes[0].normal) - brush->planes[0].dist) > 0.01f || fabs(DotProduct(brush->points[2].v, brush->planes[0].normal) - brush->planes[0].dist) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: edges (%f %f %f to %f %f %f to %f %f %f) off front plane 0 (%f %f %f %f)\n", brush->points[0].v[0], brush->points[0].v[1], brush->points[0].v[2], brush->points[1].v[0], brush->points[1].v[1], brush->points[1].v[2], brush->points[2].v[0], brush->points[2].v[1], brush->points[2].v[2], brush->planes[0].normal[0], brush->planes[0].normal[1], brush->planes[0].normal[2], brush->planes[0].dist);
-				if (fabs(DotProduct(brush->points[0].v, brush->planes[1].normal) - brush->planes[1].dist) > 0.01f || fabs(DotProduct(brush->points[1].v, brush->planes[1].normal) - brush->planes[1].dist) > 0.01f || fabs(DotProduct(brush->points[2].v, brush->planes[1].normal) - brush->planes[1].dist) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: edges (%f %f %f to %f %f %f to %f %f %f) off back plane 1 (%f %f %f %f)\n", brush->points[0].v[0], brush->points[0].v[1], brush->points[0].v[2], brush->points[1].v[0], brush->points[1].v[1], brush->points[1].v[2], brush->points[2].v[0], brush->points[2].v[1], brush->points[2].v[2], brush->planes[1].normal[0], brush->planes[1].normal[1], brush->planes[1].normal[2], brush->planes[1].dist);
-				if (fabs(DotProduct(brush->points[2].v, brush->planes[2].normal) - brush->planes[2].dist) > 0.01f || fabs(DotProduct(brush->points[0].v, brush->planes[2].normal) - brush->planes[2].dist) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: edge 0 (%f %f %f to %f %f %f) off front plane 2 (%f %f %f %f)\n", brush->points[2].v[0], brush->points[2].v[1], brush->points[2].v[2], brush->points[0].v[0], brush->points[0].v[1], brush->points[0].v[2], brush->planes[2].normal[0], brush->planes[2].normal[1], brush->planes[2].normal[2], brush->planes[2].dist);
-				if (fabs(DotProduct(brush->points[0].v, brush->planes[3].normal) - brush->planes[3].dist) > 0.01f || fabs(DotProduct(brush->points[1].v, brush->planes[3].normal) - brush->planes[3].dist) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: edge 0 (%f %f %f to %f %f %f) off front plane 2 (%f %f %f %f)\n", brush->points[0].v[0], brush->points[0].v[1], brush->points[0].v[2], brush->points[1].v[0], brush->points[1].v[1], brush->points[1].v[2], brush->planes[3].normal[0], brush->planes[3].normal[1], brush->planes[3].normal[2], brush->planes[3].dist);
-				if (fabs(DotProduct(brush->points[1].v, brush->planes[4].normal) - brush->planes[4].dist) > 0.01f || fabs(DotProduct(brush->points[2].v, brush->planes[4].normal) - brush->planes[4].dist) > 0.01f)
-					Con_DPrintf("Collision_CalcPlanesForPolygonBrushFloat: edge 0 (%f %f %f to %f %f %f) off front plane 2 (%f %f %f %f)\n", brush->points[1].v[0], brush->points[1].v[1], brush->points[1].v[2], brush->points[2].v[0], brush->points[2].v[1], brush->points[2].v[2], brush->planes[4].normal[0], brush->planes[4].normal[1], brush->planes[4].normal[2], brush->planes[4].dist);
-			}
-		}
+			projectionnormal[best] = 1;
+		VectorCopy(edge0, projectionedge0);
+		VectorCopy(edge1, projectionedge1);
+		VectorCopy(edge2, projectionedge2);
+		projectionedge0[best] = 0;
+		projectionedge1[best] = 0;
+		projectionedge2[best] = 0;
+		CrossProduct(projectionedge0, projectionnormal, brush->planes[2].normal);
+		CrossProduct(projectionedge1, projectionnormal, brush->planes[3].normal);
+		CrossProduct(projectionedge2, projectionnormal, brush->planes[4].normal);
+		VectorNormalize(brush->planes[2].normal);
+		VectorNormalize(brush->planes[3].normal);
+		VectorNormalize(brush->planes[4].normal);
 	}
 	else
 	{
-		// choose best surface normal for polygon's plane
-		bestdist = 0;
-		for (i = 0, p = brush->points + 1;i < brush->numpoints - 2;i++, p++)
-		{
-			VectorSubtract(p[-1].v, p[0].v, edge0);
-			VectorSubtract(p[1].v, p[0].v, edge1);
-			CrossProduct(edge0, edge1, normal);
-			//TriangleNormal(p[-1].v, p[0].v, p[1].v, normal);
-			dist = DotProduct(normal, normal);
-			if (i == 0 || bestdist < dist)
-			{
-				bestdist = dist;
-				VectorCopy(normal, brush->planes->normal);
-			}
-		}
-		if (bestdist < 0.0001f)
-		{
-			// there's no point in processing a degenerate triangle (GIGO - Garbage In, Garbage Out)
-			brush->numplanes = 0;
-			return;
-		}
-		else
-		{
-			brush->numplanes = brush->numpoints + 2;
-			VectorNormalize(brush->planes->normal);
-			brush->planes->dist = DotProduct(brush->points->v, brush->planes->normal);
-
-			// negate plane to create other side
-			VectorNegate(brush->planes[0].normal, brush->planes[1].normal);
-			brush->planes[1].dist = -brush->planes[0].dist;
-			for (i = 0, p = brush->points + (brush->numpoints - 1), p2 = brush->points;i < brush->numpoints;i++, p = p2, p2++)
-			{
-				VectorSubtract(p->v, p2->v, edge0);
-				CrossProduct(edge0, brush->planes->normal, brush->planes[i + 2].normal);
-				VectorNormalize(brush->planes[i + 2].normal);
-				brush->planes[i + 2].dist = DotProduct(p->v, brush->planes[i + 2].normal);
-			}
-		}
+		CrossProduct(edge0, brush->planes->normal, brush->planes[2].normal);
+		CrossProduct(edge1, brush->planes->normal, brush->planes[3].normal);
+		CrossProduct(edge2, brush->planes->normal, brush->planes[4].normal);
+		VectorNormalize(brush->planes[2].normal);
+		VectorNormalize(brush->planes[3].normal);
+		VectorNormalize(brush->planes[4].normal);
 	}
+	brush->planes[2].dist = DotProduct(brush->points[2].v, brush->planes[2].normal);
+	brush->planes[3].dist = DotProduct(brush->points[0].v, brush->planes[3].normal);
+	brush->planes[4].dist = DotProduct(brush->points[1].v, brush->planes[4].normal);
 
 	if (developer_extra.integer)
 	{
@@ -1032,7 +972,7 @@ void Collision_TracePointBrushFloat(trace_t *trace, const vec3_t point, const co
 	}
 }
 
-void Collision_SnapCopyPoints(int numpoints, const colpointf_t *in, colpointf_t *out, float fractionprecision, float invfractionprecision)
+static void Collision_SnapCopyPoints(int numpoints, const colpointf_t *in, colpointf_t *out, float fractionprecision, float invfractionprecision)
 {
 	int i;
 	for (i = 0;i < numpoints;i++)
@@ -1085,7 +1025,7 @@ void Collision_TraceBrushTriangleMeshFloat(trace_t *trace, const colbrushf_t *th
 					VectorCopy(vertex3f + element3i[tri * 3 + 2] * 3, points[2].v);
 					Collision_SnapCopyPoints(brush.numpoints, points, points, COLLISION_SNAPSCALE, COLLISION_SNAP);
 					Collision_CalcEdgeDirsForPolygonBrushFloat(&brush);
-					Collision_CalcPlanesForPolygonBrushFloat(&brush);
+					Collision_CalcPlanesForTriangleBrushFloat(&brush);
 					//Collision_PrintBrushAsQHull(&brush, "brush");
 					Collision_TraceBrushBrushFloat(trace, thisbrush_start, thisbrush_end, &brush, &brush);
 				}
@@ -1103,7 +1043,7 @@ void Collision_TraceBrushTriangleMeshFloat(trace_t *trace, const colbrushf_t *th
 				VectorCopy(vertex3f + element3i[2] * 3, points[2].v);
 				Collision_SnapCopyPoints(brush.numpoints, points, points, COLLISION_SNAPSCALE, COLLISION_SNAP);
 				Collision_CalcEdgeDirsForPolygonBrushFloat(&brush);
-				Collision_CalcPlanesForPolygonBrushFloat(&brush);
+				Collision_CalcPlanesForTriangleBrushFloat(&brush);
 				//Collision_PrintBrushAsQHull(&brush, "brush");
 				Collision_TraceBrushBrushFloat(trace, thisbrush_start, thisbrush_end, &brush, &brush);
 			}
@@ -1118,7 +1058,7 @@ void Collision_TraceBrushTriangleMeshFloat(trace_t *trace, const colbrushf_t *th
 			VectorCopy(vertex3f + element3i[2] * 3, points[2].v);
 			Collision_SnapCopyPoints(brush.numpoints, points, points, COLLISION_SNAPSCALE, COLLISION_SNAP);
 			Collision_CalcEdgeDirsForPolygonBrushFloat(&brush);
-			Collision_CalcPlanesForPolygonBrushFloat(&brush);
+			Collision_CalcPlanesForTriangleBrushFloat(&brush);
 			//Collision_PrintBrushAsQHull(&brush, "brush");
 			Collision_TraceBrushBrushFloat(trace, thisbrush_start, thisbrush_end, &brush, &brush);
 		}
@@ -1183,7 +1123,7 @@ void Collision_TraceBrushTriangleFloat(trace_t *trace, const colbrushf_t *thisbr
 	VectorCopy(v2, points[2].v);
 	Collision_SnapCopyPoints(brush.numpoints, points, points, COLLISION_SNAPSCALE, COLLISION_SNAP);
 	Collision_CalcEdgeDirsForPolygonBrushFloat(&brush);
-	Collision_CalcPlanesForPolygonBrushFloat(&brush);
+	Collision_CalcPlanesForTriangleBrushFloat(&brush);
 	//Collision_PrintBrushAsQHull(&brush, "brush");
 	Collision_TraceBrushBrushFloat(trace, thisbrush_start, thisbrush_end, &brush, &brush);
 }
@@ -1247,28 +1187,6 @@ void Collision_BrushForBox(colboxbrushf_t *boxbrush, const vec3_t mins, const ve
 	//Collision_ValidateBrush(&boxbrush->brush);
 }
 
-void Collision_ClipTrace_BrushBox(trace_t *trace, const vec3_t cmins, const vec3_t cmaxs, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int hitsupercontentsmask, int supercontents, int q3surfaceflags, texture_t *texture)
-{
-	colboxbrushf_t boxbrush, thisbrush_start, thisbrush_end;
-	vec3_t startmins, startmaxs, endmins, endmaxs;
-
-	// create brushes for the collision
-	VectorAdd(start, mins, startmins);
-	VectorAdd(start, maxs, startmaxs);
-	VectorAdd(end, mins, endmins);
-	VectorAdd(end, maxs, endmaxs);
-	Collision_BrushForBox(&boxbrush, cmins, cmaxs, supercontents, q3surfaceflags, texture);
-	Collision_BrushForBox(&thisbrush_start, startmins, startmaxs, 0, 0, NULL);
-	Collision_BrushForBox(&thisbrush_end, endmins, endmaxs, 0, 0, NULL);
-
-	memset(trace, 0, sizeof(trace_t));
-	trace->hitsupercontentsmask = hitsupercontentsmask;
-	trace->fraction = 1;
-	trace->realfraction = 1;
-	trace->allsolid = true;
-	Collision_TraceBrushBrushFloat(trace, &thisbrush_start.brush, &thisbrush_end.brush, &boxbrush.brush, &boxbrush.brush);
-}
-
 //pseudocode for detecting line/sphere overlap without calculating an impact point
 //linesphereorigin = sphereorigin - linestart;linediff = lineend - linestart;linespherefrac = DotProduct(linesphereorigin, linediff) / DotProduct(linediff, linediff);return VectorLength2(linesphereorigin - bound(0, linespherefrac, 1) * linediff) >= sphereradius*sphereradius;
 
@@ -1278,7 +1196,7 @@ void Collision_ClipTrace_BrushBox(trace_t *trace, const vec3_t cmins, const vec3
 // all the results are correct (impactpoint, impactnormal, and fraction)
 float Collision_ClipTrace_Line_Sphere(double *linestart, double *lineend, double *sphereorigin, double sphereradius, double *impactpoint, double *impactnormal)
 {
-	double dir[3], scale, v[3], deviationdist, impactdist, linelength;
+	double dir[3], scale, v[3], deviationdist2, impactdist, linelength;
 	// make sure the impactpoint and impactnormal are valid even if there is
 	// no collision
 	VectorCopy(lineend, impactpoint);
@@ -1300,13 +1218,12 @@ float Collision_ClipTrace_Line_Sphere(double *linestart, double *lineend, double
 	// of the line from the sphereorigin (deviation, how off-center it is)
 	VectorMA(linestart, impactdist, dir, v);
 	VectorSubtract(v, sphereorigin, v);
-	deviationdist = VectorLength2(v);
-	// if outside the radius, it's a miss for sure
-	// (we do this comparison using squared radius to avoid a sqrt)
-	if (deviationdist > sphereradius*sphereradius)
+	deviationdist2 = sphereradius * sphereradius - VectorLength2(v);
+	// if squared offset length is outside the squared sphere radius, miss
+	if (deviationdist2 < 0)
 		return 1; // miss (off to the side)
 	// nudge back to find the correct impact distance
-	impactdist -= sphereradius - deviationdist/sphereradius;
+	impactdist -= sqrt(deviationdist2);
 	if (impactdist >= linelength)
 		return 1; // miss (not close enough)
 	if (impactdist < 0)
@@ -1538,55 +1455,6 @@ void Collision_TraceLineTriangleFloat(trace_t *trace, const vec3_t linestart, co
 #endif
 }
 
-typedef struct colbspnode_s
-{
-	mplane_t plane;
-	struct colbspnode_s *children[2];
-	// the node is reallocated or split if max is reached
-	int numcolbrushf;
-	int maxcolbrushf;
-	colbrushf_t **colbrushflist;
-	//int numcolbrushd;
-	//int maxcolbrushd;
-	//colbrushd_t **colbrushdlist;
-}
-colbspnode_t;
-
-typedef struct colbsp_s
-{
-	mempool_t *mempool;
-	colbspnode_t *nodes;
-}
-colbsp_t;
-
-colbsp_t *Collision_CreateCollisionBSP(mempool_t *mempool)
-{
-	colbsp_t *bsp;
-	bsp = (colbsp_t *)Mem_Alloc(mempool, sizeof(colbsp_t));
-	bsp->mempool = mempool;
-	bsp->nodes = (colbspnode_t *)Mem_Alloc(bsp->mempool, sizeof(colbspnode_t));
-	return bsp;
-}
-
-void Collision_FreeCollisionBSPNode(colbspnode_t *node)
-{
-	if (node->children[0])
-		Collision_FreeCollisionBSPNode(node->children[0]);
-	if (node->children[1])
-		Collision_FreeCollisionBSPNode(node->children[1]);
-	while (--node->numcolbrushf)
-		Mem_Free(node->colbrushflist[node->numcolbrushf]);
-	//while (--node->numcolbrushd)
-	//	Mem_Free(node->colbrushdlist[node->numcolbrushd]);
-	Mem_Free(node);
-}
-
-void Collision_FreeCollisionBSP(colbsp_t *bsp)
-{
-	Collision_FreeCollisionBSPNode(bsp->nodes);
-	Mem_Free(bsp);
-}
-
 void Collision_BoundingBoxOfBrushTraceSegment(const colbrushf_t *start, const colbrushf_t *end, vec3_t mins, vec3_t maxs, float startfrac, float endfrac)
 {
 	int i;
@@ -1615,7 +1483,7 @@ void Collision_BoundingBoxOfBrushTraceSegment(const colbrushf_t *start, const co
 
 //===========================================
 
-void Collision_TranslateBrush(const vec3_t shift, colbrushf_t *brush)
+static void Collision_TranslateBrush(const vec3_t shift, colbrushf_t *brush)
 {
 	int i;
 	// now we can transform the data
@@ -1631,7 +1499,7 @@ void Collision_TranslateBrush(const vec3_t shift, colbrushf_t *brush)
 	VectorAdd(brush->maxs, shift, brush->maxs);
 }
 
-void Collision_TransformBrush(const matrix4x4_t *matrix, colbrushf_t *brush)
+static void Collision_TransformBrush(const matrix4x4_t *matrix, colbrushf_t *brush)
 {
 	int i;
 	vec3_t v;
@@ -1671,17 +1539,8 @@ typedef struct collision_cachedtrace_parameters_s
 	dp_model_t *model;
 	vec3_t end;
 	vec3_t start;
-	vec3_t mins;
-	vec3_t maxs;
-//	const frameblend_t *frameblend;
-//	const skeleton_t *skeleton;
-//	matrix4x4_t inversematrix;
 	int hitsupercontentsmask;
-	int type; // which type of query produced this cache entry
 	matrix4x4_t matrix;
-	vec3_t bodymins;
-	vec3_t bodymaxs;
-	int bodysupercontents;
 }
 collision_cachedtrace_parameters_t;
 
@@ -1742,7 +1601,7 @@ void Collision_Cache_Init(mempool_t *mempool)
 	Collision_Cache_Reset(true);
 }
 
-void Collision_Cache_RebuildHash(void)
+static void Collision_Cache_RebuildHash(void)
 {
 	int index;
 	int range = collision_cachedtrace_lastused + 1;
@@ -1810,7 +1669,7 @@ static unsigned int Collision_Cache_HashIndexForArray(unsigned int *array, unsig
 	return hashindex;
 }
 
-static collision_cachedtrace_t *Collision_Cache_Lookup(int type, dp_model_t *model, const frameblend_t *frameblend, const skeleton_t *skeleton, const vec3_t bodymins, const vec3_t bodymaxs, int bodysupercontents, const matrix4x4_t *matrix, const matrix4x4_t *inversematrix, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int hitsupercontentsmask)
+static collision_cachedtrace_t *Collision_Cache_Lookup(dp_model_t *model, const matrix4x4_t *matrix, const matrix4x4_t *inversematrix, const vec3_t start, const vec3_t end, int hitsupercontentsmask)
 {
 	int hashindex = 0;
 	unsigned int fullhashindex;
@@ -1823,28 +1682,18 @@ static collision_cachedtrace_t *Collision_Cache_Lookup(int type, dp_model_t *mod
 	collision_cachedtrace_t *cached = collision_cachedtrace_array + index;
 	collision_cachedtrace_parameters_t params;
 	// all non-cached traces use the same index
-	if ((frameblend && frameblend[0].lerp != 1) || (skeleton && skeleton->relativetransforms))
-		r_refdef.stats.collisioncache_animated++;
-	else if (!collision_cache.integer)
+	if (!collision_cache.integer)
 		r_refdef.stats.collisioncache_traced++;
 	else
 	{
 		// cached trace lookup
 		memset(&params, 0, sizeof(params));
-		params.type = type;
 		params.model = model;
-		VectorCopy(bodymins, params.bodymins);
-		VectorCopy(bodymaxs, params.bodymaxs);
-		params.bodysupercontents = bodysupercontents;
 		VectorCopy(start, params.start);
-		VectorCopy(mins,  params.mins);
-		VectorCopy(maxs,  params.maxs);
 		VectorCopy(end,   params.end);
 		params.hitsupercontentsmask = hitsupercontentsmask;
 		params.matrix = *matrix;
-		//params.inversematrix = *inversematrix;
 		fullhashindex = Collision_Cache_HashIndexForArray((unsigned int *)&params, sizeof(params) / sizeof(unsigned int));
-		//fullhashindex = Collision_Cache_HashIndexForArray((unsigned int *)&params, 10);
 		hashindex = (int)(fullhashindex % (unsigned int)collision_cachedtrace_hashsize);
 		for (index = hash[hashindex];index;index = arraynext[index])
 		{
@@ -1859,20 +1708,6 @@ static collision_cachedtrace_t *Collision_Cache_Lookup(int type, dp_model_t *mod
 			 || cached->p.start[0] != params.start[0]
 			 || cached->p.start[1] != params.start[1]
 			 || cached->p.start[2] != params.start[2]
-			 || cached->p.mins[0] != params.mins[0]
-			 || cached->p.mins[1] != params.mins[1]
-			 || cached->p.mins[2] != params.mins[2]
-			 || cached->p.maxs[0] != params.maxs[0]
-			 || cached->p.maxs[1] != params.maxs[1]
-			 || cached->p.maxs[2] != params.maxs[2]
-			 || cached->p.type != params.type
-			 || cached->p.bodysupercontents != params.bodysupercontents
-			 || cached->p.bodymins[0] != params.bodymins[0]
-			 || cached->p.bodymins[1] != params.bodymins[1]
-			 || cached->p.bodymins[2] != params.bodymins[2]
-			 || cached->p.bodymaxs[0] != params.bodymaxs[0]
-			 || cached->p.bodymaxs[1] != params.bodymaxs[1]
-			 || cached->p.bodymaxs[2] != params.bodymaxs[2]
 			 || cached->p.hitsupercontentsmask != params.hitsupercontentsmask
 			 || cached->p.matrix.m[0][0] != params.matrix.m[0][0]
 			 || cached->p.matrix.m[0][1] != params.matrix.m[0][1]
@@ -1938,15 +1773,37 @@ static collision_cachedtrace_t *Collision_Cache_Lookup(int type, dp_model_t *mod
 	return cached;
 }
 
-void Collision_ClipToGenericEntity(trace_t *trace, dp_model_t *model, const frameblend_t *frameblend, const skeleton_t *skeleton, const vec3_t bodymins, const vec3_t bodymaxs, int bodysupercontents, matrix4x4_t *matrix, matrix4x4_t *inversematrix, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int hitsupercontentsmask)
+void Collision_Cache_ClipLineToGenericEntitySurfaces(trace_t *trace, dp_model_t *model, matrix4x4_t *matrix, matrix4x4_t *inversematrix, const vec3_t start, const vec3_t end, int hitsupercontentsmask)
 {
-	float starttransformed[3], endtransformed[3];
-	collision_cachedtrace_t *cached = Collision_Cache_Lookup(3, model, frameblend, skeleton, bodymins, bodymaxs, bodysupercontents, matrix, inversematrix, start, mins, maxs, end, hitsupercontentsmask);
+	collision_cachedtrace_t *cached = Collision_Cache_Lookup(model, matrix, inversematrix, start, end, hitsupercontentsmask);
 	if (cached->valid)
 	{
 		*trace = cached->result;
 		return;
 	}
+
+	Collision_ClipLineToGenericEntity(trace, model, NULL, NULL, vec3_origin, vec3_origin, 0, matrix, inversematrix, start, end, hitsupercontentsmask, true);
+
+	cached->result = *trace;
+}
+
+void Collision_Cache_ClipLineToWorldSurfaces(trace_t *trace, dp_model_t *model, const vec3_t start, const vec3_t end, int hitsupercontents)
+{
+	collision_cachedtrace_t *cached = Collision_Cache_Lookup(model, &identitymatrix, &identitymatrix, start, end, hitsupercontents);
+	if (cached->valid)
+	{
+		*trace = cached->result;
+		return;
+	}
+
+	Collision_ClipLineToWorld(trace, model, start, end, hitsupercontents, true);
+
+	cached->result = *trace;
+}
+
+void Collision_ClipToGenericEntity(trace_t *trace, dp_model_t *model, const frameblend_t *frameblend, const skeleton_t *skeleton, const vec3_t bodymins, const vec3_t bodymaxs, int bodysupercontents, matrix4x4_t *matrix, matrix4x4_t *inversematrix, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int hitsupercontentsmask)
+{
+	float starttransformed[3], endtransformed[3];
 
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = trace->realfraction = 1;
@@ -1987,19 +1844,10 @@ void Collision_ClipToGenericEntity(trace_t *trace, dp_model_t *model, const fram
 	// transform plane
 	// NOTE: this relies on plane.dist being directly after plane.normal
 	Matrix4x4_TransformPositivePlane(matrix, trace->plane.normal[0], trace->plane.normal[1], trace->plane.normal[2], trace->plane.dist, trace->plane.normal);
-
-	cached->result = *trace;
 }
 
 void Collision_ClipToWorld(trace_t *trace, dp_model_t *model, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int hitsupercontents)
 {
-	collision_cachedtrace_t *cached = Collision_Cache_Lookup(3, model, NULL, NULL, vec3_origin, vec3_origin, 0, &identitymatrix, &identitymatrix, start, mins, maxs, end, hitsupercontents);
-	if (cached->valid)
-	{
-		*trace = cached->result;
-		return;
-	}
-
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = trace->realfraction = 1;
 	// ->TraceBox: TraceBrush not needed here, as worldmodel is never rotated
@@ -2008,20 +1856,11 @@ void Collision_ClipToWorld(trace_t *trace, dp_model_t *model, const vec3_t start
 	trace->fraction = bound(0, trace->fraction, 1);
 	trace->realfraction = bound(0, trace->realfraction, 1);
 	VectorLerp(start, trace->fraction, end, trace->endpos);
-
-	cached->result = *trace;
 }
 
 void Collision_ClipLineToGenericEntity(trace_t *trace, dp_model_t *model, const frameblend_t *frameblend, const skeleton_t *skeleton, const vec3_t bodymins, const vec3_t bodymaxs, int bodysupercontents, matrix4x4_t *matrix, matrix4x4_t *inversematrix, const vec3_t start, const vec3_t end, int hitsupercontentsmask, qboolean hitsurfaces)
 {
 	float starttransformed[3], endtransformed[3];
-	collision_cachedtrace_t *cached = Collision_Cache_Lookup(2, model, frameblend, skeleton, bodymins, bodymaxs, bodysupercontents, matrix, inversematrix, start, vec3_origin, vec3_origin, end, hitsupercontentsmask);
-	if (cached->valid)
-	{
-		*trace = cached->result;
-		return;
-	}
-
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = trace->realfraction = 1;
 
@@ -2044,19 +1883,10 @@ void Collision_ClipLineToGenericEntity(trace_t *trace, dp_model_t *model, const 
 	// transform plane
 	// NOTE: this relies on plane.dist being directly after plane.normal
 	Matrix4x4_TransformPositivePlane(matrix, trace->plane.normal[0], trace->plane.normal[1], trace->plane.normal[2], trace->plane.dist, trace->plane.normal);
-
-	cached->result = *trace;
 }
 
 void Collision_ClipLineToWorld(trace_t *trace, dp_model_t *model, const vec3_t start, const vec3_t end, int hitsupercontents, qboolean hitsurfaces)
 {
-	collision_cachedtrace_t *cached = Collision_Cache_Lookup(2, model, NULL, NULL, vec3_origin, vec3_origin, 0, &identitymatrix, &identitymatrix, start, vec3_origin, vec3_origin, end, hitsupercontents);
-	if (cached->valid)
-	{
-		*trace = cached->result;
-		return;
-	}
-
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = trace->realfraction = 1;
 	if (model && model->TraceLineAgainstSurfaces && hitsurfaces)
@@ -2066,20 +1896,11 @@ void Collision_ClipLineToWorld(trace_t *trace, dp_model_t *model, const vec3_t s
 	trace->fraction = bound(0, trace->fraction, 1);
 	trace->realfraction = bound(0, trace->realfraction, 1);
 	VectorLerp(start, trace->fraction, end, trace->endpos);
-
-	cached->result = *trace;
 }
 
 void Collision_ClipPointToGenericEntity(trace_t *trace, dp_model_t *model, const frameblend_t *frameblend, const skeleton_t *skeleton, const vec3_t bodymins, const vec3_t bodymaxs, int bodysupercontents, matrix4x4_t *matrix, matrix4x4_t *inversematrix, const vec3_t start, int hitsupercontentsmask)
 {
 	float starttransformed[3];
-	collision_cachedtrace_t *cached = Collision_Cache_Lookup(1, model, frameblend, skeleton, bodymins, bodymaxs, bodysupercontents, matrix, inversematrix, start, vec3_origin, vec3_origin, start, hitsupercontentsmask);
-	if (cached->valid)
-	{
-		*trace = cached->result;
-		return;
-	}
-
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = trace->realfraction = 1;
 
@@ -2097,26 +1918,15 @@ void Collision_ClipPointToGenericEntity(trace_t *trace, dp_model_t *model, const
 	// transform plane
 	// NOTE: this relies on plane.dist being directly after plane.normal
 	Matrix4x4_TransformPositivePlane(matrix, trace->plane.normal[0], trace->plane.normal[1], trace->plane.normal[2], trace->plane.dist, trace->plane.normal);
-
-	cached->result = *trace;
 }
 
 void Collision_ClipPointToWorld(trace_t *trace, dp_model_t *model, const vec3_t start, int hitsupercontents)
 {
-	collision_cachedtrace_t *cached = Collision_Cache_Lookup(1, model, NULL, NULL, vec3_origin, vec3_origin, 0, &identitymatrix, &identitymatrix, start, vec3_origin, vec3_origin, start, hitsupercontents);
-	if (cached->valid)
-	{
-		*trace = cached->result;
-		return;
-	}
-
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = trace->realfraction = 1;
 	if (model && model->TracePoint)
 		model->TracePoint(model, NULL, NULL, trace, start, hitsupercontents);
 	VectorCopy(start, trace->endpos);
-
-	cached->result = *trace;
 }
 
 void Collision_CombineTraces(trace_t *cliptrace, const trace_t *trace, void *touch, qboolean isbmodel)

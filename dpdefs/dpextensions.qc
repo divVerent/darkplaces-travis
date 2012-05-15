@@ -113,6 +113,14 @@ float EF_DOUBLESIDED = 32768;
 //description:
 //render entity as double sided (backfaces are visible, I.E. you see the 'interior' of the model, rather than just the front), can be occasionally useful on transparent stuff.
 
+//DP_EF_DYNAMICMODELLIGHT
+//idea: C.Brutail, divVerent, maikmerten
+//darkplaces implementation: divVerent
+//effects bit:
+float   EF_DYNAMICMODELLIGHT     = 131072;
+//description:
+//force dynamic model light on the entity, even if it's a BSP model (or anything else with lightmaps or light colors)
+
 //DP_EF_FLAME
 //idea: LordHavoc
 //darkplaces implementation: LordHavoc
@@ -278,6 +286,16 @@ float EF_LOWPRECISION = 4194304;
 //description:
 //controls rendering scale of the object, 0 is forced to be 1, darkplaces uses 1/16th accuracy and a limit of 15.9375, can be used to make an object larger or smaller.
 
+//DP_ENT_TRAILEFFECTNUM
+//idea: LordHavoc
+//darkplaces implementation: LordHavoc
+//field definitions:
+.float traileffectnum;
+//description:
+//use a custom effectinfo.txt effect on this entity, assign it like this:
+//self.traileffectnum = particleeffectnum("mycustomeffect");
+//this will do both the dlight and particle trail as described in the effect, basically equivalent to trailparticles() in CSQC but performed on a server entity.
+
 //DP_ENT_VIEWMODEL
 //idea: LordHavoc
 //darkplaces implementation: LordHavoc
@@ -285,29 +303,6 @@ float EF_LOWPRECISION = 4194304;
 .entity viewmodelforclient;
 //description:
 //this is a very special capability, attachs the entity to the view of the client specified, origin and angles become relative to the view of that client, all effects can be used (multiple skins on a weapon model etc)...  the entity is not visible to any other client.
-
-//DP_GECKO_SUPPORT
-//idea: Res2k, BlackHC
-//darkplaces implementation: Res2k, BlackHC
-//constant definitions:
-float GECKO_BUTTON_DOWN         = 0;
-float GECKO_BUTTON_UP           = 1;
-// either use down and up or just press but not all of them!
-float GECKO_BUTTON_PRESS        = 2;
-// use this for mouse events if needed?
-float GECKO_BUTTON_DOUBLECLICK  = 3;
-//builtin definitions:
-float(string name) gecko_create( string name ) = #487;
-void(string name) gecko_destroy( string name ) = #488;
-void(string name) gecko_navigate( string name, string URI ) = #489;
-float(string name) gecko_keyevent( string name, float key, float eventtype ) = #490;
-void gecko_mousemove( string name, float x, float y ) = #491;
-void gecko_resize( string name, float w, float h ) = #492;
-vector gecko_get_texture_extent( string name ) = #493;
-//engine-called QC prototypes:
-//string(string name, string query) Qecko_Query;
-//description:
-//provides an interface to the offscreengecko library and allows for internet browsing in games
 
 //DP_GFX_EXTERNALTEXTURES
 //idea: LordHavoc
@@ -476,6 +471,14 @@ void(entity e, entity tagentity, string tagname) setattachment = #443; // attach
 .float button6;
 .float button7;
 .float button8;
+.float button9;
+.float button10;
+.float button11;
+.float button12;
+.float button13;
+.float button14;
+.float button15;
+.float button16;
 //description:
 //set to the state of the +button3, +button4, +button5, +button6, +button7, and +button8 buttons from the client, this does not involve protocol changes (the extra 6 button bits were simply not used).
 //the exact mapping of protocol button bits on the server is:
@@ -524,6 +527,14 @@ void(entity e, entity tagentity, string tagname) setattachment = #443; // attach
 //float MOVETYPE_BOUNCEMISSILE = 11; // already in defs.qc
 //description:
 //MOVETYPE_BOUNCE but without gravity, and with full reflection (no speed loss like grenades have), in other words - bouncing laser bolts.
+
+//DP_MOVETYPEFLYWORLDONLY
+//idea: Samual
+//darkplaces implementation: Samual
+//movetype definitions:
+float MOVETYPE_FLY_WORLDONLY = 33;
+//description:
+//like MOVETYPE_FLY, but does all traces with MOVE_WORLDONLY, and is ignored by MOVETYPE_PUSH. Should only be combined with SOLID_NOT and SOLID_TRIGGER.
 
 //DP_NULL_MODEL
 //idea: Chris
@@ -583,11 +594,11 @@ float(float a) tan = #475; // returns tangent value (which is simply sin(a)/cos(
 //NOTE: copying a string-typed autocvar to another variable/field, and then
 //changing the cvar or returning from progs is UNDEFINED. Writing to autocvar
 //globals is UNDEFINED.  Accessing autocvar globals after cvar_set()ing that
-//cvar is IMPLEMENTATION DEFINED (an implementation may either yield the
-//previous, or the current, value). Whether autocvar globals, after restoring
-//a savegame, have the cvar's current value, or the original value at time of
-//saving, is UNDEFINED. Restoring a savegame however must not restore the
-//cvar values themselves.
+//cvar in the same frame is IMPLEMENTATION DEFINED (an implementation may
+//either yield the previous, or the current, value). Whether autocvar globals,
+//after restoring a savegame, have the cvar's current value, or the original
+//value at time of saving, is UNDEFINED. Restoring a savegame however must not
+//restore the cvar values themselves.
 //In case the cvar does NOT exist, then it is automatically created with the
 //value of the autocvar initializer, if given. This is possible with e.g.
 //frikqcc and fteqcc the following way:
@@ -617,6 +628,13 @@ void(entity ent) changepitch = #63;
 void(entity from, entity to) copyentity = #400;
 //description:
 //copies all data in the entity to another entity.
+
+//DP_QC_CRC16
+//idea: divVerent
+//darkplaces implementation: divVerent
+//Some hash function to build hash tables with. This has to be be the CRC-16-CCITT that is also required for the QuakeWorld download protocol.
+//When caseinsensitive is set, the CRC is calculated of the lower cased string.
+float(float caseinsensitive, string s, ...) crc16 = #494;
 
 //DP_QC_CVAR_DEFSTRING
 //idea: id Software (Doom3), LordHavoc
@@ -653,6 +671,24 @@ float CVAR_TYPEFLAG_PRIVATE = 4;
 float CVAR_TYPEFLAG_ENGINE = 8;
 float CVAR_TYPEFLAG_HASDESCRIPTION = 16;
 float CVAR_TYPEFLAG_READONLY = 32;
+
+//DP_QC_DIGEST
+//idea: motorsep, Spike
+//DarkPlaces implementation: divVerent
+//builtin definitions:
+string(string digest, string data, ...) digest_hex = #639;
+//description:
+//returns a given hex digest of given data
+//the returned digest is always encoded in hexadecimal
+//only the "MD4" digest is always supported!
+//if the given digest is not supported, string_null is returned
+//the digest string is matched case sensitively, use "MD4", not "md4"!
+
+//DP_QC_DIGEST_SHA256
+//idea: motorsep, Spike
+//DarkPlaces implementation: divVerent
+//description:
+//"SHA256" is also an allowed digest type
 
 //DP_QC_EDICT_NUM
 //idea: 515
@@ -879,6 +915,31 @@ float GETTIME_CDTRACK = 4;
 //returns the playing time of the current cdtrack when passed to gettime()
 //see DP_END_GETSOUNDTIME for similar functionality but for entity sound channels
 
+//DP_QC_I18N
+//idea: divVerent
+//darkplaces implementation: divVerent
+//description:
+//
+//The engine supports translating by gettext compatible .po files.
+//progs.dat uses progs.dat.<LANGUAGE>.po
+//menu.dat uses menu.dat.<LANGUAGE>.po
+//csprogs.dat uses csprogs.dat.<LANGUAGE>.po
+//
+//To create a string that can be translated, define it as
+//  string dotranslate_FILENOTFOUND = "File not found";
+//Note: if the compiler does constant folding, this will only work if there is
+//no other "File not found" string in the progs!
+//
+//Alternatively, if using the Xonotic patched fteqcc compiler, you can simplify
+//this by using _("File not found") directly in the source code.
+//
+//The language is set by the "prvm_language" cvar: if prvm_language is set to
+//"de", it will read progs.dat.de.po for translating strings in progs.dat.
+//
+//If prvm_language is set to the special name "dump", progs.dat.pot will be
+//written, which is a translation template to be edited by filling out the
+//msgstr entries.
+
 //DP_QC_LOG
 //darkplaces implementation: divVerent
 //builtin definitions:
@@ -890,14 +951,14 @@ float log(float f) = #532;
 //idea: LordHavoc
 //darkplaces implementation: LordHavoc
 //builtin definitions:
-float(float a, float b) min = #94;
+float(float a, float b, ...) min = #94;
 float(float a, float b, float c) min3 = #94;
 float(float a, float b, float c, float d) min4 = #94;
 float(float a, float b, float c, float d, float e) min5 = #94;
 float(float a, float b, float c, float d, float e, float f) min6 = #94;
 float(float a, float b, float c, float d, float e, float f, float g) min7 = #94;
 float(float a, float b, float c, float d, float e, float f, float g, float h) min8 = #94;
-float(float a, float b) max = #95;
+float(float a, float b, ...) max = #95;
 float(float a, float b, float c) max3 = #95;
 float(float a, float b, float c, float d) max4 = #95;
 float(float a, float b, float c, float d, float e) max5 = #95;
@@ -974,7 +1035,9 @@ string(string format, ...) sprintf = #627;
 //    For conversions s and c, the flag # makes precision and width interpreted
 //      as byte count, by default it is interpreted as character count in UTF-8
 //      enabled engines. No other conversions can create wide characters, and #
-//      has another meaning in these.
+//      has another meaning in these. When in character count mode, color codes
+//      are ignored. To get UTF-8 semantics WITHOUT color code parsing, use
+//      the + flag.
 
 //DP_QC_STRFTIME
 //idea: LordHavoc
@@ -1206,10 +1269,40 @@ float(string name, string value) registercvar = #93;
 
 //DP_SND_FAKETRACKS
 //idea: requested
+
 //darkplaces implementation: Elric
 //description:
 //the engine plays sound/cdtracks/track001.wav instead of cd track 1 and so on if found, this allows games and mods to have music tracks without using ambientsound.
 //Note: also plays .ogg with DP_SND_OGGVORBIS extension.
+
+//DP_SND_SOUND7_WIP1
+//DP_SND_SOUND7_WIP2
+//idea: divVerent
+//darkplaces implementation: divVerent
+//builtin definitions:
+void(entity e, float chan, string samp, float vol, float atten, float speed, float flags) sound7 = #8;
+float SOUNDFLAG_RELIABLE = 1;
+//description:
+//plays a sound, with some more flags
+//extensions to sound():
+//- channel may be in the range from -128 to 127; channels -128 to 0 are "auto",
+//  i.e. support multiple sounds at once, but cannot be stopped/restarted
+//- a value 0 in the speed parameter means no change; otherwise, it is a
+//  percentage of playback speed ("pitch shifting"). 100 is normal pitch, 50 is
+//  half speed, 200 is double speed, etc. (DP_SND_SOUND7_WIP2)
+//- the flag SOUNDFLAG_RELIABLE can be specified, which makes the sound send
+//  to MSG_ALL (reliable) instead of MSG_BROADCAST (unreliable, default);
+//  similarily, SOUNDFLAG_RELIABLE_TO_ONE sends to MSG_ONE
+//- channel 0 is controlled by snd_channel0volume; channel 1 and -1 by
+//  snd_channel1volume, etc. (so, a channel shares the cvar with its respective
+//  auto-channel); however, the mod MUST define snd_channel8volume and upwards
+//  in default.cfg if they are to be used, as the engine does not create them
+//  to not litter the cvar list
+//- this extension applies to CSQC as well; CSQC_Event_Sound will get speed and
+//  flags as extra 7th and 8th argument
+//- WIP2 ideas: SOUNDFLAG_RELIABLE_TO_ONE, SOUNDFLAG_NOPHS, SOUNDFLAG_FORCELOOP
+//- NOTE: to check for this, ALSO OR a check with DP_SND_SOUND7 to also support
+//  the finished extension once done
 
 //DP_SND_OGGVORBIS
 //idea: Transfusion
@@ -1580,31 +1673,77 @@ void(float effectnum, vector org, vector vel, float howmany) pointparticles = #3
 //globals:
 //new movetypes:
 const float MOVETYPE_PHYSICS = 32; // need to be set before any physics_* builtins applied
-//new solid types:
+//new solid types (deprecated):
 const float SOLID_PHYSICS_BOX = 32;
 const float SOLID_PHYSICS_SPHERE = 33;
 const float SOLID_PHYSICS_CAPSULE = 34;
-//SOLID_BSP;
+const float SOLID_PHYSICS_TRIMESH = 35;
+const float SOLID_PHYSICS_CYLINDER = 36;
+//geometry types:
+const float GEOMTYPE_NONE = -1;       // entity will be entirely skipped by ODE
+const float GEOMTYPE_SOLID = 0;       // geometry type will be set based on .solid field
+const float GEOMTYPE_BOX = 1;         // entity bound box
+const float GEOMTYPE_SPHERE = 2;      // sphere with radius picked from x axis of entity bound box
+const float GEOMTYPE_CAPSULE = 3;     // with leading axis automatically determined from longest one, radius is picked as minimal of the rest 2 axes
+const float GEOMTYPE_TRIMESH = 4;     // triangle mesh
+const float GEOMTYPE_CYLINDER = 5;    // like capsule but not capped
+                                      // note that ODE's builtin cylinder support is experimental, somewhat bugged and unfinished (no cylinder-cylinder collision)
+									  // to use properly working cylinder should build ODE with LIBCCD extension
+const float GEOMTYPE_CAPSULE_X = 6;   // capsule with fixed leading axis
+const float GEOMTYPE_CAPSULE_Y = 7;
+const float GEOMTYPE_CAPSULE_Z = 8;
+const float GEOMTYPE_CYLINDER_X	= 9;  // cylinder with fixed leading axis
+const float GEOMTYPE_CYLINDER_Y	= 10;
+const float GEOMTYPE_CYLINDER_Z	= 11;
 //joint types:
+const float JOINTTYPE_NONE = 0;
 const float JOINTTYPE_POINT = 1;
 const float JOINTTYPE_HINGE = 2;
 const float JOINTTYPE_SLIDER = 3;
 const float JOINTTYPE_UNIVERSAL = 4;
 const float JOINTTYPE_HINGE2 = 5;
 const float JOINTTYPE_FIXED = -1;
+//force types:
+const float FORCETYPE_NONE = 0;
+const float FORCETYPE_FORCE = 1; // applied at center of mass
+const float FORCETYPE_FORCEATPOS = 2;
+const float FORCETYPE_TORQUE = 3;
+// common joint properties:
+// .entity aiment; // connected objects
+// .entity enemy; // connected objects, forces
+// .vector movedir;
+//   for a spring:
+//     movedir_x = spring constant (force multiplier, must be > 0)
+//     movedir_y = spring dampening constant to prevent oscillation (must be > 0)
+//     movedir_z = spring stop position (+/-)
+//   for a motor:
+//     movedir_x = desired motor velocity
+//     movedir_y = -1 * max motor force to use
+//     movedir_z = stop position (+/-), set to 0 for no stop
+//   note that ODE does not support both in one anyway
+//   for a force:
+//     force vector to apply
 //field definitions:
-.float mass; // ODE mass, standart value is 1
-.float bouncefactor;
-.float bouncestop;
-.float jointtype;
+.float  geomtype;     // see GEOMTYPE_*, a more correct way to set collision shape, allows to set SOLID_CORPSE and trimesh collisions
+.float  maxcontacts;  // maximum number of contacts to make for this object, lesser = faster (but setting it too low will could make object pass though walls), default is 16, maximum is 32
+.float  mass;         // ODE mass, standart value is 1
+.vector massofs;      // offsets a mass center out of object center, if not set a center of model bounds is used
+.float  friction;     // a friction of object, get multiplied by second objects's friction on contact
+.float  bouncefactor;
+.float  bouncestop; 
+.float  jointtype;    // type of joint
+.float  forcetype;    // type of force
+.float  erp;          // error restitution parameter, makes ODE solver attempt to fix errors in contacts, 
+                      // bringing together 2 joints or fixing object being stuch in other object, 
+			          // a value of 0.1 will fix slightly, a value of 1.0 attempts to fix whole error in one frame
+			          // use with care as high values makes system unstable and likely to explode
 //builtin definitions:
 void(entity e, float physics_enabled) physics_enable = #540; // enable or disable physics on object
-void(entity e, vector force, vector force_pos) physics_addforce = #541; // apply a force from certain origin, length of force vector is power of force
-void(entity e, vector torque) physics_addtorque = #542; // add relative torque
+void(entity e, vector force, vector force_pos) physics_addforce = #541; // deprecated, apply a force from certain origin, length of force vector is power of force
+void(entity e, vector torque) physics_addtorque = #542; // deprecated, add relative torque
 //description: provides Open Dynamics Engine support, requires extenal dll to be present or engine compiled with statical link option
-//be sure to checkextension for it to know if library i loaded and ready, also to enable physics set "physice_ode" cvar to 1
+//be sure to checkextension for it to know if library is loaded and ready, also to enable physics set "physics_ode" cvar to 1
 //note: this extension is highly experimental and may be unstable
-//note: use SOLID_BSP on entities to get a trimesh collision models on them
 
 //DP_SV_PRINT
 //idea: id Software (QuakeWorld Server)
@@ -2346,6 +2485,28 @@ void(float bufhandle, float string_index) bufstr_free = #469;
 //cvars that start with pattern but not with antipattern will be stored into the buffer
 void(float bufhandle, string pattern, string antipattern) buf_cvarlist = #517;
 
+//DP_QC_STRINGBUFFERS_EXT_WIP
+//idea: VorteX
+//darkplaces implementation: VorteX
+//constant definitions:
+const float MATCH_AUTO = 0;
+const float MATCH_WHOLE = 1;
+const float MATCH_LEFT = 2;
+const float MATCH_RIGHT = 3;
+const float MATCH_MIDDLE = 4;
+const float MATCH_PATTERN = 5;
+//builtin definitions:
+float(string filename, float bufhandle) buf_loadfile = #535; // append each line of file as new buffer string, return 1 if succesful
+float(float filehandle, float bufhandle, float startpos, float numstrings) buf_writefile = #536; // writes buffer strings as lines, returns 1 if succesful
+float(float bufhandle, string match, float matchrule, float startpos, float step) bufstr_find = #537; // returns string index
+float(string s, string pattern, float matchrule) matchpattern = #538; // returns 0/1
+float(string s, string pattern, float matchrule, float pos) matchpatternofs = #538;
+//description:
+//provides a set of functions to manipulate with string buffers
+//pattern wildcards: * - any character (or no characters), ? - any 1 character
+//Warning: This extension is work-in-progress, it may be changed/revamped/removed at any time, dont use it if you dont want any trouble
+//wip note: UTF8 is not supported yet
+
 //DP_QC_STRREPLACE
 //idea: Sajt
 //darkplaces implementation: Sajt
@@ -2355,13 +2516,6 @@ string(string search, string replace, string subject) strireplace = #485;
 //description:
 //strreplace replaces all occurrences of 'search' with 'replace' in the string 'subject', and returns the result as a tempstring.
 //strireplace does the same but uses case-insensitive matching of the 'search' term
-//
-//DP_QC_CRC16
-//idea: divVerent
-//darkplaces implementation: divVerent
-//Some hash function to build hash tables with. This has to be be the CRC-16-CCITT that is also required for the QuakeWorld download protocol.
-//When caseinsensitive is set, the CRC is calculated of the lower cased string.
-float(float caseinsensitive, string s, ...) crc16 = #494;
 
 //DP_SV_SHUTDOWN
 //idea: divVerent
@@ -2392,38 +2546,6 @@ void(float pause) setpause = #531;
 
 
 // EXPERIMENTAL (not finalized) EXTENSIONS:
-
-//DP_PHYSICS
-//idea: LordHavoc
-//darkplaces implementation: LordHavoc, divVerent
-//constant definitions:
-float SOLID_PHYSICS_BOX = 32;
-float SOLID_PHYSICS_SPHERE = 33;
-float SOLID_PHYSICS_CAPSULE = 34;
-float MOVETYPE_PHYSICS = 32;
-float JOINTTYPE_POINT = 1; // point; uses origin (anchor)
-float JOINTTYPE_HINGE = 2; // hinge; uses origin (anchor) and angles (axis)
-float JOINTTYPE_SLIDER = 3; // slider; uses angles (axis)
-float JOINTTYPE_UNIVERSAL = 4; // universal; uses origin (anchor) and angles (forward is axis1, up is axis2)
-float JOINTTYPE_HINGE2 = 5; // hinge2; uses origin (anchor), angles (axis1), velocity (axis2)
-//field definitions:
-.float mass;
-.float jointtype; // see JOINTTYPE_ definitions above
-// common joint properties:
-// .entity aiment, enemy; // connected objects
-// .vector movedir;
-//   for a spring:
-//     movedir_x = spring constant (force multiplier, must be > 0)
-//     movedir_y = spring dampening constant to prevent oscillation (must be > 0)
-//     movedir_z = spring stop position (+/-)
-//   for a motor:
-//     movedir_x = desired motor velocity
-//     movedir_y = -1 * max motor force to use
-//     movedir_z = stop position (+/-), set to 0 for no stop
-//   note that ODE does not support both in one anyway
-//description:
-//various physics properties can be defined in an entity and are executed via
-//ODE
 
 //DP_CRYPTO
 //idea: divVerent

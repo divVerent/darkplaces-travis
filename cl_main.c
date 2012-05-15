@@ -21,7 +21,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "cl_collision.h"
-#include "cl_gecko.h"
 #include "cl_video.h"
 #include "image.h"
 #include "csprogs.h"
@@ -35,9 +34,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 cvar_t csqc_progname = {0, "csqc_progname","csprogs.dat","name of csprogs.dat file to load"};
 cvar_t csqc_progcrc = {CVAR_READONLY, "csqc_progcrc","-1","CRC of csprogs.dat file to load (-1 is none), only used during level changes and then reset to -1"};
 cvar_t csqc_progsize = {CVAR_READONLY, "csqc_progsize","-1","file size of csprogs.dat file to load (-1 is none), only used during level changes and then reset to -1"};
+cvar_t csqc_usedemoprogs = {0, "csqc_usedemoprogs","1","use csprogs stored in demos"};
 
 cvar_t cl_shownet = {0, "cl_shownet","0","1 = print packet size, 2 = print packet message list"};
 cvar_t cl_nolerp = {0, "cl_nolerp", "0","network update smoothing"};
+cvar_t cl_lerpexcess = {0, "cl_lerpexcess", "0","maximum allowed lerp excess (hides, not fixes, some packet loss)"};
 cvar_t cl_lerpanim_maxdelta_server = {0, "cl_lerpanim_maxdelta_server", "0.1","maximum frame delta for smoothing between server-controlled animation frames (when 0, one network frame)"};
 cvar_t cl_lerpanim_maxdelta_framegroups = {0, "cl_lerpanim_maxdelta_framegroups", "0.1","maximum frame delta for smoothing between framegroups (when 0, one network frame)"};
 
@@ -103,7 +104,6 @@ CL_ClearState
 
 =====================
 */
-void CL_VM_ShutDown (void);
 void CL_ClearState(void)
 {
 	int i;
@@ -215,6 +215,7 @@ void CL_SetInfo(const char *key, const char *value, qboolean send, qboolean allo
 {
 	int i;
 	qboolean fail = false;
+	char vabuf[1024];
 	if (!allowstarkey && key[0] == '*')
 		fail = true;
 	if (!allowmodel && (!strcasecmp(key, "pmodel") || !strcasecmp(key, "emodel")))
@@ -237,22 +238,22 @@ void CL_SetInfo(const char *key, const char *value, qboolean send, qboolean allo
 		if (cls.protocol == PROTOCOL_QUAKEWORLD)
 		{
 			MSG_WriteByte(&cls.netcon->message, qw_clc_stringcmd);
-			MSG_WriteString(&cls.netcon->message, va("setinfo \"%s\" \"%s\"", key, value));
+			MSG_WriteString(&cls.netcon->message, va(vabuf, sizeof(vabuf), "setinfo \"%s\" \"%s\"", key, value));
 		}
 		else if (!strcasecmp(key, "name"))
 		{
 			MSG_WriteByte(&cls.netcon->message, clc_stringcmd);
-			MSG_WriteString(&cls.netcon->message, va("name \"%s\"", value));
+			MSG_WriteString(&cls.netcon->message, va(vabuf, sizeof(vabuf), "name \"%s\"", value));
 		}
 		else if (!strcasecmp(key, "playermodel"))
 		{
 			MSG_WriteByte(&cls.netcon->message, clc_stringcmd);
-			MSG_WriteString(&cls.netcon->message, va("playermodel \"%s\"", value));
+			MSG_WriteString(&cls.netcon->message, va(vabuf, sizeof(vabuf), "playermodel \"%s\"", value));
 		}
 		else if (!strcasecmp(key, "playerskin"))
 		{
 			MSG_WriteByte(&cls.netcon->message, clc_stringcmd);
-			MSG_WriteString(&cls.netcon->message, va("playerskin \"%s\"", value));
+			MSG_WriteString(&cls.netcon->message, va(vabuf, sizeof(vabuf), "playerskin \"%s\"", value));
 		}
 		else if (!strcasecmp(key, "topcolor"))
 		{
@@ -265,7 +266,7 @@ void CL_SetInfo(const char *key, const char *value, qboolean send, qboolean allo
 		else if (!strcasecmp(key, "rate"))
 		{
 			MSG_WriteByte(&cls.netcon->message, clc_stringcmd);
-			MSG_WriteString(&cls.netcon->message, va("rate \"%s\"", value));
+			MSG_WriteString(&cls.netcon->message, va(vabuf, sizeof(vabuf), "rate \"%s\"", value));
 		}
 	}
 }
@@ -389,6 +390,7 @@ void CL_Disconnect(void)
 		cls.netcon = NULL;
 	}
 	cls.state = ca_disconnected;
+	cl.islocalgame = false;
 
 	cls.demoplayback = cls.timedemo = false;
 	cls.signon = 0;
@@ -434,9 +436,6 @@ void CL_EstablishConnection(const char *host, int firstarg)
 	// make sure the client ports are open before attempting to connect
 	NetConn_UpdateSockets();
 
-	// run a network frame
-	//NetConn_ClientFrame();SV_VM_Begin();NetConn_ServerFrame();SV_VM_End();
-
 	if (LHNETADDRESS_FromString(&cls.connect_address, host, 26000) && (cls.connect_mysocket = NetConn_ChooseClientSocketForAddress(&cls.connect_address)))
 	{
 		cls.connect_trying = true;
@@ -459,15 +458,6 @@ void CL_EstablishConnection(const char *host, int firstarg)
 		}
 
 		M_Update_Return_Reason("Trying to connect...");
-
-		// run several network frames to jump into the game quickly
-		//if (sv.active)
-		//{
-		//	NetConn_ClientFrame();SV_VM_Begin();NetConn_ServerFrame();SV_VM_End();
-		//	NetConn_ClientFrame();SV_VM_Begin();NetConn_ServerFrame();SV_VM_End();
-		//	NetConn_ClientFrame();SV_VM_Begin();NetConn_ServerFrame();SV_VM_End();
-		//	NetConn_ClientFrame();SV_VM_Begin();NetConn_ServerFrame();SV_VM_End();
-		//}
 	}
 	else
 	{
@@ -519,6 +509,8 @@ static void CL_ModelIndexList_f(void)
 	for (i = -MAX_MODELS;i < MAX_MODELS;i++)
 	{
 		model = CL_GetModelByIndex(i);
+		if (!model)
+			continue;
 		if(model->loaded || i == 1)
 			Con_Printf("%3i: %-30s %-8s %-10i\n", i, model->name, model->modeldatatypestring, model->surfmesh.num_triangles);
 		else
@@ -560,7 +552,7 @@ void CL_UpdateRenderEntity(entity_render_t *ent)
 	// update the inverse matrix for the renderer
 	Matrix4x4_Invert_Simple(&ent->inversematrix, &ent->matrix);
 	// update the animation blend state
-	VM_FrameBlendFromFrameGroupBlend(ent->frameblend, ent->framegroupblend, ent->model);
+	VM_FrameBlendFromFrameGroupBlend(ent->frameblend, ent->framegroupblend, ent->model, cl.time);
 	// we need the matrix origin to center the box
 	Matrix4x4_OriginFromMatrix(&ent->matrix, org);
 	// update entity->render.scale because the renderer needs it
@@ -628,7 +620,7 @@ static float CL_LerpPoint(void)
 	}
 
 	f = (cl.time - cl.mtime[1]) / (cl.mtime[0] - cl.mtime[1]);
-	return bound(0, f, 1);
+	return bound(0, f, 1 + cl_lerpexcess.value);
 }
 
 void CL_ClearTempEntities (void)
@@ -753,7 +745,7 @@ void CL_AllocLightFlash(entity_render_t *ent, matrix4x4_t *matrix, float radius,
 	dl->specularscale = specularscale;
 }
 
-void CL_DecayLightFlashes(void)
+static void CL_DecayLightFlashes(void)
 {
 	int i, oldmax;
 	dlight_t *dl;
@@ -853,7 +845,7 @@ void CL_RelinkLightFlashes(void)
 	}
 }
 
-void CL_AddQWCTFFlagModel(entity_t *player, int skin)
+static void CL_AddQWCTFFlagModel(entity_t *player, int skin)
 {
 	int frame = player->render.framegroupblend[0].frame;
 	float f;
@@ -907,14 +899,10 @@ void CL_AddQWCTFFlagModel(entity_t *player, int skin)
 	CL_UpdateRenderEntity(flagrender);
 }
 
-matrix4x4_t viewmodelmatrix;
+matrix4x4_t viewmodelmatrix_withbob;
+matrix4x4_t viewmodelmatrix_nobob;
 
 static const vec3_t muzzleflashorigin = {18, 0, 0};
-
-extern void V_DriftPitch(void);
-extern void V_FadeViewFlashs(void);
-extern void V_CalcViewBlend(void);
-extern void V_CalcRefdef(void);
 
 void CL_SetEntityColormapColors(entity_render_t *ent, int colormap)
 {
@@ -934,12 +922,12 @@ void CL_SetEntityColormapColors(entity_render_t *ent, int colormap)
 }
 
 // note this is a recursive function, recursionlimit should be 32 or so on the initial call
-void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolate)
+static void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolate)
 {
 	const matrix4x4_t *matrix;
 	matrix4x4_t blendmatrix, tempmatrix, matrix2;
 	int frame;
-	float origin[3], angles[3], lerp;
+	vec_t origin[3], angles[3], lerp;
 	entity_t *t;
 	entity_render_t *r;
 	//entity_persistent_t *p = &e->persistent;
@@ -1010,9 +998,9 @@ void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolat
 	{
 		// view-relative entity (guns and such)
 		if (e->render.effects & EF_NOGUNBOB)
-			matrix = &r_refdef.view.matrix; // really attached to view
+			matrix = &viewmodelmatrix_nobob; // really attached to view
 		else
-			matrix = &viewmodelmatrix; // attached to gun bob matrix
+			matrix = &viewmodelmatrix_withbob; // attached to gun bob matrix
 	}
 	else
 	{
@@ -1033,7 +1021,7 @@ void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolat
 		VectorCopy(cl.movement_origin, origin);
 		VectorSet(angles, 0, cl.viewangles[1], 0);
 	}
-	else if (interpolate && e->persistent.lerpdeltatime > 0 && (lerp = (cl.time - e->persistent.lerpstarttime) / e->persistent.lerpdeltatime) < 1)
+	else if (interpolate && e->persistent.lerpdeltatime > 0 && (lerp = (cl.time - e->persistent.lerpstarttime) / e->persistent.lerpdeltatime) < 1 + cl_lerpexcess.value)
 	{
 		// interpolate the origin and angles
 		lerp = max(0, lerp);
@@ -1098,7 +1086,17 @@ void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolat
 	}
 
 	// animation lerp
-	if (e->render.framegroupblend[0].frame == frame)
+	e->render.skeleton = NULL;
+	if (e->render.flags & RENDER_COMPLEXANIMATION)
+	{
+		e->render.framegroupblend[0] = e->state_current.framegroupblend[0];
+		e->render.framegroupblend[1] = e->state_current.framegroupblend[1];
+		e->render.framegroupblend[2] = e->state_current.framegroupblend[2];
+		e->render.framegroupblend[3] = e->state_current.framegroupblend[3];
+		if (e->state_current.skeletonobject.model && e->state_current.skeletonobject.relativetransforms)
+			e->render.skeleton = &e->state_current.skeletonobject;
+	}
+	else if (e->render.framegroupblend[0].frame == frame)
 	{
 		// update frame lerp fraction
 		e->render.framegroupblend[0].lerp = 1;
@@ -1176,6 +1174,8 @@ void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolat
 		e->render.flags |= RENDER_ADDITIVE;
 	if (e->render.effects & EF_DOUBLESIDED)
 		e->render.flags |= RENDER_DOUBLESIDED;
+	if (e->render.effects & EF_DYNAMICMODELLIGHT)
+		e->render.flags |= RENDER_DYNAMICMODELLIGHT;
 
 	// make the other useful stuff
 	e->render.allowdecals = true;
@@ -1183,7 +1183,7 @@ void CL_UpdateNetworkEntity(entity_t *e, int recursionlimit, qboolean interpolat
 }
 
 // creates light and trails from an entity
-void CL_UpdateNetworkEntityTrail(entity_t *e)
+static void CL_UpdateNetworkEntityTrail(entity_t *e)
 {
 	effectnameindex_t trailtype;
 	vec3_t origin;
@@ -1249,6 +1249,8 @@ void CL_UpdateNetworkEntityTrail(entity_t *e)
 	// do trails
 	if (e->render.flags & RENDER_GLOWTRAIL)
 		trailtype = EFFECT_TR_GLOWTRAIL;
+	if (e->state_current.traileffectnum)
+		trailtype = (effectnameindex_t)e->state_current.traileffectnum;
 	// check if a trail is allowed (it is not after a teleport for example)
 	if (trailtype && e->persistent.trail_allowed)
 	{
@@ -1259,7 +1261,8 @@ void CL_UpdateNetworkEntityTrail(entity_t *e)
 		if (len > 0)
 			len = 1.0f / len;
 		VectorScale(vel, len, vel);
-		CL_ParticleTrail(trailtype, 1, e->persistent.trail_origin, origin, vel, vel, e, e->state_current.glowcolor, false, true, NULL, NULL);
+		// pass time as count so that trails that are time based (such as an emitter) will emit properly as long as they don't use trailspacing
+		CL_ParticleTrail(trailtype, bound(0, cl.time - cl.oldtime, 0.1), e->persistent.trail_origin, origin, vel, vel, e, e->state_current.glowcolor, false, true, NULL, NULL);
 	}
 	// now that the entity has survived one trail update it is allowed to
 	// leave a real trail on later frames
@@ -1295,7 +1298,7 @@ void CL_UpdateViewEntities(void)
 CL_UpdateNetworkCollisionEntities
 ===============
 */
-void CL_UpdateNetworkCollisionEntities(void)
+static void CL_UpdateNetworkCollisionEntities(void)
 {
 	entity_t *ent;
 	int i;
@@ -1317,14 +1320,12 @@ void CL_UpdateNetworkCollisionEntities(void)
 	}
 }
 
-extern void R_DecalSystem_Reset(decalsystem_t *decalsystem);
-
 /*
 ===============
 CL_UpdateNetworkEntities
 ===============
 */
-void CL_UpdateNetworkEntities(void)
+static void CL_UpdateNetworkEntities(void)
 {
 	entity_t *ent;
 	int i;
@@ -1351,7 +1352,7 @@ void CL_UpdateNetworkEntities(void)
 	}
 }
 
-void CL_UpdateViewModel(void)
+static void CL_UpdateViewModel(void)
 {
 	entity_t *ent;
 	ent = &cl.viewent;
@@ -1386,12 +1387,13 @@ void CL_UpdateViewModel(void)
 }
 
 // note this is a recursive function, but it can never get in a runaway loop (because of the delayedlink flags)
-void CL_LinkNetworkEntity(entity_t *e)
+static void CL_LinkNetworkEntity(entity_t *e)
 {
 	effectnameindex_t trailtype;
 	vec3_t origin;
 	vec3_t dlightcolor;
 	vec_t dlightradius;
+	char vabuf[1024];
 
 	// skip inactive entities and world
 	if (!e->state_current.active || e == cl.entities)
@@ -1518,7 +1520,7 @@ void CL_LinkNetworkEntity(entity_t *e)
 	if ((e->state_current.lightpflags & PFLAGS_FULLDYNAMIC) && r_refdef.scene.numlights < MAX_DLIGHTS)
 	{
 		matrix4x4_t dlightmatrix;
-		float light[4];
+		vec4_t light;
 		VectorScale(e->state_current.light, (1.0f / 256.0f), light);
 		light[3] = e->state_current.light[3];
 		if (light[0] == 0 && light[1] == 0 && light[2] == 0)
@@ -1528,7 +1530,7 @@ void CL_LinkNetworkEntity(entity_t *e)
 		// FIXME: add ambient/diffuse/specular scales as an extension ontop of TENEBRAE_GFX_DLIGHTS?
 		Matrix4x4_Normalize(&dlightmatrix, &e->render.matrix);
 		Matrix4x4_Scale(&dlightmatrix, light[3], 1);
-		R_RTLight_Update(&r_refdef.scene.templights[r_refdef.scene.numlights], false, &dlightmatrix, light, e->state_current.lightstyle, e->state_current.skin > 0 ? va("cubemaps/%i", e->state_current.skin) : NULL, !(e->state_current.lightpflags & PFLAGS_NOSHADOW), (e->state_current.lightpflags & PFLAGS_CORONA) != 0, 0.25, 0, 1, 1, LIGHTFLAG_NORMALMODE | LIGHTFLAG_REALTIMEMODE);
+		R_RTLight_Update(&r_refdef.scene.templights[r_refdef.scene.numlights], false, &dlightmatrix, light, e->state_current.lightstyle, e->state_current.skin > 0 ? va(vabuf, sizeof(vabuf), "cubemaps/%i", e->state_current.skin) : NULL, !(e->state_current.lightpflags & PFLAGS_NOSHADOW), (e->state_current.lightpflags & PFLAGS_CORONA) != 0, 0.25, 0, 1, 1, LIGHTFLAG_NORMALMODE | LIGHTFLAG_REALTIMEMODE);
 		r_refdef.scene.lights[r_refdef.scene.numlights] = &r_refdef.scene.templights[r_refdef.scene.numlights];r_refdef.scene.numlights++;
 	}
 	// make the glow dlight
@@ -1546,6 +1548,8 @@ void CL_LinkNetworkEntity(entity_t *e)
 	// do trail light
 	if (e->render.flags & RENDER_GLOWTRAIL)
 		trailtype = EFFECT_TR_GLOWTRAIL;
+	if (e->state_current.traileffectnum)
+		trailtype = (effectnameindex_t)e->state_current.traileffectnum;
 	if (trailtype)
 		CL_ParticleTrail(trailtype, 1, origin, origin, vec3_origin, vec3_origin, NULL, e->state_current.glowcolor, true, false, NULL, NULL);
 
@@ -1557,7 +1561,7 @@ void CL_LinkNetworkEntity(entity_t *e)
 	//	Matrix4x4_Print(&e->render.matrix);
 }
 
-void CL_RelinkWorld(void)
+static void CL_RelinkWorld(void)
 {
 	entity_t *ent = &cl.entities[0];
 	// FIXME: this should be done at load
@@ -1596,7 +1600,7 @@ static void CL_RelinkStaticEntities(void)
 			e->render.flags |= RENDER_SHADOW;
 		VectorSet(e->render.colormod, 1, 1, 1);
 		VectorSet(e->render.glowmod, 1, 1, 1);
-		VM_FrameBlendFromFrameGroupBlend(e->render.frameblend, e->render.framegroupblend, e->render.model);
+		VM_FrameBlendFromFrameGroupBlend(e->render.frameblend, e->render.framegroupblend, e->render.model, cl.time);
 		e->render.allowdecals = true;
 		CL_UpdateRenderEntity(&e->render);
 		r_refdef.scene.entities[r_refdef.scene.numentities++] = &e->render;
@@ -1834,7 +1838,7 @@ static void CL_RelinkQWNails(void)
 	}
 }
 
-void CL_LerpPlayer(float frac)
+static void CL_LerpPlayer(float frac)
 {
 	int i;
 
@@ -2016,23 +2020,23 @@ For program optimization
 static void CL_TimeRefresh_f (void)
 {
 	int i;
-	float timestart, timedelta;
+	double timestart, timedelta;
 
 	r_refdef.scene.extraupdate = false;
 
-	timestart = Sys_DoubleTime();
+	timestart = Sys_DirtyTime();
 	for (i = 0;i < 128;i++)
 	{
 		Matrix4x4_CreateFromQuakeEntity(&r_refdef.view.matrix, r_refdef.view.origin[0], r_refdef.view.origin[1], r_refdef.view.origin[2], 0, i / 128.0 * 360.0, 0, 1);
 		r_refdef.view.quality = 1;
 		CL_UpdateScreen();
 	}
-	timedelta = Sys_DoubleTime() - timestart;
+	timedelta = Sys_DirtyTime() - timestart;
 
 	Con_Printf("%f seconds (%f fps)\n", timedelta, 128/timedelta);
 }
 
-void CL_AreaStats_f(void)
+static void CL_AreaStats_f(void)
 {
 	World_PrintAreaStats(&cl.world, "client");
 }
@@ -2072,7 +2076,7 @@ void CL_Locs_FindLocationName(char *buffer, size_t buffersize, vec3_t point)
 		dpsnprintf(buffer, buffersize, "LOC=%.0f:%.0f:%.0f", point[0], point[1], point[2]);
 }
 
-void CL_Locs_FreeNode(cl_locnode_t *node)
+static void CL_Locs_FreeNode(cl_locnode_t *node)
 {
 	cl_locnode_t **pointer, **next;
 	for (pointer = &cl.locnodes;*pointer;pointer = next)
@@ -2088,7 +2092,7 @@ void CL_Locs_FreeNode(cl_locnode_t *node)
 	Con_Printf("CL_Locs_FreeNode: no such node! (%p)\n", (void *)node);
 }
 
-void CL_Locs_AddNode(vec3_t mins, vec3_t maxs, const char *name)
+static void CL_Locs_AddNode(vec3_t mins, vec3_t maxs, const char *name)
 {
 	cl_locnode_t *node, **pointer;
 	int namelen;
@@ -2107,7 +2111,7 @@ void CL_Locs_AddNode(vec3_t mins, vec3_t maxs, const char *name)
 	*pointer = node;
 }
 
-void CL_Locs_Add_f(void)
+static void CL_Locs_Add_f(void)
 {
 	vec3_t mins, maxs;
 	if (Cmd_Argc() != 5 && Cmd_Argc() != 8)
@@ -2129,7 +2133,7 @@ void CL_Locs_Add_f(void)
 		CL_Locs_AddNode(mins, mins, Cmd_Argv(4));
 }
 
-void CL_Locs_RemoveNearest_f(void)
+static void CL_Locs_RemoveNearest_f(void)
 {
 	cl_locnode_t *loc;
 	loc = CL_Locs_FindNearest(r_refdef.view.origin);
@@ -2139,13 +2143,13 @@ void CL_Locs_RemoveNearest_f(void)
 		Con_Printf("no loc point or box found for your location\n");
 }
 
-void CL_Locs_Clear_f(void)
+static void CL_Locs_Clear_f(void)
 {
 	while (cl.locnodes)
 		CL_Locs_FreeNode(cl.locnodes);
 }
 
-void CL_Locs_Save_f(void)
+static void CL_Locs_Save_f(void)
 {
 	cl_locnode_t *loc;
 	qfile_t *outfile;
@@ -2404,6 +2408,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_anglespeedkey);
 	Cvar_RegisterVariable (&cl_shownet);
 	Cvar_RegisterVariable (&cl_nolerp);
+	Cvar_RegisterVariable (&cl_lerpexcess);
 	Cvar_RegisterVariable (&cl_lerpanim_maxdelta_server);
 	Cvar_RegisterVariable (&cl_lerpanim_maxdelta_framegroups);
 	Cvar_RegisterVariable (&cl_deathfade);
@@ -2484,8 +2489,4 @@ void CL_Init (void)
 	CL_Screen_Init();
 
 	CL_Video_Init();
-	CL_Gecko_Init();
 }
-
-
-

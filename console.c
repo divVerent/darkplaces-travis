@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <time.h>
 
 #include "quakedef.h"
+#include "thread.h"
 
 // for u8_encodech
 #include "ft2.h"
@@ -35,6 +36,7 @@ float con_cursorspeed = 4;
 int con_backscroll;
 
 conbuffer_t con;
+void *con_mutex = NULL;
 
 #define CON_LINES(i) CONBUFFER_LINES(&con, i)
 #define CON_LINES_LAST CONBUFFER_LINES_LAST(&con)
@@ -287,27 +289,9 @@ int ConBuffer_FindPrevLine(conbuffer_t *buf, int mask_must, int mask_mustnot, in
 	return -1;
 }
 
-int Con_FindNextLine(conbuffer_t *buf, int mask_must, int mask_mustnot, int start)
-{
-	int i;
-	for(i = start + 1; i < buf->lines_count; ++i)
-	{
-		con_lineinfo_t *l = &CONBUFFER_LINES(buf, i);
-
-		if((l->mask & mask_must) != mask_must)
-			continue;
-		if(l->mask & mask_mustnot)
-			continue;
-
-		return i;
-	}
-
-	return -1;
-}
-
 const char *ConBuffer_GetLine(conbuffer_t *buf, int i)
 {
-	static char copybuf[MAX_INPUTLINE];
+	static char copybuf[MAX_INPUTLINE]; // client only
 	con_lineinfo_t *l = &CONBUFFER_LINES(buf, i);
 	size_t sz = l->len+1 > sizeof(copybuf) ? sizeof(copybuf) : l->len+1;
 	strlcpy(copybuf, l->start, sz);
@@ -338,23 +322,13 @@ size_t logq_size = 0;
 
 void Log_ConPrint (const char *msg);
 //@}
-/*
-====================
-Log_DestBuffer_Init
-====================
-*/
 static void Log_DestBuffer_Init(void)
 {
 	memcpy(log_dest_buffer, "\377\377\377\377n", 5); // QW rcon print
 	log_dest_buffer_pos = 5;
 }
 
-/*
-====================
-Log_DestBuffer_Flush
-====================
-*/
-void Log_DestBuffer_Flush(void)
+static void Log_DestBuffer_Flush_NoLock(void)
 {
 	lhnetaddress_t log_dest_addr;
 	lhnetsocket_t *log_dest_socket;
@@ -390,12 +364,21 @@ void Log_DestBuffer_Flush(void)
 
 /*
 ====================
-Log_Timestamp
+Log_DestBuffer_Flush
 ====================
 */
-const char* Log_Timestamp (const char *desc)
+void Log_DestBuffer_Flush(void)
 {
-	static char timestamp [128];
+	if (con_mutex)
+		Thread_LockMutex(con_mutex);
+	Log_DestBuffer_Flush_NoLock();
+	if (con_mutex)
+		Thread_UnlockMutex(con_mutex);
+}
+
+static const char* Log_Timestamp (const char *desc)
+{
+	static char timestamp [128]; // init/shutdown only
 	time_t crt_time;
 #if _MSC_VER >= 1400
 	struct tm crt_tm;
@@ -422,13 +405,7 @@ const char* Log_Timestamp (const char *desc)
 	return timestamp;
 }
 
-
-/*
-====================
-Log_Open
-====================
-*/
-void Log_Open (void)
+static void Log_Open (void)
 {
 	if (logfile != NULL || log_file.string[0] == '\0')
 		return;
@@ -440,7 +417,6 @@ void Log_Open (void)
 		FS_Print (logfile, Log_Timestamp ("Log started"));
 	}
 }
-
 
 /*
 ====================
@@ -490,7 +466,7 @@ void Log_Start (void)
 					n = min(sizeof(log_dest_buffer) - log_dest_buffer_pos - 1, logq_ind - pos);
 					memcpy(log_dest_buffer + log_dest_buffer_pos, temp + pos, n);
 					log_dest_buffer_pos += n;
-					Log_DestBuffer_Flush();
+					Log_DestBuffer_Flush_NoLock();
 					pos += n;
 				}
 			}
@@ -596,6 +572,10 @@ Con_ToggleConsole_f
 */
 void Con_ToggleConsole_f (void)
 {
+	if (COM_CheckParm ("-noconsole"))
+		if (!(key_consoleactive & KEY_CONSOLEACTIVE_USER))
+			return; // only allow the key bind to turn off console
+
 	// toggle the 'user wants console' bit
 	key_consoleactive ^= KEY_CONSOLEACTIVE_USER;
 	Con_ClearNotify();
@@ -610,7 +590,8 @@ void Con_ClearNotify (void)
 {
 	int i;
 	for(i = 0; i < CON_LINES_COUNT; ++i)
-		CON_LINES(i).mask |= CON_MASK_HIDENOTIFY;
+		if(!(CON_LINES(i).mask & CON_MASK_CHAT))
+			CON_LINES(i).mask |= CON_MASK_HIDENOTIFY;
 }
 
 
@@ -619,12 +600,15 @@ void Con_ClearNotify (void)
 Con_MessageMode_f
 ================
 */
-void Con_MessageMode_f (void)
+static void Con_MessageMode_f (void)
 {
 	key_dest = key_message;
 	chat_mode = 0; // "say"
-	chat_bufferlen = 0;
-	chat_buffer[0] = 0;
+	if(Cmd_Argc() > 1)
+	{
+		dpsnprintf(chat_buffer, sizeof(chat_buffer), "%s ", Cmd_Args());
+		chat_bufferlen = strlen(chat_buffer);
+	}
 }
 
 
@@ -633,12 +617,15 @@ void Con_MessageMode_f (void)
 Con_MessageMode2_f
 ================
 */
-void Con_MessageMode2_f (void)
+static void Con_MessageMode2_f (void)
 {
 	key_dest = key_message;
 	chat_mode = 1; // "say_team"
-	chat_bufferlen = 0;
-	chat_buffer[0] = 0;
+	if(Cmd_Argc() > 1)
+	{
+		dpsnprintf(chat_buffer, sizeof(chat_buffer), "%s ", Cmd_Args());
+		chat_bufferlen = strlen(chat_buffer);
+	}
 }
 
 /*
@@ -646,7 +633,7 @@ void Con_MessageMode2_f (void)
 Con_CommandMode_f
 ================
 */
-void Con_CommandMode_f (void)
+static void Con_CommandMode_f (void)
 {
 	key_dest = key_message;
 	if(Cmd_Argc() > 1)
@@ -701,7 +688,7 @@ static void Con_Maps_f (void)
 		GetMapList("", NULL, 0);
 }
 
-void Con_ConDump_f (void)
+static void Con_ConDump_f (void)
 {
 	int i;
 	qfile_t *file;
@@ -716,17 +703,21 @@ void Con_ConDump_f (void)
 		Con_Printf("condump: unable to write file \"%s\"\n", Cmd_Argv(1));
 		return;
 	}
+	if (con_mutex) Thread_LockMutex(con_mutex);
 	for(i = 0; i < CON_LINES_COUNT; ++i)
 	{
 		FS_Write(file, CON_LINES(i).start, CON_LINES(i).len);
 		FS_Write(file, "\n", 1);
 	}
+	if (con_mutex) Thread_UnlockMutex(con_mutex);
 	FS_Close(file);
 }
 
 void Con_Clear_f (void)
 {
+	if (con_mutex) Thread_LockMutex(con_mutex);
 	ConBuffer_Clear(&con);
+	if (con_mutex) Thread_UnlockMutex(con_mutex);
 }
 
 /*
@@ -738,6 +729,8 @@ void Con_Init (void)
 {
 	con_linewidth = 80;
 	ConBuffer_Init(&con, CON_TEXTSIZE, CON_MAXLINES, zonemempool);
+	if (Thread_HasThreads())
+		con_mutex = Thread_CreateMutex();
 
 	// Allocate a log queue, this will be freed after configs are parsed
 	logq_size = MAX_INPUTLINE;
@@ -794,7 +787,10 @@ void Con_Init (void)
 
 void Con_Shutdown (void)
 {
+	if (con_mutex) Thread_LockMutex(con_mutex);
 	ConBuffer_Shutdown(&con);
+	if (con_mutex) Thread_UnlockMutex(con_mutex);
+	if (con_mutex) Thread_DestroyMutex(con_mutex);con_mutex = NULL;
 }
 
 /*
@@ -806,14 +802,14 @@ All console printing must go through this in order to be displayed
 If no console is visible, the notify window will pop up.
 ================
 */
-void Con_PrintToHistory(const char *txt, int mask)
+static void Con_PrintToHistory(const char *txt, int mask)
 {
 	// process:
 	//   \n goes to next line
 	//   \r deletes current line and makes a new one
 
 	static int cr_pending = 0;
-	static char buf[CON_TEXTSIZE];
+	static char buf[CON_TEXTSIZE]; // con_mutex
 	static int bufpos = 0;
 
 	if(!con.text) // FIXME uses a non-abstracted property of con
@@ -908,15 +904,18 @@ void Con_Rcon_Redirect_Init(lhnetsocket_t *sock, lhnetaddress_t *dest, qboolean 
 	rcon_redirect_bufferpos = 5;
 }
 
-void Con_Rcon_Redirect_Flush(void)
+static void Con_Rcon_Redirect_Flush(void)
 {
-	rcon_redirect_buffer[rcon_redirect_bufferpos] = 0;
-	if (rcon_redirect_proquakeprotocol)
+	if(rcon_redirect_sock)
 	{
-		// update the length in the packet header
-		StoreBigLong((unsigned char *)rcon_redirect_buffer, NETFLAG_CTL | (rcon_redirect_bufferpos & NETFLAG_LENGTH_MASK));
+		rcon_redirect_buffer[rcon_redirect_bufferpos] = 0;
+		if (rcon_redirect_proquakeprotocol)
+		{
+			// update the length in the packet header
+			StoreBigLong((unsigned char *)rcon_redirect_buffer, NETFLAG_CTL | (rcon_redirect_bufferpos & NETFLAG_LENGTH_MASK));
+		}
+		NetConn_Write(rcon_redirect_sock, rcon_redirect_buffer, rcon_redirect_bufferpos, rcon_redirect_dest);
 	}
-	NetConn_Write(rcon_redirect_sock, rcon_redirect_buffer, rcon_redirect_bufferpos, rcon_redirect_dest);
 	memcpy(rcon_redirect_buffer, "\377\377\377\377n", 5); // QW rcon print
 	rcon_redirect_bufferpos = 5;
 	rcon_redirect_proquakeprotocol = false;
@@ -941,7 +940,7 @@ Con_Rcon_AddChar
 ================
 */
 /// Adds a character to the rcon buffer.
-void Con_Rcon_AddChar(int c)
+static void Con_Rcon_AddChar(int c)
 {
 	if(log_dest_buffer_appending)
 		return;
@@ -962,7 +961,7 @@ void Con_Rcon_AddChar(int c)
 			Log_DestBuffer_Init();
 		log_dest_buffer[log_dest_buffer_pos++] = c;
 		if(log_dest_buffer_pos >= sizeof(log_dest_buffer) - 1) // minus one, to allow for terminating zero
-			Log_DestBuffer_Flush();
+			Log_DestBuffer_Flush_NoLock();
 	}
 	else
 		log_dest_buffer_pos = 0;
@@ -1046,6 +1045,9 @@ void Con_MaskPrint(int additionalmask, const char *msg)
 	static int mask = 0;
 	static int index = 0;
 	static char line[MAX_INPUTLINE];
+
+	if (con_mutex)
+		Thread_LockMutex(con_mutex);
 
 	for (;*msg;msg++)
 	{
@@ -1313,6 +1315,9 @@ void Con_MaskPrint(int additionalmask, const char *msg)
 			mask = 0;
 		}
 	}
+
+	if (con_mutex)
+		Thread_UnlockMutex(con_mutex);
 }
 
 /*
@@ -1411,7 +1416,7 @@ Modified by EvilTypeGuy eviltypeguy@qeradiant.com
 ================
 */
 extern cvar_t r_font_disable_freetype;
-void Con_DrawInput (void)
+static void Con_DrawInput (void)
 {
 	int		y;
 	int		i;
@@ -1450,7 +1455,8 @@ void Con_DrawInput (void)
 				int ofs = u8_bytelen(text + key_linepos, 1);
 				size_t len;
 				const char *curbuf;
-				curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len);
+				char charbuf16[16];
+				curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len, charbuf16);
 
 				if (curbuf)
 				{
@@ -1488,7 +1494,8 @@ void Con_DrawInput (void)
 			{
 				size_t len;
 				const char *curbuf;
-				curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len);
+				char charbuf16[16];
+				curbuf = u8_encodech(0xE000 + 11 + 130 * key_insert, &len, charbuf16);
 				memcpy(text, curbuf, len);
 				text[len] = 0;
 			}
@@ -1516,7 +1523,7 @@ typedef struct
 }
 con_text_info_t;
 
-float Con_WordWidthFunc(void *passthrough, const char *w, size_t *length, float maxWidth)
+static float Con_WordWidthFunc(void *passthrough, const char *w, size_t *length, float maxWidth)
 {
 	con_text_info_t *ti = (con_text_info_t *) passthrough;
 	if(w == NULL)
@@ -1530,13 +1537,13 @@ float Con_WordWidthFunc(void *passthrough, const char *w, size_t *length, float 
 		return DrawQ_TextWidth(w, *length, ti->fontsize, ti->fontsize, false, ti->font);
 	else
 	{
-		printf("Con_WordWidthFunc: can't get here (maxWidth should never be %f)\n", maxWidth);
+		Sys_PrintfToTerminal("Con_WordWidthFunc: can't get here (maxWidth should never be %f)\n", maxWidth);
 		// Note: this is NOT a Con_Printf, as it could print recursively
 		return 0;
 	}
 }
 
-int Con_CountLineFunc(void *passthrough, const char *line, size_t length, float width, qboolean isContinuation)
+static int Con_CountLineFunc(void *passthrough, const char *line, size_t length, float width, qboolean isContinuation)
 {
 	(void) passthrough;
 	(void) line;
@@ -1546,7 +1553,7 @@ int Con_CountLineFunc(void *passthrough, const char *line, size_t length, float 
 	return 1;
 }
 
-int Con_DisplayLineFunc(void *passthrough, const char *line, size_t length, float width, qboolean isContinuation)
+static int Con_DisplayLineFunc(void *passthrough, const char *line, size_t length, float width, qboolean isContinuation)
 {
 	con_text_info_t *ti = (con_text_info_t *) passthrough;
 
@@ -1567,7 +1574,7 @@ int Con_DisplayLineFunc(void *passthrough, const char *line, size_t length, floa
 	return 1;
 }
 
-int Con_DrawNotifyRect(int mask_must, int mask_mustnot, float maxage, float x, float y, float width, float height, float fontsize, float alignment_x, float alignment_y, const char *continuationString)
+static int Con_DrawNotifyRect(int mask_must, int mask_mustnot, float maxage, float x, float y, float width, float height, float fontsize, float alignment_x, float alignment_y, const char *continuationString)
 {
 	int i;
 	int lines = 0;
@@ -1658,6 +1665,7 @@ void Con_DrawNotify (void)
 	int numChatlines;
 	int chatpos;
 
+	if (con_mutex) Thread_LockMutex(con_mutex);
 	ConBuffer_FixTimes(&con);
 
 	numChatlines = con_chat.integer;
@@ -1732,7 +1740,8 @@ void Con_DrawNotify (void)
 		//static char *cursor[2] = { "\xee\x80\x8a", "\xee\x80\x8b" }; // { off, on }
 		int colorindex = -1;
 		const char *cursor;
-		cursor = u8_encodech(0xE00A + ((int)(realtime * con_cursorspeed)&1), NULL);
+		char charbuf16[16];
+		cursor = u8_encodech(0xE00A + ((int)(realtime * con_cursorspeed)&1), NULL, charbuf16);
 
 		// LordHavoc: speedup, and other improvements
 		if (chat_mode < 0)
@@ -1748,6 +1757,7 @@ void Con_DrawNotify (void)
 		x = min(xr, x);
 		DrawQ_String(x, v, temptext, 0, inputsize, inputsize, 1.0, 1.0, 1.0, 1.0, 0, &colorindex, false, FONT_CHAT);
 	}
+	if (con_mutex) Thread_UnlockMutex(con_mutex);
 }
 
 /*
@@ -1757,7 +1767,7 @@ Con_LineHeight
 Returns the height of a given console line; calculates it if necessary.
 ================
 */
-int Con_LineHeight(int lineno)
+static int Con_LineHeight(int lineno)
 {
 	con_lineinfo_t *li = &CON_LINES(lineno);
 	if(li->height == -1)
@@ -1781,7 +1791,7 @@ If alpha is 0, the line is not drawn, but still wrapped and its height
 returned.
 ================
 */
-int Con_DrawConsoleLine(int mask_must, int mask_mustnot, float y, int lineno, float ymin, float ymax)
+static int Con_DrawConsoleLine(int mask_must, int mask_mustnot, float y, int lineno, float ymin, float ymax)
 {
 	float width = vid_conwidth.value;
 	con_text_info_t ti;
@@ -1865,6 +1875,8 @@ void Con_DrawConsole (int lines)
 
 	if (lines <= 0)
 		return;
+
+	if (con_mutex) Thread_LockMutex(con_mutex);
 
 	if (con_backscroll < 0)
 		con_backscroll = 0;
@@ -1972,6 +1984,7 @@ void Con_DrawConsole (int lines)
 	Con_DrawInput ();
 
 	r_draw2d_force = false;
+	if (con_mutex) Thread_UnlockMutex(con_mutex);
 }
 
 /*
@@ -2044,11 +2057,10 @@ qboolean GetMapList (const char *s, char *completedname, int completednamebuffer
 					lumplen = LittleLong(header->lumps[Q2LUMP_ENTITIES].filelen);
 				}
 			}
-			else if((p = BuffLittleLong(buf)) == BSPVERSION || p == 30)
+			else if((p = BuffLittleLong(buf)) == BSPVERSION || p == 30 || !memcmp(buf, "BSP2", 4))
 			{
-				dheader_t *header = (dheader_t *)buf;
-				lumpofs = LittleLong(header->lumps[LUMP_ENTITIES].fileofs);
-				lumplen = LittleLong(header->lumps[LUMP_ENTITIES].filelen);
+				lumpofs = BuffLittleLong(buf + 4 + 8 * LUMP_ENTITIES);
+				lumplen = BuffLittleLong(buf + 4 + 8 * LUMP_ENTITIES + 4);
 			}
 			else
 				p = 0;
@@ -2070,7 +2082,7 @@ qboolean GetMapList (const char *s, char *completedname, int completednamebuffer
 				for (;;)
 				{
 					int l;
-					if (!COM_ParseToken_Simple(&data, false, false))
+					if (!COM_ParseToken_Simple(&data, false, false, true))
 						break;
 					if (com_token[0] == '{')
 						continue;
@@ -2081,7 +2093,7 @@ qboolean GetMapList (const char *s, char *completedname, int completednamebuffer
 					for (l = 0;l < (int)sizeof(keyname) - 1 && com_token[k+l] && !ISWHITESPACE(com_token[k+l]);l++)
 						keyname[l] = com_token[k+l];
 					keyname[l] = 0;
-					if (!COM_ParseToken_Simple(&data, false, false))
+					if (!COM_ParseToken_Simple(&data, false, false, true))
 						break;
 					if (developer_extra.integer)
 						Con_DPrintf("key: %s %s\n", keyname, com_token);
@@ -2174,7 +2186,7 @@ void Con_DisplayList(const char **list)
 	SanitizeString strips color tags from the string in
 	and writes the result on string out
 */
-void SanitizeString(char *in, char *out)
+static void SanitizeString(char *in, char *out)
 {
 	while(*in)
 	{
@@ -2229,7 +2241,7 @@ static int Nicks_offset[MAX_SCOREBOARD]; // when nicks use a space, we need this
 static int Nicks_matchpos;
 
 // co against <<:BLASTER:>> is true!?
-int Nicks_strncasecmp_nospaces(char *a, char *b, unsigned int a_len)
+static int Nicks_strncasecmp_nospaces(char *a, char *b, unsigned int a_len)
 {
 	while(a_len)
 	{
@@ -2255,7 +2267,7 @@ int Nicks_strncasecmp_nospaces(char *a, char *b, unsigned int a_len)
 	}
 	return 0;
 }
-int Nicks_strncasecmp(char *a, char *b, unsigned int a_len)
+static int Nicks_strncasecmp(char *a, char *b, unsigned int a_len)
 {
 	char space_char;
 	if(!(con_nickcompletion_flags.integer & NICKS_ALPHANUMERICS_ONLY))
@@ -2306,7 +2318,7 @@ int Nicks_strncasecmp(char *a, char *b, unsigned int a_len)
 
    Count the number of possible nicks to complete
  */
-int Nicks_CompleteCountPossible(char *line, int pos, char *s, qboolean isCon)
+static int Nicks_CompleteCountPossible(char *line, int pos, char *s, qboolean isCon)
 {
 	char name[128];
 	int i, p;
@@ -2373,14 +2385,14 @@ int Nicks_CompleteCountPossible(char *line, int pos, char *s, qboolean isCon)
 	return count;
 }
 
-void Cmd_CompleteNicksPrint(int count)
+static void Cmd_CompleteNicksPrint(int count)
 {
 	int i;
 	for(i = 0; i < count; ++i)
 		Con_Printf("%s\n", Nicks_list[i]);
 }
 
-void Nicks_CutMatchesNormal(int count)
+static void Nicks_CutMatchesNormal(int count)
 {
 	// cut match 0 down to the longest possible completion
 	int i;
@@ -2403,7 +2415,7 @@ void Nicks_CutMatchesNormal(int count)
 	//Con_Printf("List0: %s\n", Nicks_sanlist[0]);
 }
 
-unsigned int Nicks_strcleanlen(const char *s)
+static unsigned int Nicks_strcleanlen(const char *s)
 {
 	unsigned int l = 0;
 	while(*s)
@@ -2418,7 +2430,7 @@ unsigned int Nicks_strcleanlen(const char *s)
 	return l;
 }
 
-void Nicks_CutMatchesAlphaNumeric(int count)
+static void Nicks_CutMatchesAlphaNumeric(int count)
 {
 	// cut match 0 down to the longest possible completion
 	int i;
@@ -2473,11 +2485,11 @@ void Nicks_CutMatchesAlphaNumeric(int count)
 	if(Nicks_strcleanlen(Nicks_sanlist[0]) < strlen(tempstr))
 	{
 		// if the clean sanitized one is longer than the current one, use it, it has crap chars which definitely are in there
-		strlcpy(Nicks_sanlist[0], tempstr, sizeof(tempstr));
+		strlcpy(Nicks_sanlist[0], tempstr, sizeof(Nicks_sanlist[0]));
 	}
 }
 
-void Nicks_CutMatchesNoSpaces(int count)
+static void Nicks_CutMatchesNoSpaces(int count)
 {
 	// cut match 0 down to the longest possible completion
 	int i;
@@ -2529,11 +2541,11 @@ void Nicks_CutMatchesNoSpaces(int count)
 	if(Nicks_strcleanlen(Nicks_sanlist[0]) < strlen(tempstr))
 	{
 		// if the clean sanitized one is longer than the current one, use it, it has crap chars which definitely are in there
-		strlcpy(Nicks_sanlist[0], tempstr, sizeof(tempstr));
+		strlcpy(Nicks_sanlist[0], tempstr, sizeof(Nicks_sanlist[0]));
 	}
 }
 
-void Nicks_CutMatches(int count)
+static void Nicks_CutMatches(int count)
 {
 	if(con_nickcompletion_flags.integer & NICKS_ALPHANUMERICS_ONLY)
 		Nicks_CutMatchesAlphaNumeric(count);
@@ -2543,7 +2555,7 @@ void Nicks_CutMatches(int count)
 		Nicks_CutMatchesNormal(count);
 }
 
-const char **Nicks_CompleteBuildList(int count)
+static const char **Nicks_CompleteBuildList(int count)
 {
 	const char **buf;
 	int bpos = 0;
@@ -2563,7 +2575,7 @@ const char **Nicks_CompleteBuildList(int count)
 	Nicks_AddLastColor
 	Restores the previous used color, after the autocompleted name.
 */
-int Nicks_AddLastColor(char *buffer, int pos)
+static int Nicks_AddLastColor(char *buffer, int pos)
 {
 	qboolean quote_added = false;
 	int match;
@@ -2684,6 +2696,7 @@ void Con_CompleteCommandLine (void)
 	int c, v, a, i, cmd_len, pos, k;
 	int n; // nicks --blub
 	const char *space, *patterns;
+	char vabuf[1024];
 
 	//find what we want to complete
 	pos = key_linepos;
@@ -2704,7 +2717,7 @@ void Con_CompleteCommandLine (void)
 	{
 		strlcpy(command, key_line + 1, min(sizeof(command), (unsigned int)(space - key_line)));
 
-		patterns = Cvar_VariableString(va("con_completion_%s", command)); // TODO maybe use a better place for this?
+		patterns = Cvar_VariableString(va(vabuf, sizeof(vabuf), "con_completion_%s", command)); // TODO maybe use a better place for this?
 		if(patterns && !*patterns)
 			patterns = NULL; // get rid of the empty string
 
@@ -2756,7 +2769,7 @@ void Con_CompleteCommandLine (void)
 
 				stringlistinit(&resultbuf);
 				stringlistinit(&dirbuf);
-				while(COM_ParseToken_Simple(&patterns, false, false))
+				while(COM_ParseToken_Simple(&patterns, false, false, true))
 				{
 					fssearch_t *search;
 					if(strchr(com_token, '/'))
@@ -2822,7 +2835,7 @@ void Con_CompleteCommandLine (void)
 					}
 					else
 					{
-						stringlistsort(&resultbuf); // dirbuf is already sorted
+						stringlistsort(&resultbuf, true); // dirbuf is already sorted
 						Con_Printf("\n%i possible filenames\n", resultbuf.numstrings + dirbuf.numstrings);
 						for(i = 0; i < dirbuf.numstrings; ++i)
 						{

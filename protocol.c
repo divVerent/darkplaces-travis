@@ -7,14 +7,7 @@
 	if(developer_networkentities.integer >= 2) \
 	{ \
 		prvm_edict_t *ed = prog->edicts + num; \
-		const char *cname = "(no classname)"; \
-		if(prog->fieldoffsets.classname >= 0) \
-		{ \
-			string_t handle =  PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.classname)->string; \
-			if (handle) \
-				cname = PRVM_GetString(handle); \
-		} \
-		Con_Printf("sent entity update of size %d for a %s\n", (msg->cursize - entityprofiling_startsize), cname); \
+		Con_Printf("sent entity update of size %d for a %s\n", (msg->cursize - entityprofiling_startsize), PRVM_serveredictstring(ed, classname) ? PRVM_GetString(prog, PRVM_serveredictstring(ed, classname)) : "(no classname)"); \
 	}
 
 // this is 88 bytes (must match entity_state_t in protocol.h)
@@ -36,6 +29,7 @@ entity_state_t defaultstate =
 	0,//unsigned short exteriormodelforclient; // ! not shown if first person viewing from this entity, shown in all other cases
 	0,//unsigned short nodrawtoclient; // !
 	0,//unsigned short drawonlytoclient; // !
+	0,//unsigned short traileffectnum;
 	{0,0,0,0},//unsigned short light[4]; // color*256 (0.00 to 255.996), and radius*1
 	ACTIVE_NOT,//unsigned char active; // true if a valid state
 	0,//unsigned char lightstyle;
@@ -137,18 +131,18 @@ void EntityFrameQuake_ReadEntity(int bits)
 	entity_state_t s;
 
 	if (bits & U_MOREBITS)
-		bits |= (MSG_ReadByte()<<8);
+		bits |= (MSG_ReadByte(&cl_message)<<8);
 	if ((bits & U_EXTEND1) && cls.protocol != PROTOCOL_NEHAHRAMOVIE)
 	{
-		bits |= MSG_ReadByte() << 16;
+		bits |= MSG_ReadByte(&cl_message) << 16;
 		if (bits & U_EXTEND2)
-			bits |= MSG_ReadByte() << 24;
+			bits |= MSG_ReadByte(&cl_message) << 24;
 	}
 
 	if (bits & U_LONGENTITY)
-		num = (unsigned short) MSG_ReadShort ();
+		num = (unsigned short) MSG_ReadShort(&cl_message);
 	else
-		num = MSG_ReadByte ();
+		num = MSG_ReadByte(&cl_message);
 
 	if (num >= MAX_EDICTS)
 		Host_Error("EntityFrameQuake_ReadEntity: entity number (%i) >= MAX_EDICTS (%i)", num, MAX_EDICTS);
@@ -184,30 +178,30 @@ void EntityFrameQuake_ReadEntity(int bits)
 	if (bits & U_MODEL)
 	{
 		if (cls.protocol == PROTOCOL_NEHAHRABJP || cls.protocol == PROTOCOL_NEHAHRABJP2 || cls.protocol == PROTOCOL_NEHAHRABJP3)
-							s.modelindex = (unsigned short) MSG_ReadShort();
+							s.modelindex = (unsigned short) MSG_ReadShort(&cl_message);
 		else
-							s.modelindex = (s.modelindex & 0xFF00) | MSG_ReadByte();
+							s.modelindex = (s.modelindex & 0xFF00) | MSG_ReadByte(&cl_message);
 	}
-	if (bits & U_FRAME)		s.frame = (s.frame & 0xFF00) | MSG_ReadByte();
-	if (bits & U_COLORMAP)	s.colormap = MSG_ReadByte();
-	if (bits & U_SKIN)		s.skin = MSG_ReadByte();
-	if (bits & U_EFFECTS)	s.effects = (s.effects & 0xFF00) | MSG_ReadByte();
-	if (bits & U_ORIGIN1)	s.origin[0] = MSG_ReadCoord(cls.protocol);
-	if (bits & U_ANGLE1)	s.angles[0] = MSG_ReadAngle(cls.protocol);
-	if (bits & U_ORIGIN2)	s.origin[1] = MSG_ReadCoord(cls.protocol);
-	if (bits & U_ANGLE2)	s.angles[1] = MSG_ReadAngle(cls.protocol);
-	if (bits & U_ORIGIN3)	s.origin[2] = MSG_ReadCoord(cls.protocol);
-	if (bits & U_ANGLE3)	s.angles[2] = MSG_ReadAngle(cls.protocol);
+	if (bits & U_FRAME)		s.frame = (s.frame & 0xFF00) | MSG_ReadByte(&cl_message);
+	if (bits & U_COLORMAP)	s.colormap = MSG_ReadByte(&cl_message);
+	if (bits & U_SKIN)		s.skin = MSG_ReadByte(&cl_message);
+	if (bits & U_EFFECTS)	s.effects = (s.effects & 0xFF00) | MSG_ReadByte(&cl_message);
+	if (bits & U_ORIGIN1)	s.origin[0] = MSG_ReadCoord(&cl_message, cls.protocol);
+	if (bits & U_ANGLE1)	s.angles[0] = MSG_ReadAngle(&cl_message, cls.protocol);
+	if (bits & U_ORIGIN2)	s.origin[1] = MSG_ReadCoord(&cl_message, cls.protocol);
+	if (bits & U_ANGLE2)	s.angles[1] = MSG_ReadAngle(&cl_message, cls.protocol);
+	if (bits & U_ORIGIN3)	s.origin[2] = MSG_ReadCoord(&cl_message, cls.protocol);
+	if (bits & U_ANGLE3)	s.angles[2] = MSG_ReadAngle(&cl_message, cls.protocol);
 	if (bits & U_STEP)		s.flags |= RENDER_STEP;
-	if (bits & U_ALPHA)		s.alpha = MSG_ReadByte();
-	if (bits & U_SCALE)		s.scale = MSG_ReadByte();
-	if (bits & U_EFFECTS2)	s.effects = (s.effects & 0x00FF) | (MSG_ReadByte() << 8);
-	if (bits & U_GLOWSIZE)	s.glowsize = MSG_ReadByte();
-	if (bits & U_GLOWCOLOR)	s.glowcolor = MSG_ReadByte();
-	if (bits & U_COLORMOD)	{int c = MSG_ReadByte();s.colormod[0] = (unsigned char)(((c >> 5) & 7) * (32.0f / 7.0f));s.colormod[1] = (unsigned char)(((c >> 2) & 7) * (32.0f / 7.0f));s.colormod[2] = (unsigned char)((c & 3) * (32.0f / 3.0f));}
+	if (bits & U_ALPHA)		s.alpha = MSG_ReadByte(&cl_message);
+	if (bits & U_SCALE)		s.scale = MSG_ReadByte(&cl_message);
+	if (bits & U_EFFECTS2)	s.effects = (s.effects & 0x00FF) | (MSG_ReadByte(&cl_message) << 8);
+	if (bits & U_GLOWSIZE)	s.glowsize = MSG_ReadByte(&cl_message);
+	if (bits & U_GLOWCOLOR)	s.glowcolor = MSG_ReadByte(&cl_message);
+	if (bits & U_COLORMOD)	{int c = MSG_ReadByte(&cl_message);s.colormod[0] = (unsigned char)(((c >> 5) & 7) * (32.0f / 7.0f));s.colormod[1] = (unsigned char)(((c >> 2) & 7) * (32.0f / 7.0f));s.colormod[2] = (unsigned char)((c & 3) * (32.0f / 3.0f));}
 	if (bits & U_GLOWTRAIL) s.flags |= RENDER_GLOWTRAIL;
-	if (bits & U_FRAME2)	s.frame = (s.frame & 0x00FF) | (MSG_ReadByte() << 8);
-	if (bits & U_MODEL2)	s.modelindex = (s.modelindex & 0x00FF) | (MSG_ReadByte() << 8);
+	if (bits & U_FRAME2)	s.frame = (s.frame & 0x00FF) | (MSG_ReadByte(&cl_message) << 8);
+	if (bits & U_MODEL2)	s.modelindex = (s.modelindex & 0x00FF) | (MSG_ReadByte(&cl_message) << 8);
 	if (bits & U_VIEWMODEL)	s.flags |= RENDER_VIEWMODEL;
 	if (bits & U_EXTERIORMODEL)	s.flags |= RENDER_EXTERIORMODEL;
 
@@ -215,11 +209,11 @@ void EntityFrameQuake_ReadEntity(int bits)
 	if (cls.protocol == PROTOCOL_NEHAHRAMOVIE && (bits & U_EXTEND1))
 	{
 		// LordHavoc: evil format
-		int i = (int)MSG_ReadFloat();
-		int j = (int)(MSG_ReadFloat() * 255.0f);
+		int i = (int)MSG_ReadFloat(&cl_message);
+		int j = (int)(MSG_ReadFloat(&cl_message) * 255.0f);
 		if (i == 2)
 		{
-			i = (int)MSG_ReadFloat();
+			i = (int)MSG_ReadFloat(&cl_message);
 			if (i)
 				s.effects |= EF_FULLBRIGHT;
 		}
@@ -239,7 +233,7 @@ void EntityFrameQuake_ReadEntity(int bits)
 		cl.entities_active[ent->state_current.number] = true;
 	}
 
-	if (msg_badread)
+	if (cl_message.badread)
 		Host_Error("EntityFrameQuake_ReadEntity: read error");
 }
 
@@ -276,14 +270,11 @@ void EntityFrameQuake_ISeeDeadEntities(void)
 // Always use the DP5 protocol, or a higher one, when using CSQC entities.
 static void EntityFrameCSQC_LostAllFrames(client_t *client)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	// mark ALL csqc entities as requiring a FULL resend!
 	// I know this is a bad workaround, but better than nothing.
 	int i, n;
-	prvm_eval_t *val;
 	prvm_edict_t *ed;
-
-	if(prog->fieldoffsets.SendEntity < 0 || prog->fieldoffsets.Version < 0)
-		return;
 
 	n = client->csqcnumedicts;
 	for(i = 0; i < n; ++i)
@@ -291,8 +282,7 @@ static void EntityFrameCSQC_LostAllFrames(client_t *client)
 		if(client->csqcentityglobalhistory[i])
 		{
 			ed = prog->edicts + i;
-			val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.SendEntity);
-			if (val->function)
+			if (PRVM_serveredictfunction(ed, SendEntity))
 				client->csqcentitysendflags[i] |= 0xFFFFFF; // FULL RESEND
 			else // if it was ever sent to that client as a CSQC entity
 			{
@@ -308,7 +298,7 @@ void EntityFrameCSQC_LostFrame(client_t *client, int framenum)
 	int i, j;
 	qboolean valid;
 	int ringfirst, ringlast;
-	static int recoversendflags[MAX_EDICTS];
+	static int recoversendflags[MAX_EDICTS]; // client only
 	csqcentityframedb_t *d;
 
 	if(client->csqcentityframe_lastreset < 0)
@@ -443,11 +433,11 @@ static void EntityFrameCSQC_DeallocFrame(client_t *client, int framenum)
 // amounts of csqc networked entities
 qboolean EntityFrameCSQC_WriteFrame (sizebuf_t *msg, int maxsize, int numnumbers, const unsigned short *numbers, int framenum)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	int num, number, end, sendflags;
 	qboolean sectionstarted = false;
 	const unsigned short *n;
 	prvm_edict_t *ed;
-	prvm_eval_t *val;
 	client_t *client = svs.clients + sv.writeentitiestoclient_clientnumber;
 	int dbframe = EntityFrameCSQC_AllocFrame(client, framenum);
 	csqcentityframedb_t *db = &client->csqcentityframehistory[dbframe];
@@ -456,10 +446,6 @@ qboolean EntityFrameCSQC_WriteFrame (sizebuf_t *msg, int maxsize, int numnumbers
 		client->csqcentityframe_lastreset = framenum;
 
 	maxsize -= 24; // always fit in an empty svc_entities message (for packet loss detection!)
-
-	// if this server progs is not CSQC-aware, return early
-	if(prog->fieldoffsets.SendEntity < 0 || prog->fieldoffsets.Version < 0)
-		return false;
 
 	// make sure there is enough room to store the svc_csqcentities byte,
 	// the terminator (0x0000) and at least one entity update
@@ -482,8 +468,7 @@ qboolean EntityFrameCSQC_WriteFrame (sizebuf_t *msg, int maxsize, int numnumbers
 			}
 		}
 		ed = prog->edicts + number;
-		val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.SendEntity);
-		if (val->function)
+		if (PRVM_serveredictfunction(ed, SendEntity))
 			client->csqcentityscope[number] = 2;
 		else if (client->csqcentityscope[number])
 		{
@@ -512,8 +497,7 @@ qboolean EntityFrameCSQC_WriteFrame (sizebuf_t *msg, int maxsize, int numnumbers
 	{
 		number = *n;
 		ed = prog->edicts + number;
-		val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.SendEntity);
-		if (val->function)
+		if (PRVM_serveredictfunction(ed, SendEntity))
 			client->csqcentityscope[number] = 2;
 	}
 	*/
@@ -562,8 +546,7 @@ qboolean EntityFrameCSQC_WriteFrame (sizebuf_t *msg, int maxsize, int numnumbers
 			// save the cursize value in case we overflow and have to rollback
 			int oldcursize = msg->cursize;
 			client->csqcentityscope[number] = 1;
-			val = PRVM_EDICTFIELDVALUE(ed, prog->fieldoffsets.SendEntity);
-			if (val->function)
+			if (PRVM_serveredictfunction(ed, SendEntity))
 			{
 				if(!sectionstarted)
 					MSG_WriteByte(msg, svc_csqcentities);
@@ -573,8 +556,8 @@ qboolean EntityFrameCSQC_WriteFrame (sizebuf_t *msg, int maxsize, int numnumbers
 					msg->allowoverflow = true;
 					PRVM_G_INT(OFS_PARM0) = sv.writeentitiestoclient_cliententitynumber;
 					PRVM_G_FLOAT(OFS_PARM1) = sendflags;
-					prog->globals.server->self = number;
-					PRVM_ExecuteProgram(val->function, "Null SendEntity\n");
+					PRVM_serverglobaledict(self) = number;
+					prog->ExecuteProgram(prog, PRVM_serveredictfunction(ed, SendEntity), "Null SendEntity\n");
 					msg->allowoverflow = false;
 					if(PRVM_G_FLOAT(OFS_RETURN) && msg->cursize + 2 <= maxsize)
 					{
@@ -696,12 +679,12 @@ void Protocol_WriteStatsReliable(void)
 
 qboolean EntityFrameQuake_WriteFrame(sizebuf_t *msg, int maxsize, int numstates, const entity_state_t **states)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	const entity_state_t *s;
 	entity_state_t baseline;
 	int i, bits;
 	sizebuf_t buf;
 	unsigned char data[128];
-	prvm_eval_t *val;
 	qboolean success = false;
 
 	// prepare the buffer
@@ -713,8 +696,7 @@ qboolean EntityFrameQuake_WriteFrame(sizebuf_t *msg, int maxsize, int numstates,
 	{
 		ENTITYSIZEPROFILING_START(msg, states[i]->number);
 		s = states[i];
-		val = PRVM_EDICTFIELDVALUE((&prog->edicts[s->number]), prog->fieldoffsets.SendEntity);
-		if(val && val->function)
+		if(PRVM_serveredictfunction((&prog->edicts[s->number]), SendEntity))
 			continue;
 
 		// prepare the buffer
@@ -1043,6 +1025,7 @@ void EntityState_WriteFields(const entity_state_t *ent, sizebuf_t *msg, unsigned
 
 void EntityState_WriteUpdate(const entity_state_t *ent, sizebuf_t *msg, const entity_state_t *delta)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	unsigned int bits;
 	ENTITYSIZEPROFILING_START(msg, ent->number);
 	if (ent->active == ACTIVE_NETWORK)
@@ -1071,15 +1054,15 @@ void EntityState_WriteUpdate(const entity_state_t *ent, sizebuf_t *msg, const en
 int EntityState_ReadExtendBits(void)
 {
 	unsigned int bits;
-	bits = MSG_ReadByte();
+	bits = MSG_ReadByte(&cl_message);
 	if (bits & 0x00000080)
 	{
-		bits |= MSG_ReadByte() << 8;
+		bits |= MSG_ReadByte(&cl_message) << 8;
 		if (bits & 0x00008000)
 		{
-			bits |= MSG_ReadByte() << 16;
+			bits |= MSG_ReadByte(&cl_message) << 16;
 			if (bits & 0x00800000)
-				bits |= MSG_ReadByte() << 24;
+				bits |= MSG_ReadByte(&cl_message) << 24;
 		}
 	}
 	return bits;
@@ -1090,96 +1073,96 @@ void EntityState_ReadFields(entity_state_t *e, unsigned int bits)
 	if (cls.protocol == PROTOCOL_DARKPLACES2)
 	{
 		if (bits & E_ORIGIN1)
-			e->origin[0] = MSG_ReadCoord16i();
+			e->origin[0] = MSG_ReadCoord16i(&cl_message);
 		if (bits & E_ORIGIN2)
-			e->origin[1] = MSG_ReadCoord16i();
+			e->origin[1] = MSG_ReadCoord16i(&cl_message);
 		if (bits & E_ORIGIN3)
-			e->origin[2] = MSG_ReadCoord16i();
+			e->origin[2] = MSG_ReadCoord16i(&cl_message);
 	}
 	else
 	{
 		if (bits & E_FLAGS)
-			e->flags = MSG_ReadByte();
+			e->flags = MSG_ReadByte(&cl_message);
 		if (e->flags & RENDER_LOWPRECISION)
 		{
 			if (bits & E_ORIGIN1)
-				e->origin[0] = MSG_ReadCoord16i();
+				e->origin[0] = MSG_ReadCoord16i(&cl_message);
 			if (bits & E_ORIGIN2)
-				e->origin[1] = MSG_ReadCoord16i();
+				e->origin[1] = MSG_ReadCoord16i(&cl_message);
 			if (bits & E_ORIGIN3)
-				e->origin[2] = MSG_ReadCoord16i();
+				e->origin[2] = MSG_ReadCoord16i(&cl_message);
 		}
 		else
 		{
 			if (bits & E_ORIGIN1)
-				e->origin[0] = MSG_ReadCoord32f();
+				e->origin[0] = MSG_ReadCoord32f(&cl_message);
 			if (bits & E_ORIGIN2)
-				e->origin[1] = MSG_ReadCoord32f();
+				e->origin[1] = MSG_ReadCoord32f(&cl_message);
 			if (bits & E_ORIGIN3)
-				e->origin[2] = MSG_ReadCoord32f();
+				e->origin[2] = MSG_ReadCoord32f(&cl_message);
 		}
 	}
 	if ((cls.protocol == PROTOCOL_DARKPLACES5 || cls.protocol == PROTOCOL_DARKPLACES6) && !(e->flags & RENDER_LOWPRECISION))
 	{
 		if (bits & E_ANGLE1)
-			e->angles[0] = MSG_ReadAngle16i();
+			e->angles[0] = MSG_ReadAngle16i(&cl_message);
 		if (bits & E_ANGLE2)
-			e->angles[1] = MSG_ReadAngle16i();
+			e->angles[1] = MSG_ReadAngle16i(&cl_message);
 		if (bits & E_ANGLE3)
-			e->angles[2] = MSG_ReadAngle16i();
+			e->angles[2] = MSG_ReadAngle16i(&cl_message);
 	}
 	else
 	{
 		if (bits & E_ANGLE1)
-			e->angles[0] = MSG_ReadAngle8i();
+			e->angles[0] = MSG_ReadAngle8i(&cl_message);
 		if (bits & E_ANGLE2)
-			e->angles[1] = MSG_ReadAngle8i();
+			e->angles[1] = MSG_ReadAngle8i(&cl_message);
 		if (bits & E_ANGLE3)
-			e->angles[2] = MSG_ReadAngle8i();
+			e->angles[2] = MSG_ReadAngle8i(&cl_message);
 	}
 	if (bits & E_MODEL1)
-		e->modelindex = (e->modelindex & 0xFF00) | (unsigned int) MSG_ReadByte();
+		e->modelindex = (e->modelindex & 0xFF00) | (unsigned int) MSG_ReadByte(&cl_message);
 	if (bits & E_MODEL2)
-		e->modelindex = (e->modelindex & 0x00FF) | ((unsigned int) MSG_ReadByte() << 8);
+		e->modelindex = (e->modelindex & 0x00FF) | ((unsigned int) MSG_ReadByte(&cl_message) << 8);
 	if (bits & E_FRAME1)
-		e->frame = (e->frame & 0xFF00) | (unsigned int) MSG_ReadByte();
+		e->frame = (e->frame & 0xFF00) | (unsigned int) MSG_ReadByte(&cl_message);
 	if (bits & E_FRAME2)
-		e->frame = (e->frame & 0x00FF) | ((unsigned int) MSG_ReadByte() << 8);
+		e->frame = (e->frame & 0x00FF) | ((unsigned int) MSG_ReadByte(&cl_message) << 8);
 	if (bits & E_EFFECTS1)
-		e->effects = (e->effects & 0xFF00) | (unsigned int) MSG_ReadByte();
+		e->effects = (e->effects & 0xFF00) | (unsigned int) MSG_ReadByte(&cl_message);
 	if (bits & E_EFFECTS2)
-		e->effects = (e->effects & 0x00FF) | ((unsigned int) MSG_ReadByte() << 8);
+		e->effects = (e->effects & 0x00FF) | ((unsigned int) MSG_ReadByte(&cl_message) << 8);
 	if (bits & E_COLORMAP)
-		e->colormap = MSG_ReadByte();
+		e->colormap = MSG_ReadByte(&cl_message);
 	if (bits & E_SKIN)
-		e->skin = MSG_ReadByte();
+		e->skin = MSG_ReadByte(&cl_message);
 	if (bits & E_ALPHA)
-		e->alpha = MSG_ReadByte();
+		e->alpha = MSG_ReadByte(&cl_message);
 	if (bits & E_SCALE)
-		e->scale = MSG_ReadByte();
+		e->scale = MSG_ReadByte(&cl_message);
 	if (bits & E_GLOWSIZE)
-		e->glowsize = MSG_ReadByte();
+		e->glowsize = MSG_ReadByte(&cl_message);
 	if (bits & E_GLOWCOLOR)
-		e->glowcolor = MSG_ReadByte();
+		e->glowcolor = MSG_ReadByte(&cl_message);
 	if (cls.protocol == PROTOCOL_DARKPLACES2)
 		if (bits & E_FLAGS)
-			e->flags = MSG_ReadByte();
+			e->flags = MSG_ReadByte(&cl_message);
 	if (bits & E_TAGATTACHMENT)
 	{
-		e->tagentity = (unsigned short) MSG_ReadShort();
-		e->tagindex = MSG_ReadByte();
+		e->tagentity = (unsigned short) MSG_ReadShort(&cl_message);
+		e->tagindex = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E_LIGHT)
 	{
-		e->light[0] = (unsigned short) MSG_ReadShort();
-		e->light[1] = (unsigned short) MSG_ReadShort();
-		e->light[2] = (unsigned short) MSG_ReadShort();
-		e->light[3] = (unsigned short) MSG_ReadShort();
+		e->light[0] = (unsigned short) MSG_ReadShort(&cl_message);
+		e->light[1] = (unsigned short) MSG_ReadShort(&cl_message);
+		e->light[2] = (unsigned short) MSG_ReadShort(&cl_message);
+		e->light[3] = (unsigned short) MSG_ReadShort(&cl_message);
 	}
 	if (bits & E_LIGHTSTYLE)
-		e->lightstyle = MSG_ReadByte();
+		e->lightstyle = MSG_ReadByte(&cl_message);
 	if (bits & E_LIGHTPFLAGS)
-		e->lightpflags = MSG_ReadByte();
+		e->lightpflags = MSG_ReadByte(&cl_message);
 
 	if (developer_networkentities.integer >= 2)
 	{
@@ -1230,8 +1213,6 @@ void EntityState_ReadFields(entity_state_t *e, unsigned int bits)
 		Con_Print("\n");
 	}
 }
-
-extern void CL_NewFrameReceived(int num);
 
 // (client and server) allocates a new empty database
 entityframe_database_t *EntityFrame_AllocDatabase(mempool_t *mempool)
@@ -1405,11 +1386,11 @@ void EntityFrame_AddFrame_Server(entityframe_database_t *d, vec3_t eye, int fram
 // (server) writes a frame to network stream
 qboolean EntityFrame_WriteFrame(sizebuf_t *msg, int maxsize, entityframe_database_t *d, int numstates, const entity_state_t **states, int viewentnum)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	int i, onum, number;
 	entity_frame_t *o = &d->deltaframe;
 	const entity_state_t *ent, *delta;
 	vec3_t eye;
-	prvm_eval_t *val;
 
 	d->latestframenum++;
 
@@ -1441,8 +1422,7 @@ qboolean EntityFrame_WriteFrame(sizebuf_t *msg, int maxsize, entityframe_databas
 		ent = states[i];
 		number = ent->number;
 
-		val = PRVM_EDICTFIELDVALUE((&prog->edicts[number]), prog->fieldoffsets.SendEntity);
-		if(val && val->function)
+		if (PRVM_serveredictfunction((&prog->edicts[number]), SendEntity))
 			continue;
 		for (;onum < o->numentities && o->entitydata[onum].number < number;onum++)
 		{
@@ -1491,20 +1471,20 @@ void EntityFrame_CL_ReadFrame(void)
 
 	// read the frame header info
 	f->time = cl.mtime[0];
-	number = MSG_ReadLong();
-	f->framenum = MSG_ReadLong();
+	number = MSG_ReadLong(&cl_message);
+	f->framenum = MSG_ReadLong(&cl_message);
 	CL_NewFrameReceived(f->framenum);
-	f->eye[0] = MSG_ReadFloat();
-	f->eye[1] = MSG_ReadFloat();
-	f->eye[2] = MSG_ReadFloat();
+	f->eye[0] = MSG_ReadFloat(&cl_message);
+	f->eye[1] = MSG_ReadFloat(&cl_message);
+	f->eye[2] = MSG_ReadFloat(&cl_message);
 	EntityFrame_AckFrame(d, number);
 	EntityFrame_FetchFrame(d, number, delta);
 	old = delta->entitydata;
 	oldend = old + delta->numentities;
 	// read entities until we hit the magic 0xFFFF end tag
-	while ((number = (unsigned short) MSG_ReadShort()) != 0xFFFF && !msg_badread)
+	while ((number = (unsigned short) MSG_ReadShort(&cl_message)) != 0xFFFF && !cl_message.badread)
 	{
-		if (msg_badread)
+		if (cl_message.badread)
 			Host_Error("EntityFrame_Read: read error");
 		removed = number & 0x8000;
 		number &= 0x7FFF;
@@ -1756,12 +1736,12 @@ void EntityFrame4_CL_ReadFrame(void)
 		cl.entitydatabase4 = EntityFrame4_AllocDatabase(cls.levelmempool);
 	d = cl.entitydatabase4;
 	// read the number of the frame this refers to
-	referenceframenum = MSG_ReadLong();
+	referenceframenum = MSG_ReadLong(&cl_message);
 	// read the number of this frame
-	framenum = MSG_ReadLong();
+	framenum = MSG_ReadLong(&cl_message);
 	CL_NewFrameReceived(framenum);
 	// read the start number
-	enumber = (unsigned short) MSG_ReadShort();
+	enumber = (unsigned short) MSG_ReadShort(&cl_message);
 	if (developer_networkentities.integer >= 10)
 	{
 		Con_Printf("recv svc_entities num:%i ref:%i database: ref:%i commits:", framenum, referenceframenum, d->referenceframenum);
@@ -1791,18 +1771,18 @@ void EntityFrame4_CL_ReadFrame(void)
 		skip = true;
 	}
 	done = false;
-	while (!done && !msg_badread)
+	while (!done && !cl_message.badread)
 	{
 		// read the number of the modified entity
 		// (gaps will be copied unmodified)
-		n = (unsigned short)MSG_ReadShort();
+		n = (unsigned short)MSG_ReadShort(&cl_message);
 		if (n == 0x8000)
 		{
 			// no more entities in this update, but we still need to copy the
 			// rest of the reference entities (final gap)
 			done = true;
 			// read end of range number, then process normally
-			n = (unsigned short)MSG_ReadShort();
+			n = (unsigned short)MSG_ReadShort(&cl_message);
 		}
 		// high bit means it's a remove message
 		cnumber = n & 0x7FFF;
@@ -1882,12 +1862,12 @@ void EntityFrame4_CL_ReadFrame(void)
 
 qboolean EntityFrame4_WriteFrame(sizebuf_t *msg, int maxsize, entityframe4_database_t *d, int numstates, const entity_state_t **states)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	const entity_state_t *e, *s;
 	entity_state_t inactiveentitystate;
 	int i, n, startnumber;
 	sizebuf_t buf;
 	unsigned char data[128];
-	prvm_eval_t *val;
 
 	// if there isn't enough space to accomplish anything, skip it
 	if (msg->cursize + 24 > maxsize)
@@ -1932,8 +1912,7 @@ qboolean EntityFrame4_WriteFrame(sizebuf_t *msg, int maxsize, entityframe4_datab
 	d->currententitynumber = 1;
 	for (i = 0, n = startnumber;n < prog->max_edicts;n++)
 	{
-		val = PRVM_EDICTFIELDVALUE((&prog->edicts[n]), prog->fieldoffsets.SendEntity);
-		if(val && val->function)
+		if (PRVM_serveredictfunction((&prog->edicts[n]), SendEntity))
 			continue;
 		// find the old state to delta from
 		e = EntityFrame4_GetReferenceEntity(d, n);
@@ -2083,21 +2062,45 @@ static int EntityState5_Priority(entityframe5_database_t *d, int stateindex)
 	return bound(1, priority, ENTITYFRAME5_PRIORITYLEVELS - 1);
 }
 
+static double anim_reducetime(double t, double frameduration, double maxtime)
+{
+	if(t < 0) // clamp to non-negative
+		return 0;
+	if(t <= maxtime) // time can be represented normally
+		return t;
+	if(frameduration == 0) // don't like dividing by zero
+		return t;
+	if(maxtime <= 2 * frameduration) // if two frames don't fit, we better not do this
+		return t;
+	t -= frameduration * ceil((t - maxtime) / frameduration);
+	// now maxtime - frameduration < t <= maxtime
+	return t;
+}
+
+// see VM_SV_frameduration
+static double anim_frameduration(dp_model_t *model, int framenum)
+{
+	if (!model || !model->animscenes || framenum < 0 || framenum >= model->numframes)
+		return 0;
+	if(model->animscenes[framenum].framerate)
+		return model->animscenes[framenum].framecount / model->animscenes[framenum].framerate;
+	return 0;
+}
+
 void EntityState5_WriteUpdate(int number, const entity_state_t *s, int changedbits, sizebuf_t *msg)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	unsigned int bits = 0;
 	//dp_model_t *model;
 	ENTITYSIZEPROFILING_START(msg, s->number);
-
-	prvm_eval_t *val;
-	val = PRVM_EDICTFIELDVALUE((&prog->edicts[s->number]), prog->fieldoffsets.SendEntity);
-	if(val && val->function)
-		return;
 
 	if (s->active != ACTIVE_NETWORK)
 		MSG_WriteShort(msg, number | 0x8000);
 	else
 	{
+		if (PRVM_serveredictfunction((&prog->edicts[s->number]), SendEntity))
+			return;
+
 		bits = changedbits;
 		if ((bits & E5_ORIGIN) && (!(s->flags & RENDER_LOWPRECISION) || s->exteriormodelforclient || s->tagentity || s->viewmodelforclient || (s->number >= 1 && s->number <= svs.maxclients) || s->origin[0] <= -4096.0625 || s->origin[0] >= 4095.9375 || s->origin[1] <= -4096.0625 || s->origin[1] >= 4095.9375 || s->origin[2] <= -4096.0625 || s->origin[2] >= 4095.9375))
 		// maybe also add: ((model = SV_GetModelByIndex(s->modelindex)) != NULL && model->name[0] == '*')
@@ -2232,6 +2235,80 @@ void EntityState5_WriteUpdate(int number, const entity_state_t *s, int changedbi
 			MSG_WriteByte(msg, s->glowmod[1]);
 			MSG_WriteByte(msg, s->glowmod[2]);
 		}
+		if (bits & E5_COMPLEXANIMATION)
+		{
+			if (s->skeletonobject.model && s->skeletonobject.relativetransforms)
+			{
+				int numbones = s->skeletonobject.model->num_bones;
+				int bonenum;
+				short pose7s[7];
+				MSG_WriteByte(msg, 4);
+				MSG_WriteShort(msg, s->modelindex);
+				MSG_WriteByte(msg, numbones);
+				for (bonenum = 0;bonenum < numbones;bonenum++)
+				{
+					Matrix4x4_ToBonePose7s(s->skeletonobject.relativetransforms + bonenum, 64, pose7s);
+					MSG_WriteShort(msg, pose7s[0]);
+					MSG_WriteShort(msg, pose7s[1]);
+					MSG_WriteShort(msg, pose7s[2]);
+					MSG_WriteShort(msg, pose7s[3]);
+					MSG_WriteShort(msg, pose7s[4]);
+					MSG_WriteShort(msg, pose7s[5]);
+					MSG_WriteShort(msg, pose7s[6]);
+				}
+			}
+			else
+			{
+				dp_model_t *model = SV_GetModelByIndex(s->modelindex);
+				if (s->framegroupblend[3].lerp > 0)
+				{
+					MSG_WriteByte(msg, 3);
+					MSG_WriteShort(msg, s->framegroupblend[0].frame);
+					MSG_WriteShort(msg, s->framegroupblend[1].frame);
+					MSG_WriteShort(msg, s->framegroupblend[2].frame);
+					MSG_WriteShort(msg, s->framegroupblend[3].frame);
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[0].start, anim_frameduration(model, s->framegroupblend[0].frame), 65.535) * 1000.0));
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[1].start, anim_frameduration(model, s->framegroupblend[1].frame), 65.535) * 1000.0));
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[2].start, anim_frameduration(model, s->framegroupblend[2].frame), 65.535) * 1000.0));
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[3].start, anim_frameduration(model, s->framegroupblend[3].frame), 65.535) * 1000.0));
+					MSG_WriteByte(msg, s->framegroupblend[0].lerp * 255.0f);
+					MSG_WriteByte(msg, s->framegroupblend[1].lerp * 255.0f);
+					MSG_WriteByte(msg, s->framegroupblend[2].lerp * 255.0f);
+					MSG_WriteByte(msg, s->framegroupblend[3].lerp * 255.0f);
+				}
+				else if (s->framegroupblend[2].lerp > 0)
+				{
+					MSG_WriteByte(msg, 2);
+					MSG_WriteShort(msg, s->framegroupblend[0].frame);
+					MSG_WriteShort(msg, s->framegroupblend[1].frame);
+					MSG_WriteShort(msg, s->framegroupblend[2].frame);
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[0].start, anim_frameduration(model, s->framegroupblend[0].frame), 65.535) * 1000.0));
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[1].start, anim_frameduration(model, s->framegroupblend[1].frame), 65.535) * 1000.0));
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[2].start, anim_frameduration(model, s->framegroupblend[2].frame), 65.535) * 1000.0));
+					MSG_WriteByte(msg, s->framegroupblend[0].lerp * 255.0f);
+					MSG_WriteByte(msg, s->framegroupblend[1].lerp * 255.0f);
+					MSG_WriteByte(msg, s->framegroupblend[2].lerp * 255.0f);
+				}
+				else if (s->framegroupblend[1].lerp > 0)
+				{
+					MSG_WriteByte(msg, 1);
+					MSG_WriteShort(msg, s->framegroupblend[0].frame);
+					MSG_WriteShort(msg, s->framegroupblend[1].frame);
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[0].start, anim_frameduration(model, s->framegroupblend[0].frame), 65.535) * 1000.0));
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[1].start, anim_frameduration(model, s->framegroupblend[1].frame), 65.535) * 1000.0));
+					MSG_WriteByte(msg, s->framegroupblend[0].lerp * 255.0f);
+					MSG_WriteByte(msg, s->framegroupblend[1].lerp * 255.0f);
+				}
+				else
+				{
+					MSG_WriteByte(msg, 0);
+					MSG_WriteShort(msg, s->framegroupblend[0].frame);
+					MSG_WriteShort(msg, (int)(anim_reducetime(sv.time - s->framegroupblend[0].start, anim_frameduration(model, s->framegroupblend[0].frame), 65.535) * 1000.0));
+				}
+			}
+		}
+		if (bits & E5_TRAILEFFECTNUM)
+			MSG_WriteShort(msg, s->traileffectnum);
 	}
 
 	ENTITYSIZEPROFILING_END(msg, s->number);
@@ -2240,15 +2317,17 @@ void EntityState5_WriteUpdate(int number, const entity_state_t *s, int changedbi
 static void EntityState5_ReadUpdate(entity_state_t *s, int number)
 {
 	int bits;
-	bits = MSG_ReadByte();
+	int startoffset = cl_message.readcount;
+	int bytes = 0;
+	bits = MSG_ReadByte(&cl_message);
 	if (bits & E5_EXTEND1)
 	{
-		bits |= MSG_ReadByte() << 8;
+		bits |= MSG_ReadByte(&cl_message) << 8;
 		if (bits & E5_EXTEND2)
 		{
-			bits |= MSG_ReadByte() << 16;
+			bits |= MSG_ReadByte(&cl_message) << 16;
 			if (bits & E5_EXTEND3)
-				bits |= MSG_ReadByte() << 24;
+				bits |= MSG_ReadByte(&cl_message) << 24;
 		}
 	}
 	if (bits & E5_FULLUPDATE)
@@ -2257,104 +2336,209 @@ static void EntityState5_ReadUpdate(entity_state_t *s, int number)
 		s->active = ACTIVE_NETWORK;
 	}
 	if (bits & E5_FLAGS)
-		s->flags = MSG_ReadByte();
+		s->flags = MSG_ReadByte(&cl_message);
 	if (bits & E5_ORIGIN)
 	{
 		if (bits & E5_ORIGIN32)
 		{
-			s->origin[0] = MSG_ReadCoord32f();
-			s->origin[1] = MSG_ReadCoord32f();
-			s->origin[2] = MSG_ReadCoord32f();
+			s->origin[0] = MSG_ReadCoord32f(&cl_message);
+			s->origin[1] = MSG_ReadCoord32f(&cl_message);
+			s->origin[2] = MSG_ReadCoord32f(&cl_message);
 		}
 		else
 		{
-			s->origin[0] = MSG_ReadCoord13i();
-			s->origin[1] = MSG_ReadCoord13i();
-			s->origin[2] = MSG_ReadCoord13i();
+			s->origin[0] = MSG_ReadCoord13i(&cl_message);
+			s->origin[1] = MSG_ReadCoord13i(&cl_message);
+			s->origin[2] = MSG_ReadCoord13i(&cl_message);
 		}
 	}
 	if (bits & E5_ANGLES)
 	{
 		if (bits & E5_ANGLES16)
 		{
-			s->angles[0] = MSG_ReadAngle16i();
-			s->angles[1] = MSG_ReadAngle16i();
-			s->angles[2] = MSG_ReadAngle16i();
+			s->angles[0] = MSG_ReadAngle16i(&cl_message);
+			s->angles[1] = MSG_ReadAngle16i(&cl_message);
+			s->angles[2] = MSG_ReadAngle16i(&cl_message);
 		}
 		else
 		{
-			s->angles[0] = MSG_ReadAngle8i();
-			s->angles[1] = MSG_ReadAngle8i();
-			s->angles[2] = MSG_ReadAngle8i();
+			s->angles[0] = MSG_ReadAngle8i(&cl_message);
+			s->angles[1] = MSG_ReadAngle8i(&cl_message);
+			s->angles[2] = MSG_ReadAngle8i(&cl_message);
 		}
 	}
 	if (bits & E5_MODEL)
 	{
 		if (bits & E5_MODEL16)
-			s->modelindex = (unsigned short) MSG_ReadShort();
+			s->modelindex = (unsigned short) MSG_ReadShort(&cl_message);
 		else
-			s->modelindex = MSG_ReadByte();
+			s->modelindex = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_FRAME)
 	{
 		if (bits & E5_FRAME16)
-			s->frame = (unsigned short) MSG_ReadShort();
+			s->frame = (unsigned short) MSG_ReadShort(&cl_message);
 		else
-			s->frame = MSG_ReadByte();
+			s->frame = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_SKIN)
-		s->skin = MSG_ReadByte();
+		s->skin = MSG_ReadByte(&cl_message);
 	if (bits & E5_EFFECTS)
 	{
 		if (bits & E5_EFFECTS32)
-			s->effects = (unsigned int) MSG_ReadLong();
+			s->effects = (unsigned int) MSG_ReadLong(&cl_message);
 		else if (bits & E5_EFFECTS16)
-			s->effects = (unsigned short) MSG_ReadShort();
+			s->effects = (unsigned short) MSG_ReadShort(&cl_message);
 		else
-			s->effects = MSG_ReadByte();
+			s->effects = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_ALPHA)
-		s->alpha = MSG_ReadByte();
+		s->alpha = MSG_ReadByte(&cl_message);
 	if (bits & E5_SCALE)
-		s->scale = MSG_ReadByte();
+		s->scale = MSG_ReadByte(&cl_message);
 	if (bits & E5_COLORMAP)
-		s->colormap = MSG_ReadByte();
+		s->colormap = MSG_ReadByte(&cl_message);
 	if (bits & E5_ATTACHMENT)
 	{
-		s->tagentity = (unsigned short) MSG_ReadShort();
-		s->tagindex = MSG_ReadByte();
+		s->tagentity = (unsigned short) MSG_ReadShort(&cl_message);
+		s->tagindex = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_LIGHT)
 	{
-		s->light[0] = (unsigned short) MSG_ReadShort();
-		s->light[1] = (unsigned short) MSG_ReadShort();
-		s->light[2] = (unsigned short) MSG_ReadShort();
-		s->light[3] = (unsigned short) MSG_ReadShort();
-		s->lightstyle = MSG_ReadByte();
-		s->lightpflags = MSG_ReadByte();
+		s->light[0] = (unsigned short) MSG_ReadShort(&cl_message);
+		s->light[1] = (unsigned short) MSG_ReadShort(&cl_message);
+		s->light[2] = (unsigned short) MSG_ReadShort(&cl_message);
+		s->light[3] = (unsigned short) MSG_ReadShort(&cl_message);
+		s->lightstyle = MSG_ReadByte(&cl_message);
+		s->lightpflags = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_GLOW)
 	{
-		s->glowsize = MSG_ReadByte();
-		s->glowcolor = MSG_ReadByte();
+		s->glowsize = MSG_ReadByte(&cl_message);
+		s->glowcolor = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_COLORMOD)
 	{
-		s->colormod[0] = MSG_ReadByte();
-		s->colormod[1] = MSG_ReadByte();
-		s->colormod[2] = MSG_ReadByte();
+		s->colormod[0] = MSG_ReadByte(&cl_message);
+		s->colormod[1] = MSG_ReadByte(&cl_message);
+		s->colormod[2] = MSG_ReadByte(&cl_message);
 	}
 	if (bits & E5_GLOWMOD)
 	{
-		s->glowmod[0] = MSG_ReadByte();
-		s->glowmod[1] = MSG_ReadByte();
-		s->glowmod[2] = MSG_ReadByte();
+		s->glowmod[0] = MSG_ReadByte(&cl_message);
+		s->glowmod[1] = MSG_ReadByte(&cl_message);
+		s->glowmod[2] = MSG_ReadByte(&cl_message);
 	}
+	if (bits & E5_COMPLEXANIMATION)
+	{
+		skeleton_t *skeleton;
+		const dp_model_t *model;
+		int modelindex;
+		int type;
+		int bonenum;
+		int numbones;
+		short pose7s[7];
+		type = MSG_ReadByte(&cl_message);
+		switch(type)
+		{
+		case 0:
+			s->framegroupblend[0].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[1].frame = 0;
+			s->framegroupblend[2].frame = 0;
+			s->framegroupblend[3].frame = 0;
+			s->framegroupblend[0].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[1].start = 0;
+			s->framegroupblend[2].start = 0;
+			s->framegroupblend[3].start = 0;
+			s->framegroupblend[0].lerp = 1;
+			s->framegroupblend[1].lerp = 0;
+			s->framegroupblend[2].lerp = 0;
+			s->framegroupblend[3].lerp = 0;
+			break;
+		case 1:
+			s->framegroupblend[0].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[1].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[2].frame = 0;
+			s->framegroupblend[3].frame = 0;
+			s->framegroupblend[0].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[1].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[2].start = 0;
+			s->framegroupblend[3].start = 0;
+			s->framegroupblend[0].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[1].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[2].lerp = 0;
+			s->framegroupblend[3].lerp = 0;
+			break;
+		case 2:
+			s->framegroupblend[0].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[1].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[2].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[3].frame = 0;
+			s->framegroupblend[0].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[1].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[2].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[3].start = 0;
+			s->framegroupblend[0].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[1].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[2].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[3].lerp = 0;
+			break;
+		case 3:
+			s->framegroupblend[0].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[1].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[2].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[3].frame = MSG_ReadShort(&cl_message);
+			s->framegroupblend[0].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[1].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[2].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[3].start = cl.time - (unsigned short)MSG_ReadShort(&cl_message) * (1.0f / 1000.0f);
+			s->framegroupblend[0].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[1].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[2].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			s->framegroupblend[3].lerp = MSG_ReadByte(&cl_message) * (1.0f / 255.0f);
+			break;
+		case 4:
+			if (!cl.engineskeletonobjects)
+				cl.engineskeletonobjects = (skeleton_t *) Mem_Alloc(cls.levelmempool, sizeof(*cl.engineskeletonobjects) * MAX_EDICTS);
+			skeleton = &cl.engineskeletonobjects[number];
+			modelindex = MSG_ReadShort(&cl_message);
+			model = CL_GetModelByIndex(modelindex);
+			numbones = MSG_ReadByte(&cl_message);
+			if (model && numbones != model->num_bones)
+				Host_Error("E5_COMPLEXANIMATION: model has different number of bones than network packet describes\n");
+			if (!skeleton->relativetransforms || skeleton->model != model)
+			{
+				skeleton->model = model;
+				skeleton->relativetransforms = (matrix4x4_t *) Mem_Realloc(cls.levelmempool, skeleton->relativetransforms, sizeof(*skeleton->relativetransforms) * skeleton->model->num_bones);
+				for (bonenum = 0;bonenum < model->num_bones;bonenum++)
+					skeleton->relativetransforms[bonenum] = identitymatrix;
+			}
+			for (bonenum = 0;bonenum < numbones;bonenum++)
+			{
+				pose7s[0] = (short)MSG_ReadShort(&cl_message);
+				pose7s[1] = (short)MSG_ReadShort(&cl_message);
+				pose7s[2] = (short)MSG_ReadShort(&cl_message);
+				pose7s[3] = (short)MSG_ReadShort(&cl_message);
+				pose7s[4] = (short)MSG_ReadShort(&cl_message);
+				pose7s[5] = (short)MSG_ReadShort(&cl_message);
+				pose7s[6] = (short)MSG_ReadShort(&cl_message);
+				Matrix4x4_FromBonePose7s(skeleton->relativetransforms + bonenum, 1.0f / 64.0f, pose7s);
+			}
+			s->skeletonobject = *skeleton;
+			break;
+		default:
+			Host_Error("E5_COMPLEXANIMATION: Parse error - unknown type %i\n", type);
+			break;
+		}
+	}
+	if (bits & E5_TRAILEFFECTNUM)
+		s->traileffectnum = (unsigned short) MSG_ReadShort(&cl_message);
 
 
+	bytes = cl_message.readcount - startoffset;
 	if (developer_networkentities.integer >= 2)
 	{
-		Con_Printf("ReadFields e%i", number);
+		Con_Printf("ReadFields e%i (%i bytes)", number, bytes);
 
 		if (bits & E5_ORIGIN)
 			Con_Printf(" E5_ORIGIN %f %f %f", s->origin[0], s->origin[1], s->origin[2]);
@@ -2407,6 +2591,10 @@ static void EntityState5_ReadUpdate(entity_state_t *s, int number)
 			Con_Printf(" E5_COLORMOD %f:%f:%f", s->colormod[0] / 32.0f, s->colormod[1] / 32.0f, s->colormod[2] / 32.0f);
 		if (bits & E5_GLOWMOD)
 			Con_Printf(" E5_GLOWMOD %f:%f:%f", s->glowmod[0] / 32.0f, s->glowmod[1] / 32.0f, s->glowmod[2] / 32.0f);
+		if (bits & E5_COMPLEXANIMATION)
+			Con_Printf(" E5_COMPLEXANIMATION");
+		if (bits & E5_TRAILEFFECTNUM)
+			Con_Printf(" E5_TRAILEFFECTNUM %i", s->traileffectnum);
 		Con_Print("\n");
 	}
 }
@@ -2448,6 +2636,28 @@ static int EntityState5_DeltaBits(const entity_state_t *o, const entity_state_t 
 			bits |= E5_COLORMOD;
 		if (o->glowmod[0] != n->glowmod[0] || o->glowmod[1] != n->glowmod[1] || o->glowmod[2] != n->glowmod[2])
 			bits |= E5_GLOWMOD;
+		if (n->flags & RENDER_COMPLEXANIMATION)
+		{
+			if ((o->skeletonobject.model && o->skeletonobject.relativetransforms) != (n->skeletonobject.model && n->skeletonobject.relativetransforms))
+			{
+				bits |= E5_COMPLEXANIMATION;
+			}
+			else if (o->skeletonobject.model && o->skeletonobject.relativetransforms)
+			{
+				if(o->modelindex != n->modelindex)
+					bits |= E5_COMPLEXANIMATION;
+				else if(o->skeletonobject.model->num_bones != n->skeletonobject.model->num_bones)
+					bits |= E5_COMPLEXANIMATION;
+				else if(memcmp(o->skeletonobject.relativetransforms, n->skeletonobject.relativetransforms, o->skeletonobject.model->num_bones * sizeof(*o->skeletonobject.relativetransforms)))
+					bits |= E5_COMPLEXANIMATION;
+			}
+			else if (memcmp(o->framegroupblend, n->framegroupblend, sizeof(o->framegroupblend)))
+			{
+				bits |= E5_COMPLEXANIMATION;
+			}
+		}
+		if (o->traileffectnum != n->traileffectnum)
+			bits |= E5_TRAILEFFECTNUM;
 	}
 	else
 		if (o->active == ACTIVE_NETWORK)
@@ -2461,13 +2671,13 @@ void EntityFrame5_CL_ReadFrame(void)
 	entity_t *ent;
 	entity_state_t *s;
 	// read the number of this frame to echo back in next input packet
-	framenum = MSG_ReadLong();
+	framenum = MSG_ReadLong(&cl_message);
 	CL_NewFrameReceived(framenum);
 	if (cls.protocol != PROTOCOL_QUAKE && cls.protocol != PROTOCOL_QUAKEDP && cls.protocol != PROTOCOL_NEHAHRAMOVIE && cls.protocol != PROTOCOL_DARKPLACES1 && cls.protocol != PROTOCOL_DARKPLACES2 && cls.protocol != PROTOCOL_DARKPLACES3 && cls.protocol != PROTOCOL_DARKPLACES4 && cls.protocol != PROTOCOL_DARKPLACES5 && cls.protocol != PROTOCOL_DARKPLACES6)
-		cls.servermovesequence = MSG_ReadLong();
+		cls.servermovesequence = MSG_ReadLong(&cl_message);
 	// read entity numbers until we find a 0x8000
 	// (which would be remove world entity, but is actually a terminator)
-	while ((n = (unsigned short)MSG_ReadShort()) != 0x8000 && !msg_badread)
+	while ((n = (unsigned short)MSG_ReadShort(&cl_message)) != 0x8000 && !cl_message.badread)
 	{
 		// get the entity number
 		enumber = n & 0x7FFF;
@@ -2593,6 +2803,7 @@ void EntityFrame5_AckFrame(entityframe5_database_t *d, int framenum)
 
 qboolean EntityFrame5_WriteFrame(sizebuf_t *msg, int maxsize, entityframe5_database_t *d, int numstates, const entity_state_t **states, int viewentnum, int movesequence, qboolean need_empty)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	const entity_state_t *n;
 	int i, num, l, framenum, packetlognumber, priority;
 	sizebuf_t buf;
@@ -2712,6 +2923,7 @@ qboolean EntityFrame5_WriteFrame(sizebuf_t *msg, int maxsize, entityframe5_datab
 					packetlog = d->packetlog + packetlognumber;
 					packetlog->packetnumber = framenum;
 					packetlog->numstates = 0;
+					memset(packetlog->statsdeltabits, 0, sizeof(packetlog->statsdeltabits));
 				}
 				packetlog->statsdeltabits[i>>3] |= (1<<(i&7));
 				if (host_client->stats[i] >= 0 && host_client->stats[i] < 256)
@@ -2742,6 +2954,7 @@ qboolean EntityFrame5_WriteFrame(sizebuf_t *msg, int maxsize, entityframe5_datab
 		packetlog = d->packetlog + packetlognumber;
 		packetlog->packetnumber = framenum;
 		packetlog->numstates = 0;
+		memset(packetlog->statsdeltabits, 0, sizeof(packetlog->statsdeltabits));
 	}
 
 	// write state updates
@@ -2825,7 +3038,7 @@ static void QW_TranslateEffects(entity_state_t *s, int qweffects)
 
 void EntityStateQW_ReadPlayerUpdate(void)
 {
-	int slot = MSG_ReadByte();
+	int slot = MSG_ReadByte(&cl_message);
 	int enumber = slot + 1;
 	int weaponframe;
 	int msec;
@@ -2846,9 +3059,9 @@ void EntityStateQW_ReadPlayerUpdate(void)
 	s->active = ACTIVE_NETWORK;
 	s->number = enumber;
 	s->colormap = enumber;
-	playerflags = MSG_ReadShort();
-	MSG_ReadVector(s->origin, cls.protocol);
-	s->frame = MSG_ReadByte();
+	playerflags = MSG_ReadShort(&cl_message);
+	MSG_ReadVector(&cl_message, s->origin, cls.protocol);
+	s->frame = MSG_ReadByte(&cl_message);
 
 	VectorClear(viewangles);
 	VectorClear(velocity);
@@ -2859,47 +3072,47 @@ void EntityStateQW_ReadPlayerUpdate(void)
 		// and last input we sent to the server (this packet is in response to
 		// our input, so msec is how long ago the last update of this player
 		// entity occurred, compared to our input being received)
-		msec = MSG_ReadByte();
+		msec = MSG_ReadByte(&cl_message);
 	}
 	else
 		msec = 0;
 	if (playerflags & QW_PF_COMMAND)
 	{
-		bits = MSG_ReadByte();
+		bits = MSG_ReadByte(&cl_message);
 		if (bits & QW_CM_ANGLE1)
-			viewangles[0] = MSG_ReadAngle16i(); // cmd->angles[0]
+			viewangles[0] = MSG_ReadAngle16i(&cl_message); // cmd->angles[0]
 		if (bits & QW_CM_ANGLE2)
-			viewangles[1] = MSG_ReadAngle16i(); // cmd->angles[1]
+			viewangles[1] = MSG_ReadAngle16i(&cl_message); // cmd->angles[1]
 		if (bits & QW_CM_ANGLE3)
-			viewangles[2] = MSG_ReadAngle16i(); // cmd->angles[2]
+			viewangles[2] = MSG_ReadAngle16i(&cl_message); // cmd->angles[2]
 		if (bits & QW_CM_FORWARD)
-			MSG_ReadShort(); // cmd->forwardmove
+			MSG_ReadShort(&cl_message); // cmd->forwardmove
 		if (bits & QW_CM_SIDE)
-			MSG_ReadShort(); // cmd->sidemove
+			MSG_ReadShort(&cl_message); // cmd->sidemove
 		if (bits & QW_CM_UP)
-			MSG_ReadShort(); // cmd->upmove
+			MSG_ReadShort(&cl_message); // cmd->upmove
 		if (bits & QW_CM_BUTTONS)
-			(void) MSG_ReadByte(); // cmd->buttons
+			(void) MSG_ReadByte(&cl_message); // cmd->buttons
 		if (bits & QW_CM_IMPULSE)
-			(void) MSG_ReadByte(); // cmd->impulse
-		(void) MSG_ReadByte(); // cmd->msec
+			(void) MSG_ReadByte(&cl_message); // cmd->impulse
+		(void) MSG_ReadByte(&cl_message); // cmd->msec
 	}
 	if (playerflags & QW_PF_VELOCITY1)
-		velocity[0] = MSG_ReadShort();
+		velocity[0] = MSG_ReadShort(&cl_message);
 	if (playerflags & QW_PF_VELOCITY2)
-		velocity[1] = MSG_ReadShort();
+		velocity[1] = MSG_ReadShort(&cl_message);
 	if (playerflags & QW_PF_VELOCITY3)
-		velocity[2] = MSG_ReadShort();
+		velocity[2] = MSG_ReadShort(&cl_message);
 	if (playerflags & QW_PF_MODEL)
-		s->modelindex = MSG_ReadByte();
+		s->modelindex = MSG_ReadByte(&cl_message);
 	else
 		s->modelindex = cl.qw_modelindex_player;
 	if (playerflags & QW_PF_SKINNUM)
-		s->skin = MSG_ReadByte();
+		s->skin = MSG_ReadByte(&cl_message);
 	if (playerflags & QW_PF_EFFECTS)
-		QW_TranslateEffects(s, MSG_ReadByte());
+		QW_TranslateEffects(s, MSG_ReadByte(&cl_message));
 	if (playerflags & QW_PF_WEAPONFRAME)
-		weaponframe = MSG_ReadByte();
+		weaponframe = MSG_ReadByte(&cl_message);
 	else
 		weaponframe = 0;
 
@@ -2961,32 +3174,32 @@ static void EntityStateQW_ReadEntityUpdate(entity_state_t *s, int bits)
 	s->number = bits & 511;
 	bits &= ~511;
 	if (bits & QW_U_MOREBITS)
-		bits |= MSG_ReadByte();
+		bits |= MSG_ReadByte(&cl_message);
 
 	// store the QW_U_SOLID bit here?
 
 	if (bits & QW_U_MODEL)
-		s->modelindex = MSG_ReadByte();
+		s->modelindex = MSG_ReadByte(&cl_message);
 	if (bits & QW_U_FRAME)
-		s->frame = MSG_ReadByte();
+		s->frame = MSG_ReadByte(&cl_message);
 	if (bits & QW_U_COLORMAP)
-		s->colormap = MSG_ReadByte();
+		s->colormap = MSG_ReadByte(&cl_message);
 	if (bits & QW_U_SKIN)
-		s->skin = MSG_ReadByte();
+		s->skin = MSG_ReadByte(&cl_message);
 	if (bits & QW_U_EFFECTS)
-		QW_TranslateEffects(s, qweffects = MSG_ReadByte());
+		QW_TranslateEffects(s, qweffects = MSG_ReadByte(&cl_message));
 	if (bits & QW_U_ORIGIN1)
-		s->origin[0] = MSG_ReadCoord13i();
+		s->origin[0] = MSG_ReadCoord13i(&cl_message);
 	if (bits & QW_U_ANGLE1)
-		s->angles[0] = MSG_ReadAngle8i();
+		s->angles[0] = MSG_ReadAngle8i(&cl_message);
 	if (bits & QW_U_ORIGIN2)
-		s->origin[1] = MSG_ReadCoord13i();
+		s->origin[1] = MSG_ReadCoord13i(&cl_message);
 	if (bits & QW_U_ANGLE2)
-		s->angles[1] = MSG_ReadAngle8i();
+		s->angles[1] = MSG_ReadAngle8i(&cl_message);
 	if (bits & QW_U_ORIGIN3)
-		s->origin[2] = MSG_ReadCoord13i();
+		s->origin[2] = MSG_ReadCoord13i(&cl_message);
 	if (bits & QW_U_ANGLE3)
-		s->angles[2] = MSG_ReadAngle8i();
+		s->angles[2] = MSG_ReadAngle8i(&cl_message);
 
 	if (developer_networkentities.integer >= 2)
 	{
@@ -3052,11 +3265,10 @@ void EntityFrameQW_CL_ReadFrame(qboolean delta)
 	newsnapindex = cl.qw_validsequence & QW_UPDATE_MASK;
 	newsnap = d->snapshot + newsnapindex;
 	memset(newsnap, 0, sizeof(*newsnap));
-	oldsnapindex = -1;
 	oldsnap = NULL;
 	if (delta)
 	{
-		number = MSG_ReadByte();
+		number = MSG_ReadByte(&cl_message);
 		oldsnapindex = cl.qw_deltasequence[newsnapindex];
 		if ((number & QW_UPDATE_MASK) != (oldsnapindex & QW_UPDATE_MASK))
 			Con_DPrintf("WARNING: from mismatch\n");
@@ -3084,8 +3296,8 @@ void EntityFrameQW_CL_ReadFrame(qboolean delta)
 	oldindex = 0;
 	for (;;)
 	{
-		int word = (unsigned short)MSG_ReadShort();
-		if (msg_badread)
+		int word = (unsigned short)MSG_ReadShort(&cl_message);
+		if (cl_message.badread)
 			return; // just return, the main parser will print an error
 		newnum = word == 0 ? 512 : (word & 511);
 		oldnum = delta ? (oldindex >= oldsnap->num_entities ? 9999 : oldsnap->entities[oldindex].number) : 9999;

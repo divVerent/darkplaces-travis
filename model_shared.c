@@ -228,78 +228,95 @@ void Mod_UnloadModel (dp_model_t *mod)
 	mod->loaded = false;
 }
 
-void R_Model_Null_Draw(entity_render_t *ent)
+static void R_Model_Null_Draw(entity_render_t *ent)
 {
 	return;
 }
 
 
-typedef void (*mod_framegroupify_parsegroups_t) (unsigned int i, int start, int len, float fps, qboolean loop, void *pass);
+typedef void (*mod_framegroupify_parsegroups_t) (unsigned int i, int start, int len, float fps, qboolean loop, const char *name, void *pass);
 
-int Mod_FrameGroupify_ParseGroups(const char *buf, mod_framegroupify_parsegroups_t cb, void *pass)
+static int Mod_FrameGroupify_ParseGroups(const char *buf, mod_framegroupify_parsegroups_t cb, void *pass)
 {
 	const char *bufptr;
 	int start, len;
 	float fps;
 	unsigned int i;
 	qboolean loop;
+	char name[64];
 
 	bufptr = buf;
 	i = 0;
-	for(;;)
+	while(bufptr)
 	{
 		// an anim scene!
-		if (!COM_ParseToken_Simple(&bufptr, true, false))
-			break;
+
+		// REQUIRED: fetch start
+		COM_ParseToken_Simple(&bufptr, true, false, true);
+		if (!bufptr)
+			break; // end of file
 		if (!strcmp(com_token, "\n"))
 			continue; // empty line
 		start = atoi(com_token);
-		if (!COM_ParseToken_Simple(&bufptr, true, false))
-			break;
-		if (!strcmp(com_token, "\n"))
+
+		// REQUIRED: fetch length
+		COM_ParseToken_Simple(&bufptr, true, false, true);
+		if (!bufptr || !strcmp(com_token, "\n"))
 		{
 			Con_Printf("framegroups file: missing number of frames\n");
 			continue;
 		}
 		len = atoi(com_token);
-		if (!COM_ParseToken_Simple(&bufptr, true, false))
-			break;
-		// we default to looping as it's usually wanted, so to NOT loop you append a 0
-		if (strcmp(com_token, "\n"))
+
+		// OPTIONAL args start
+		COM_ParseToken_Simple(&bufptr, true, false, true);
+
+		// OPTIONAL: fetch fps
+		fps = 20;
+		if (bufptr && strcmp(com_token, "\n"))
 		{
 			fps = atof(com_token);
-			if (!COM_ParseToken_Simple(&bufptr, true, false))
-				break;
-			if (strcmp(com_token, "\n"))
-				loop = atoi(com_token) != 0;
-			else
-				loop = true;
-		}
-		else
-		{
-			fps = 20;
-			loop = true;
+			COM_ParseToken_Simple(&bufptr, true, false, true);
 		}
 
+		// OPTIONAL: fetch loopflag
+		loop = true;
+		if (bufptr && strcmp(com_token, "\n"))
+		{
+			loop = (atoi(com_token) != 0);
+			COM_ParseToken_Simple(&bufptr, true, false, true);
+		}
+
+		// OPTIONAL: fetch name
+		name[0] = 0;
+		if (bufptr && strcmp(com_token, "\n"))
+		{
+			strlcpy(name, com_token, sizeof(name));
+			COM_ParseToken_Simple(&bufptr, true, false, true);
+		}
+
+		// OPTIONAL: remaining unsupported tokens (eat them)
+		while (bufptr && strcmp(com_token, "\n"))
+			COM_ParseToken_Simple(&bufptr, true, false, true);
+
+		//Con_Printf("data: %d %d %d %f %d (%s)\n", i, start, len, fps, loop, name);
+
 		if(cb)
-			cb(i, start, len, fps, loop, pass);
+			cb(i, start, len, fps, loop, (name[0] ? name : NULL), pass);
 		++i;
 	}
 
 	return i;
 }
 
-void Mod_FrameGroupify_ParseGroups_Count (unsigned int i, int start, int len, float fps, qboolean loop, void *pass)
-{
-	unsigned int *cnt = (unsigned int *) pass;
-	++*cnt;
-}
-
-void Mod_FrameGroupify_ParseGroups_Store (unsigned int i, int start, int len, float fps, qboolean loop, void *pass)
+static void Mod_FrameGroupify_ParseGroups_Store (unsigned int i, int start, int len, float fps, qboolean loop, const char *name, void *pass)
 {
 	dp_model_t *mod = (dp_model_t *) pass;
 	animscene_t *anim = &mod->animscenes[i];
-	dpsnprintf(anim->name, sizeof(anim[i].name), "groupified_%d_anim", i);
+	if(name)
+		strlcpy(anim->name, name, sizeof(anim[i].name));
+	else
+		dpsnprintf(anim->name, sizeof(anim[i].name), "groupified_%d_anim", i);
 	anim->firstframe = bound(0, start, mod->num_poses - 1);
 	anim->framecount = bound(1, len, mod->num_poses - anim->firstframe);
 	anim->framerate = max(1, fps);
@@ -307,7 +324,7 @@ void Mod_FrameGroupify_ParseGroups_Store (unsigned int i, int start, int len, fl
 	//Con_Printf("frame group %d is %d %d %f %d\n", i, start, len, fps, loop);
 }
 
-void Mod_FrameGroupify(dp_model_t *mod, const char *buf)
+static void Mod_FrameGroupify(dp_model_t *mod, const char *buf)
 {
 	unsigned int cnt;
 
@@ -328,7 +345,7 @@ void Mod_FrameGroupify(dp_model_t *mod, const char *buf)
 	Mod_FrameGroupify_ParseGroups(buf, Mod_FrameGroupify_ParseGroups_Store, mod);
 }
 
-void Mod_FindPotentialDeforms(dp_model_t *mod)
+static void Mod_FindPotentialDeforms(dp_model_t *mod)
 {
 	int i, j;
 	texture_t *texture;
@@ -366,6 +383,7 @@ dp_model_t *Mod_LoadModel(dp_model_t *mod, qboolean crash, qboolean checkdisk)
 	unsigned int crc;
 	void *buf;
 	fs_offset_t filesize = 0;
+	char vabuf[1024];
 
 	mod->used = true;
 
@@ -449,6 +467,9 @@ dp_model_t *Mod_LoadModel(dp_model_t *mod, qboolean crash, qboolean checkdisk)
 	// errors can prevent the corresponding mod->loaded = true;
 	mod->loaded = false;
 
+	// default lightmap scale
+	mod->lightmapscale = 1;
+
 	// default model radius and bounding box (mainly for missing models)
 	mod->radius = 16;
 	VectorSet(mod->normalmins, -mod->radius, -mod->radius, -mod->radius);
@@ -486,13 +507,13 @@ dp_model_t *Mod_LoadModel(dp_model_t *mod, qboolean crash, qboolean checkdisk)
 		else if (!memcmp(buf, "ACTRHEAD", 8)) Mod_PSKMODEL_Load(mod, buf, bufend);
 		else if (!memcmp(buf, "INTERQUAKEMODEL", 16)) Mod_INTERQUAKEMODEL_Load(mod, buf, bufend);
 		else if (strlen(mod->name) >= 4 && !strcmp(mod->name + strlen(mod->name) - 4, ".map")) Mod_MAP_Load(mod, buf, bufend);
-		else if (num == BSPVERSION || num == 30) Mod_Q1BSP_Load(mod, buf, bufend);
+		else if (num == BSPVERSION || num == 30 || !memcmp(buf, "BSP2", 4)) Mod_Q1BSP_Load(mod, buf, bufend);
 		else Con_Printf("Mod_LoadModel: model \"%s\" is of unknown/unsupported type\n", mod->name);
 		Mem_Free(buf);
 
 		Mod_FindPotentialDeforms(mod);
-					
-		buf = FS_LoadFile (va("%s.framegroups", mod->name), tempmempool, false, &filesize);
+
+		buf = FS_LoadFile(va(vabuf, sizeof(vabuf), "%s.framegroups", mod->name), tempmempool, false, &filesize);
 		if(buf)
 		{
 			Mod_FrameGroupify(mod, (const char *)buf);
@@ -856,7 +877,8 @@ void Mod_BuildNormals(int firstvertex, int numvertices, int numtriangles, const 
 		VectorNormalize(vectorNormal);
 }
 
-void Mod_BuildBumpVectors(const float *v0, const float *v1, const float *v2, const float *tc0, const float *tc1, const float *tc2, float *svector3f, float *tvector3f, float *normal3f)
+#if 0
+static void Mod_BuildBumpVectors(const float *v0, const float *v1, const float *v2, const float *tc0, const float *tc1, const float *tc2, float *svector3f, float *tvector3f, float *normal3f)
 {
 	float f, tangentcross[3], v10[3], v20[3], tc10[2], tc20[2];
 	// 79 add/sub/negate/multiply (1 cycle), 1 compare (3 cycle?), total cycles not counting load/store/exchange roughly 82 cycles
@@ -899,6 +921,7 @@ void Mod_BuildBumpVectors(const float *v0, const float *v1, const float *v2, con
 		VectorNegate(tvector3f, tvector3f);
 	}
 }
+#endif
 
 // warning: this is a very expensive function!
 void Mod_BuildTextureVectorsFromNormals(int firstvertex, int numvertices, int numtriangles, const float *vertex3f, const float *texcoord2f, const float *normal3f, const int *elements, float *svector3f, float *tvector3f, qboolean areaweighting)
@@ -1368,7 +1391,7 @@ void Mod_CreateCollisionMesh(dp_model_t *mod)
 	for (k = 0;k < mod->nummodelsurfaces;k++)
 	{
 		surface = mod->data_surfaces + mod->firstmodelsurface + k;
-		if (!strcmp(surface->texture->name, "collision")) // found collision mesh
+		if (!strcmp(surface->texture->name, "collision") || !strcmp(surface->texture->name, "collisionconvex")) // found collision mesh
 		{
 			usesinglecollisionmesh = true;
 			numcollisionmeshtriangles = surface->num_triangles;
@@ -1394,7 +1417,8 @@ void Mod_CreateCollisionMesh(dp_model_t *mod)
 	mod->brush.collisionmesh = Mod_ShadowMesh_Finish(mempool, mod->brush.collisionmesh, false, false, false);
 }
 
-void Mod_GetTerrainVertex3fTexCoord2fFromBGRA(const unsigned char *imagepixels, int imagewidth, int imageheight, int ix, int iy, float *vertex3f, float *texcoord2f, matrix4x4_t *pixelstepmatrix, matrix4x4_t *pixeltexturestepmatrix)
+#if 0
+static void Mod_GetTerrainVertex3fTexCoord2fFromBGRA(const unsigned char *imagepixels, int imagewidth, int imageheight, int ix, int iy, float *vertex3f, float *texcoord2f, matrix4x4_t *pixelstepmatrix, matrix4x4_t *pixeltexturestepmatrix)
 {
 	float v[3], tc[3];
 	v[0] = ix;
@@ -1409,7 +1433,7 @@ void Mod_GetTerrainVertex3fTexCoord2fFromBGRA(const unsigned char *imagepixels, 
 	texcoord2f[1] = tc[1];
 }
 
-void Mod_GetTerrainVertexFromBGRA(const unsigned char *imagepixels, int imagewidth, int imageheight, int ix, int iy, float *vertex3f, float *svector3f, float *tvector3f, float *normal3f, float *texcoord2f, matrix4x4_t *pixelstepmatrix, matrix4x4_t *pixeltexturestepmatrix)
+static void Mod_GetTerrainVertexFromBGRA(const unsigned char *imagepixels, int imagewidth, int imageheight, int ix, int iy, float *vertex3f, float *svector3f, float *tvector3f, float *normal3f, float *texcoord2f, matrix4x4_t *pixelstepmatrix, matrix4x4_t *pixeltexturestepmatrix)
 {
 	float vup[3], vdown[3], vleft[3], vright[3];
 	float tcup[3], tcdown[3], tcleft[3], tcright[3];
@@ -1434,7 +1458,7 @@ void Mod_GetTerrainVertexFromBGRA(const unsigned char *imagepixels, int imagewid
 	VectorAdd(normal3f, nl, normal3f);
 }
 
-void Mod_ConstructTerrainPatchFromBGRA(const unsigned char *imagepixels, int imagewidth, int imageheight, int x1, int y1, int width, int height, int *element3i, int *neighbor3i, float *vertex3f, float *svector3f, float *tvector3f, float *normal3f, float *texcoord2f, matrix4x4_t *pixelstepmatrix, matrix4x4_t *pixeltexturestepmatrix)
+static void Mod_ConstructTerrainPatchFromBGRA(const unsigned char *imagepixels, int imagewidth, int imageheight, int x1, int y1, int width, int height, int *element3i, int *neighbor3i, float *vertex3f, float *svector3f, float *tvector3f, float *normal3f, float *texcoord2f, matrix4x4_t *pixelstepmatrix, matrix4x4_t *pixeltexturestepmatrix)
 {
 	int x, y, ix, iy, *e;
 	e = element3i;
@@ -1456,6 +1480,7 @@ void Mod_ConstructTerrainPatchFromBGRA(const unsigned char *imagepixels, int ima
 		for (x = 0, ix = x1;x < width + 1;x++, ix++, vertex3f += 3, texcoord2f += 2, svector3f += 3, tvector3f += 3, normal3f += 3)
 			Mod_GetTerrainVertexFromBGRA(imagepixels, imagewidth, imageheight, ix, iy, vertex3f, texcoord2f, svector3f, tvector3f, normal3f, pixelstepmatrix, pixeltexturestepmatrix);
 }
+#endif
 
 #if 0
 void Mod_Terrain_SurfaceRecurseChunk(dp_model_t *model, int stepsize, int x, int y)
@@ -1537,7 +1562,7 @@ void Mod_Terrain_UpdateSurfacesForViewOrigin(dp_model_t *model)
 }
 #endif
 
-int Mod_LoadQ3Shaders_EnumerateWaveFunc(const char *s)
+static int Mod_LoadQ3Shaders_EnumerateWaveFunc(const char *s)
 {
 	int offset = 0;
 	if (!strncasecmp(s, "user", 4)) // parse stuff like "user1sin", always user<n>func
@@ -1573,15 +1598,31 @@ static void Q3Shader_AddToHash (q3shaderinfo_t* shader)
 	{
 		if (strcasecmp (entry->shader.name, shader->name) == 0)
 		{
-			unsigned char *start, *end, *start2;
-			start = (unsigned char *) (&shader->Q3SHADERINFO_COMPARE_START);
-			end = ((unsigned char *) (&shader->Q3SHADERINFO_COMPARE_END)) + sizeof(shader->Q3SHADERINFO_COMPARE_END);
-			start2 = (unsigned char *) (&entry->shader.Q3SHADERINFO_COMPARE_START);
-			if(memcmp(start, start2, end - start))
-				Con_DPrintf("Shader '%s' already defined, ignoring mismatching redeclaration\n", shader->name);
+			// redeclaration
+			if(shader->dpshaderkill)
+			{
+				// killed shader is a redeclarion? we can safely ignore it
+				return;
+			}
+			else if(entry->shader.dpshaderkill)
+			{
+				// replace the old shader!
+				// this will skip the entry allocating part
+				// below and just replace the shader
+				break;
+			}
 			else
-				Con_DPrintf("Shader '%s' already defined\n", shader->name);
-			return;
+			{
+				unsigned char *start, *end, *start2;
+				start = (unsigned char *) (&shader->Q3SHADERINFO_COMPARE_START);
+				end = ((unsigned char *) (&shader->Q3SHADERINFO_COMPARE_END)) + sizeof(shader->Q3SHADERINFO_COMPARE_END);
+				start2 = (unsigned char *) (&entry->shader.Q3SHADERINFO_COMPARE_START);
+				if(memcmp(start, start2, end - start))
+					Con_DPrintf("Shader '%s' already defined, ignoring mismatching redeclaration\n", shader->name);
+				else
+					Con_DPrintf("Shader '%s' already defined\n", shader->name);
+				return;
+			}
 		}
 		lastEntry = entry;
 		entry = entry->chain;
@@ -1607,8 +1648,11 @@ static void Q3Shader_AddToHash (q3shaderinfo_t* shader)
 
 extern cvar_t mod_noshader_default_offsetmapping;
 extern cvar_t mod_q3shader_default_offsetmapping;
+extern cvar_t mod_q3shader_default_offsetmapping_scale;
+extern cvar_t mod_q3shader_default_offsetmapping_bias;
 extern cvar_t mod_q3shader_default_polygonoffset;
 extern cvar_t mod_q3shader_default_polygonfactor;
+extern cvar_t mod_q3shader_force_addalpha;
 void Mod_LoadQ3Shaders(void)
 {
 	int j;
@@ -1621,8 +1665,9 @@ void Mod_LoadQ3Shaders(void)
 	int numparameters;
 	char parameter[TEXTURE_MAXFRAMES + 4][Q3PATHLENGTH];
 	char *custsurfaceparmnames[256]; // VorteX: q3map2 has 64 but well, someone will need more
-	unsigned long custsurfaceparms[256]; 
-	int numcustsurfaceparms;
+	unsigned long custsurfaceflags[256]; 
+	int numcustsurfaceflags;
+	qboolean dpshaderkill;
 
 	Mod_FreeQ3Shaders();
 
@@ -1635,7 +1680,7 @@ void Mod_LoadQ3Shaders(void)
 		q3shaders_mem, sizeof (char**), 256);
 
 	// parse custinfoparms.txt
-	numcustsurfaceparms = 0;
+	numcustsurfaceflags = 0;
 	if ((text = f = (char *)FS_LoadFile("scripts/custinfoparms.txt", tempmempool, false, NULL)) != NULL)
 	{
 		if (!COM_ParseToken_QuakeC(&text, false) || strcasecmp(com_token, "{"))
@@ -1655,21 +1700,21 @@ void Mod_LoadQ3Shaders(void)
 					if (!strcasecmp(com_token, "}"))
 						break;	
 					// register surfaceflag
-					if (numcustsurfaceparms >= 256)
+					if (numcustsurfaceflags >= 256)
 					{
 						Con_Printf("scripts/custinfoparms.txt: surfaceflags section parsing error - max 256 surfaceflags exceeded\n");
 						break;
 					}
 					// name
 					j = strlen(com_token)+1;
-					custsurfaceparmnames[numcustsurfaceparms] = (char *)Mem_Alloc(tempmempool, j);
-					strlcpy(custsurfaceparmnames[numcustsurfaceparms], com_token, j+1);
+					custsurfaceparmnames[numcustsurfaceflags] = (char *)Mem_Alloc(tempmempool, j);
+					strlcpy(custsurfaceparmnames[numcustsurfaceflags], com_token, j+1);
 					// value
 					if (COM_ParseToken_QuakeC(&text, false))
-						custsurfaceparms[numcustsurfaceparms] = strtol(com_token, NULL, 0);
+						custsurfaceflags[numcustsurfaceflags] = strtol(com_token, NULL, 0);
 					else
-						custsurfaceparms[numcustsurfaceparms] = 0;
-					numcustsurfaceparms++;
+						custsurfaceflags[numcustsurfaceflags] = 0;
+					numcustsurfaceflags++;
 				}
 			}
 		}
@@ -1696,7 +1741,8 @@ void Mod_LoadQ3Shaders(void)
 			Vector4Set(shader.reflectcolor4f, 1, 1, 1, 1);
 			shader.r_water_wateralpha = 1;
 			shader.offsetmapping = (mod_q3shader_default_offsetmapping.value) ? OFFSETMAPPING_DEFAULT : OFFSETMAPPING_OFF;
-			shader.offsetscale = 1;
+			shader.offsetscale = mod_q3shader_default_offsetmapping_scale.value;
+			shader.offsetbias = mod_q3shader_default_offsetmapping_bias.value;
 			shader.specularscalemod = 1;
 			shader.specularpowermod = 1;
 			shader.biaspolygonoffset = mod_q3shader_default_polygonoffset.value;
@@ -1769,6 +1815,11 @@ void Mod_LoadQ3Shaders(void)
 									layer->blendfunc[0] = GL_ONE;
 									layer->blendfunc[1] = GL_ONE;
 								}
+								else if (!strcasecmp(parameter[1], "addalpha"))
+								{
+									layer->blendfunc[0] = GL_SRC_ALPHA;
+									layer->blendfunc[1] = GL_ONE;
+								}
 								else if (!strcasecmp(parameter[1], "filter"))
 								{
 									layer->blendfunc[0] = GL_DST_COLOR;
@@ -1796,7 +1847,7 @@ void Mod_LoadQ3Shaders(void)
 									else if (!strcasecmp(parameter[k+1], "GL_DST_COLOR"))
 										layer->blendfunc[k] = GL_DST_COLOR;
 									else if (!strcasecmp(parameter[k+1], "GL_DST_ALPHA"))
-										layer->blendfunc[k] = GL_ONE_MINUS_DST_ALPHA;
+										layer->blendfunc[k] = GL_DST_ALPHA;
 									else if (!strcasecmp(parameter[k+1], "GL_ONE_MINUS_SRC_COLOR"))
 										layer->blendfunc[k] = GL_ONE_MINUS_SRC_COLOR;
 									else if (!strcasecmp(parameter[k+1], "GL_ONE_MINUS_SRC_ALPHA"))
@@ -1950,7 +2001,32 @@ void Mod_LoadQ3Shaders(void)
 							shader.textureblendalpha = true;
 						}
 					}
-					layer->texflags = TEXF_ALPHA;
+
+					if(mod_q3shader_force_addalpha.integer)
+					{
+						// for a long while, DP treated GL_ONE GL_ONE as GL_SRC_ALPHA GL_ONE
+						// this cvar brings back this behaviour
+						if(layer->blendfunc[0] == GL_ONE && layer->blendfunc[1] == GL_ONE)
+							layer->blendfunc[0] = GL_SRC_ALPHA;
+					}
+
+					layer->texflags = 0;
+					if (layer->alphatest)
+						layer->texflags |= TEXF_ALPHA;
+					switch(layer->blendfunc[0])
+					{
+						case GL_SRC_ALPHA:
+						case GL_ONE_MINUS_SRC_ALPHA:
+							layer->texflags |= TEXF_ALPHA;
+							break;
+					}
+					switch(layer->blendfunc[1])
+					{
+						case GL_SRC_ALPHA:
+						case GL_ONE_MINUS_SRC_ALPHA:
+							layer->texflags |= TEXF_ALPHA;
+							break;
+					}
 					if (!(shader.surfaceparms & Q3SURFACEPARM_NOMIPMAPS))
 						layer->texflags |= TEXF_MIPMAP;
 					if (!(shader.textureflags & Q3TEXTUREFLAG_NOPICMIP))
@@ -2053,19 +2129,21 @@ void Mod_LoadQ3Shaders(void)
 						shader.surfaceparms |= Q3SURFACEPARM_POINTLIGHT;
 					else if (!strcasecmp(parameter[1], "antiportal"))
 						shader.surfaceparms |= Q3SURFACEPARM_ANTIPORTAL;
+					else if (!strcasecmp(parameter[1], "skip"))
+						; // shader.surfaceparms |= Q3SURFACEPARM_SKIP; FIXME we don't have enough #defines for this any more, and the engine doesn't need this one anyway
 					else
 					{
 						// try custom surfaceparms
-						for (j = 0; j < numcustsurfaceparms; j++)
+						for (j = 0; j < numcustsurfaceflags; j++)
 						{
 							if (!strcasecmp(custsurfaceparmnames[j], parameter[1]))
 							{
-								shader.surfaceparms |= custsurfaceparms[j];
+								shader.surfaceflags |= custsurfaceflags[j];
 								break;
 							}
 						}
 						// failed all
-						if (j == numcustsurfaceparms)
+						if (j == numcustsurfaceflags)
 							Con_DPrintf("%s parsing warning: unknown surfaceparm \"%s\"\n", search->filenames[fileindex], parameter[1]);
 					}
 				}
@@ -2079,6 +2157,58 @@ void Mod_LoadQ3Shaders(void)
 					strlcpy(shader.dpreflectcube, parameter[1], sizeof(shader.dpreflectcube));
 				else if (!strcasecmp(parameter[0], "dpmeshcollisions"))
 					shader.dpmeshcollisions = true;
+				// this sets dpshaderkill to true if dpshaderkillifcvarzero was used, and to false if dpnoshaderkillifcvarzero was used
+				else if (((dpshaderkill = !strcasecmp(parameter[0], "dpshaderkillifcvarzero")) || !strcasecmp(parameter[0], "dpnoshaderkillifcvarzero")) && numparameters >= 2)
+				{
+					if (Cvar_VariableValue(parameter[1]) == 0.0f)
+						shader.dpshaderkill = dpshaderkill;
+				}
+				// this sets dpshaderkill to true if dpshaderkillifcvar was used, and to false if dpnoshaderkillifcvar was used
+				else if (((dpshaderkill = !strcasecmp(parameter[0], "dpshaderkillifcvar")) || !strcasecmp(parameter[0], "dpnoshaderkillifcvar")) && numparameters >= 2)
+				{
+					const char *op = NULL;
+					if (numparameters >= 3)
+						op = parameter[2];
+					if(!op)
+					{
+						if (Cvar_VariableValue(parameter[1]) != 0.0f)
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else if (numparameters >= 4 && !strcmp(op, "=="))
+					{
+						if (Cvar_VariableValue(parameter[1]) == atof(parameter[3]))
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else if (numparameters >= 4 && !strcmp(op, "!="))
+					{
+						if (Cvar_VariableValue(parameter[1]) != atof(parameter[3]))
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else if (numparameters >= 4 && !strcmp(op, ">"))
+					{
+						if (Cvar_VariableValue(parameter[1]) > atof(parameter[3]))
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else if (numparameters >= 4 && !strcmp(op, "<"))
+					{
+						if (Cvar_VariableValue(parameter[1]) < atof(parameter[3]))
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else if (numparameters >= 4 && !strcmp(op, ">="))
+					{
+						if (Cvar_VariableValue(parameter[1]) >= atof(parameter[3]))
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else if (numparameters >= 4 && !strcmp(op, "<="))
+					{
+						if (Cvar_VariableValue(parameter[1]) <= atof(parameter[3]))
+							shader.dpshaderkill = dpshaderkill;
+					}
+					else
+					{
+						Con_DPrintf("%s parsing warning: unknown dpshaderkillifcvar op \"%s\", or not enough arguments\n", search->filenames[fileindex], op);
+					}
+				}
 				else if (!strcasecmp(parameter[0], "sky") && numparameters >= 2)
 				{
 					// some q3 skies don't have the sky parm set
@@ -2155,17 +2285,33 @@ void Mod_LoadQ3Shaders(void)
 				{
 					shader.specularpowermod = atof(parameter[1]);
 				}
-				else if (!strcasecmp(parameter[0], "dpoffsetmapping") && numparameters >= 3)
+				else if (!strcasecmp(parameter[0], "dprtlightambient") && numparameters >= 2)
+				{
+					shader.rtlightambient = atof(parameter[1]);
+				}
+				else if (!strcasecmp(parameter[0], "dpoffsetmapping") && numparameters >= 2)
 				{
 					if (!strcasecmp(parameter[1], "disable") || !strcasecmp(parameter[1], "none") || !strcasecmp(parameter[1], "off"))
 						shader.offsetmapping = OFFSETMAPPING_OFF;
-					else if (!strcasecmp(parameter[1], "default"))
+					else if (!strcasecmp(parameter[1], "default") || !strcasecmp(parameter[1], "normal"))
 						shader.offsetmapping = OFFSETMAPPING_DEFAULT;
 					else if (!strcasecmp(parameter[1], "linear"))
 						shader.offsetmapping = OFFSETMAPPING_LINEAR;
 					else if (!strcasecmp(parameter[1], "relief"))
 						shader.offsetmapping = OFFSETMAPPING_RELIEF;
-					shader.offsetscale = atof(parameter[2]);
+					if (numparameters >= 3)
+						shader.offsetscale = atof(parameter[2]);
+					if (numparameters >= 5)
+					{
+						if(!strcasecmp(parameter[3], "bias"))
+							shader.offsetbias = atof(parameter[4]);
+						else if(!strcasecmp(parameter[3], "match"))
+							shader.offsetbias = 1.0f - atof(parameter[4]);
+						else if(!strcasecmp(parameter[3], "match8"))
+							shader.offsetbias = 1.0f - atof(parameter[4]) / 255.0f;
+						else if(!strcasecmp(parameter[3], "match16"))
+							shader.offsetbias = 1.0f - atof(parameter[4]) / 65535.0f;
+					}
 				}
 				else if (!strcasecmp(parameter[0], "deformvertexes") && numparameters >= 2)
 				{
@@ -2207,6 +2353,9 @@ void Mod_LoadQ3Shaders(void)
 					}
 				}
 			}
+			// hide this shader if a cvar said it should be killed
+			if (shader.dpshaderkill)
+				shader.numlayers = 0;
 			// pick the primary layer to render with
 			if (shader.numlayers)
 			{
@@ -2241,7 +2390,7 @@ void Mod_LoadQ3Shaders(void)
 	}
 	FS_FreeSearch(search);
 	// free custinfoparm values
-	for (j = 0; j < numcustsurfaceparms; j++)
+	for (j = 0; j < numcustsurfaceflags; j++)
 		Mem_Free(custsurfaceparmnames[j]);
 }
 
@@ -2286,8 +2435,10 @@ qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qbool
 	// unless later loaded from the shader
 	texture->offsetmapping = (mod_noshader_default_offsetmapping.value) ? OFFSETMAPPING_DEFAULT : OFFSETMAPPING_OFF;
 	texture->offsetscale = 1;
+	texture->offsetbias = 0;
 	texture->specularscalemod = 1;
 	texture->specularpowermod = 1; 
+	texture->rtlightambient = 0;
 	// WHEN ADDING DEFAULTS HERE, REMEMBER TO SYNC TO SHADER LOADING ABOVE
 	// HERE, AND Q1BSP LOADING
 	// JUST GREP FOR "specularscalemod = 1".
@@ -2296,7 +2447,6 @@ qboolean Mod_LoadTextureFromQ3Shader(texture_t *texture, const char *name, qbool
 	{
 		if (developer_loading.integer)
 			Con_Printf("%s: loaded shader for %s\n", loadmodel->name, name);
-		texture->surfaceparms = shader->surfaceparms;
 
 		// allow disabling of picmip or compression by defaulttexflags
 		texture->textureflags = (shader->textureflags & texflagsmask) | texflagsor;
@@ -2424,6 +2574,8 @@ nothing                GL_ZERO GL_ONE
 			texture->basematerialflags |= MATERIALFLAG_NOSHADOW;
 		if (shader->dpnortlight)
 			texture->basematerialflags |= MATERIALFLAG_NORTLIGHT;
+		if (shader->vertexalpha)
+			texture->basematerialflags |= MATERIALFLAG_ALPHAGEN_VERTEX;
 		memcpy(texture->deforms, shader->deforms, sizeof(texture->deforms));
 		texture->reflectmin = shader->reflectmin;
 		texture->reflectmax = shader->reflectmax;
@@ -2435,8 +2587,10 @@ nothing                GL_ZERO GL_ONE
 		Vector2Copy(shader->r_water_waterscroll, texture->r_water_waterscroll);
 		texture->offsetmapping = shader->offsetmapping;
 		texture->offsetscale = shader->offsetscale;
+		texture->offsetbias = shader->offsetbias;
 		texture->specularscalemod = shader->specularscalemod;
 		texture->specularpowermod = shader->specularpowermod;
+		texture->rtlightambient = shader->rtlightambient;
 		if (shader->dpreflectcube[0])
 			texture->reflectcubetexture = R_GetCubemap(shader->dpreflectcube);
 
@@ -2483,21 +2637,55 @@ nothing                GL_ZERO GL_ONE
 	//	if (shader->surfaceparms & Q3SURFACEPARM_LIGHTGRID    ) texture->supercontents |= SUPERCONTENTS_LIGHTGRID    ;
 	//	if (shader->surfaceparms & Q3SURFACEPARM_ANTIPORTAL   ) texture->supercontents |= SUPERCONTENTS_ANTIPORTAL   ;
 
+		texture->surfaceflags = shader->surfaceflags;
+		if (shader->surfaceparms & Q3SURFACEPARM_ALPHASHADOW  ) texture->surfaceflags |= Q3SURFACEFLAG_ALPHASHADOW  ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_AREAPORTAL   ) texture->surfaceflags |= Q3SURFACEFLAG_AREAPORTAL   ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_CLUSTERPORTAL) texture->surfaceflags |= Q3SURFACEFLAG_CLUSTERPORTAL;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_DETAIL       ) texture->surfaceflags |= Q3SURFACEFLAG_DETAIL       ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_DONOTENTER   ) texture->surfaceflags |= Q3SURFACEFLAG_DONOTENTER   ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_FOG          ) texture->surfaceflags |= Q3SURFACEFLAG_FOG          ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_LAVA         ) texture->surfaceflags |= Q3SURFACEFLAG_LAVA         ;
+		if (shader->surfaceparms & Q3SURFACEPARM_LIGHTFILTER  ) texture->surfaceflags |= Q3SURFACEFLAG_LIGHTFILTER  ;
+		if (shader->surfaceparms & Q3SURFACEPARM_METALSTEPS   ) texture->surfaceflags |= Q3SURFACEFLAG_METALSTEPS   ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NODAMAGE     ) texture->surfaceflags |= Q3SURFACEFLAG_NODAMAGE     ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NODLIGHT     ) texture->surfaceflags |= Q3SURFACEFLAG_NODLIGHT     ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NODRAW       ) texture->surfaceflags |= Q3SURFACEFLAG_NODRAW       ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_NODROP       ) texture->surfaceflags |= Q3SURFACEFLAG_NODROP       ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NOIMPACT     ) texture->surfaceflags |= Q3SURFACEFLAG_NOIMPACT     ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NOLIGHTMAP   ) texture->surfaceflags |= Q3SURFACEFLAG_NOLIGHTMAP   ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NOMARKS      ) texture->surfaceflags |= Q3SURFACEFLAG_NOMARKS      ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_NOMIPMAPS    ) texture->surfaceflags |= Q3SURFACEFLAG_NOMIPMAPS    ;
+		if (shader->surfaceparms & Q3SURFACEPARM_NONSOLID     ) texture->surfaceflags |= Q3SURFACEFLAG_NONSOLID     ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_ORIGIN       ) texture->surfaceflags |= Q3SURFACEFLAG_ORIGIN       ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_PLAYERCLIP   ) texture->surfaceflags |= Q3SURFACEFLAG_PLAYERCLIP   ;
+		if (shader->surfaceparms & Q3SURFACEPARM_SKY          ) texture->surfaceflags |= Q3SURFACEFLAG_SKY          ;
+		if (shader->surfaceparms & Q3SURFACEPARM_SLICK        ) texture->surfaceflags |= Q3SURFACEFLAG_SLICK        ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_SLIME        ) texture->surfaceflags |= Q3SURFACEFLAG_SLIME        ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_STRUCTURAL   ) texture->surfaceflags |= Q3SURFACEFLAG_STRUCTURAL   ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_TRANS        ) texture->surfaceflags |= Q3SURFACEFLAG_TRANS        ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_WATER        ) texture->surfaceflags |= Q3SURFACEFLAG_WATER        ;
+		if (shader->surfaceparms & Q3SURFACEPARM_POINTLIGHT   ) texture->surfaceflags |= Q3SURFACEFLAG_POINTLIGHT   ;
+		if (shader->surfaceparms & Q3SURFACEPARM_HINT         ) texture->surfaceflags |= Q3SURFACEFLAG_HINT         ;
+		if (shader->surfaceparms & Q3SURFACEPARM_DUST         ) texture->surfaceflags |= Q3SURFACEFLAG_DUST         ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_BOTCLIP      ) texture->surfaceflags |= Q3SURFACEFLAG_BOTCLIP      ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_LIGHTGRID    ) texture->surfaceflags |= Q3SURFACEFLAG_LIGHTGRID    ;
+	//	if (shader->surfaceparms & Q3SURFACEPARM_ANTIPORTAL   ) texture->surfaceflags |= Q3SURFACEFLAG_ANTIPORTAL   ;
+
 		if (shader->dpmeshcollisions)
 			texture->basematerialflags |= MATERIALFLAG_MESHCOLLISIONS;
+		if (shader->dpshaderkill && developer_extra.integer)
+			Con_DPrintf("^1%s:^7 killing shader ^3\"%s\" because of cvar\n", loadmodel->name, name);
 	}
 	else if (!strcmp(texture->name, "noshader") || !texture->name[0])
 	{
 		if (developer_extra.integer)
 			Con_DPrintf("^1%s:^7 using fallback noshader material for ^3\"%s\"\n", loadmodel->name, name);
-		texture->surfaceparms = 0;
 		texture->supercontents = SUPERCONTENTS_SOLID | SUPERCONTENTS_OPAQUE;
 	}
 	else if (!strcmp(texture->name, "common/nodraw") || !strcmp(texture->name, "textures/common/nodraw"))
 	{
 		if (developer_extra.integer)
 			Con_DPrintf("^1%s:^7 using fallback nodraw material for ^3\"%s\"\n", loadmodel->name, name);
-		texture->surfaceparms = 0;
 		texture->basematerialflags = MATERIALFLAG_NODRAW | MATERIALFLAG_NOSHADOW;
 		texture->supercontents = SUPERCONTENTS_SOLID;
 	}
@@ -2505,7 +2693,6 @@ nothing                GL_ZERO GL_ONE
 	{
 		if (developer_extra.integer)
 			Con_DPrintf("^1%s:^7 No shader found for texture ^3\"%s\"\n", loadmodel->name, texture->name);
-		texture->surfaceparms = 0;
 		if (texture->surfaceflags & Q3SURFACEFLAG_NODRAW)
 		{
 			texture->basematerialflags |= MATERIALFLAG_NODRAW | MATERIALFLAG_NOSHADOW;
@@ -2525,6 +2712,7 @@ nothing                GL_ZERO GL_ONE
 		if(cls.state == ca_dedicated)
 		{
 			texture->skinframes[0] = NULL;
+			success = false;
 		}
 		else
 		{
@@ -2563,6 +2751,7 @@ skinfile_t *Mod_LoadSkinFiles(void)
 	skinfile_t *skinfile = NULL, *first = NULL;
 	skinfileitem_t *skinfileitem;
 	char word[10][MAX_QPATH];
+	char vabuf[1024];
 
 /*
 sample file:
@@ -2580,7 +2769,7 @@ tag_weapon,
 tag_torso,
 */
 	memset(word, 0, sizeof(word));
-	for (i = 0;i < 256 && (data = text = (char *)FS_LoadFile(va("%s_%i.skin", loadmodel->name, i), tempmempool, true, NULL));i++)
+	for (i = 0;i < 256 && (data = text = (char *)FS_LoadFile(va(vabuf, sizeof(vabuf), "%s_%i.skin", loadmodel->name, i), tempmempool, true, NULL));i++)
 	{
 		// If it's the first file we parse
 		if (skinfile == NULL)
@@ -2856,6 +3045,7 @@ void Mod_BuildVBOs(void)
 	}
 }
 
+extern cvar_t mod_obj_orientation;
 static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const char *mtlfilename, const char *originalfilename)
 {
 	int submodelindex, vertexindex, surfaceindex, triangleindex, textureindex, countvertices = 0, countsurfaces = 0, countfaces = 0, counttextures = 0;
@@ -2923,7 +3113,10 @@ static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const cha
 			memcpy(outbuffer, oldbuffer, outbufferpos);
 			Z_Free(oldbuffer);
 		}
-		l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "v %f %f %f\nvn %f %f %f\nvt %f %f\n", v[0], v[2], v[1], vn[0], vn[2], vn[1], vt[0], 1-vt[1]);
+		if(mod_obj_orientation.integer)
+			l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "v %f %f %f\nvn %f %f %f\nvt %f %f\n", v[0], v[2], v[1], vn[0], vn[2], vn[1], vt[0], 1-vt[1]);
+		else
+			l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "v %f %f %f\nvn %f %f %f\nvt %f %f\n", v[0], v[1], v[2], vn[0], vn[1], vn[2], vt[0], 1-vt[1]);
 		if (l > 0)
 			outbufferpos += l;
 	}
@@ -2953,7 +3146,10 @@ static void Mod_Decompile_OBJ(dp_model_t *model, const char *filename, const cha
 				a = e[0]+1;
 				b = e[1]+1;
 				c = e[2]+1;
-				l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "f %i/%i/%i %i/%i/%i %i/%i/%i\n", a,a,a,b,b,b,c,c,c);
+				if(mod_obj_orientation.integer)
+					l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "f %i/%i/%i %i/%i/%i %i/%i/%i\n", a,a,a,b,b,b,c,c,c);
+				else
+					l = dpsnprintf(outbuffer + outbufferpos, outbuffermax - outbufferpos, "f %i/%i/%i %i/%i/%i %i/%i/%i\n", a,a,a,c,c,c,b,b,b);
 				if (l > 0)
 					outbufferpos += l;
 			}
@@ -3028,7 +3224,7 @@ static void Mod_Decompile_SMD(dp_model_t *model, const char *filename, int first
 
 			// strangely the smd angles are for a transposed matrix, so we
 			// have to generate a transposed matrix, then convert that...
-			Matrix4x4_FromBonePose6s(&posematrix, model->num_posescale, model->data_poses6s + 6*(model->num_bones * poseindex + transformindex));
+			Matrix4x4_FromBonePose7s(&posematrix, model->num_posescale, model->data_poses7s + 7*(model->num_bones * poseindex + transformindex));
 			Matrix4x4_ToArray12FloatGL(&posematrix, mtest[0]);
 			AnglesFromVectors(angles, mtest[0], mtest[2], false);
 			if (angles[0] >= 180) angles[0] -= 360;
@@ -3151,6 +3347,7 @@ static void Mod_Decompile_f(void)
 	int zymtextsize = 0;
 	int dpmtextsize = 0;
 	int framegroupstextsize = 0;
+	char vabuf[1024];
 
 	if (Cmd_Argc() != 2)
 	{
@@ -3162,17 +3359,17 @@ static void Mod_Decompile_f(void)
 	FS_StripExtension(inname, basename, sizeof(basename));
 
 	mod = Mod_ForName(inname, false, true, inname[0] == '*' ? cl.model_name[1] : NULL);
+	if (!mod)
+	{
+		Con_Print("No such model\n");
+		return;
+	}
 	if (mod->brush.submodel)
 	{
 		// if we're decompiling a submodel, be sure to give it a proper name based on its parent
 		FS_StripExtension(cl.model_name[1], outname, sizeof(outname));
 		dpsnprintf(basename, sizeof(basename), "%s/%s", outname, mod->name);
 		outname[0] = 0;
-	}
-	if (!mod)
-	{
-		Con_Print("No such model\n");
-		return;
 	}
 	if (!mod->surfmesh.num_triangles)
 	{
@@ -3257,11 +3454,11 @@ static void Mod_Decompile_f(void)
 			}
 		}
 		if (zymtextsize)
-			FS_WriteFile(va("%s_decompiled/out_zym.txt", basename), zymtextbuffer, (fs_offset_t)zymtextsize);
+			FS_WriteFile(va(vabuf, sizeof(vabuf), "%s_decompiled/out_zym.txt", basename), zymtextbuffer, (fs_offset_t)zymtextsize);
 		if (dpmtextsize)
-			FS_WriteFile(va("%s_decompiled/out_dpm.txt", basename), dpmtextbuffer, (fs_offset_t)dpmtextsize);
+			FS_WriteFile(va(vabuf, sizeof(vabuf), "%s_decompiled/out_dpm.txt", basename), dpmtextbuffer, (fs_offset_t)dpmtextsize);
 		if (framegroupstextsize)
-			FS_WriteFile(va("%s_decompiled.framegroups", basename), framegroupstextbuffer, (fs_offset_t)framegroupstextsize);
+			FS_WriteFile(va(vabuf, sizeof(vabuf), "%s_decompiled.framegroups", basename), framegroupstextbuffer, (fs_offset_t)framegroupstextsize);
 	}
 }
 
@@ -3395,7 +3592,6 @@ static float mod_generatelightmaps_offsets[3][MAX_LIGHTMAPSAMPLES][3];
 static int mod_generatelightmaps_numlights;
 static lightmaplight_t *mod_generatelightmaps_lightinfo;
 
-extern int R_Shadow_GetRTLightInfo(unsigned int lightindex, float *origin, float *radius, float *color);
 extern cvar_t r_shadow_lightattenuationdividebias;
 extern cvar_t r_shadow_lightattenuationlinearscale;
 
@@ -3976,6 +4172,7 @@ static void Mod_GenerateLightmaps_CreateLightmaps(dp_model_t *model)
 	unsigned char *lightmappixels;
 	unsigned char *deluxemappixels;
 	mod_alloclightmap_state_t lmstate;
+	char vabuf[1024];
 
 	// generate lightmap projection information for all triangles
 	if (model->texturepool == NULL)
@@ -4158,8 +4355,8 @@ static void Mod_GenerateLightmaps_CreateLightmaps(dp_model_t *model)
 
 	for (lightmapindex = 0;lightmapindex < model->brushq3.num_mergedlightmaps;lightmapindex++)
 	{
-		model->brushq3.data_lightmaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va("lightmap%i", lightmapindex), lm_texturesize, lm_texturesize, lightmappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, -1, NULL);
-		model->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va("deluxemap%i", lightmapindex), lm_texturesize, lm_texturesize, deluxemappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, -1, NULL);
+		model->brushq3.data_lightmaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va(vabuf, sizeof(vabuf), "lightmap%i", lightmapindex), lm_texturesize, lm_texturesize, lightmappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, -1, NULL);
+		model->brushq3.data_deluxemaps[lightmapindex] = R_LoadTexture2D(model->texturepool, va(vabuf, sizeof(vabuf), "deluxemap%i", lightmapindex), lm_texturesize, lm_texturesize, deluxemappixels + lightmapindex * lm_texturesize * lm_texturesize * 4, TEXTYPE_BGRA, TEXF_FORCELINEAR, -1, NULL);
 	}
 
 	if (lightmappixels)
@@ -4170,7 +4367,6 @@ static void Mod_GenerateLightmaps_CreateLightmaps(dp_model_t *model)
 	for (surfaceindex = 0;surfaceindex < model->num_surfaces;surfaceindex++)
 	{
 		surface = model->data_surfaces + surfaceindex;
-		e = model->surfmesh.data_element3i + surface->num_firsttriangle*3;
 		if (!surface->num_triangles)
 			continue;
 		lightmapindex = mod_generatelightmaps_lightmaptriangles[surface->num_firsttriangle].lightmapindex;

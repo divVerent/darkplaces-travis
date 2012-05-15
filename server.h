@@ -53,6 +53,12 @@ typedef struct server_static_s
 	unsigned char *csqc_progdata;
 	size_t csqc_progsize_deflated;
 	unsigned char *csqc_progdata_deflated;
+
+	// independent server thread (when running client)
+	qboolean threaded; // true if server is running on separate thread
+	qboolean volatile threadstop;
+	void *threadmutex;
+	void *thread;
 } server_static_t;
 
 //=============================================================================
@@ -60,12 +66,13 @@ typedef struct server_static_s
 typedef enum server_state_e {ss_loading, ss_active} server_state_t;
 
 #define MAX_CONNECTFLOODADDRESSES 16
-typedef struct server_connectfloodaddress_s
+#define MAX_GETSTATUSFLOODADDRESSES 128
+typedef struct server_floodaddress_s
 {
 	double lasttime;
 	lhnetaddress_t address;
 }
-server_connectfloodaddress_t;
+server_floodaddress_t;
 
 typedef struct server_s
 {
@@ -131,7 +138,8 @@ typedef struct server_s
 	/// connection flood blocking
 	/// note this is in server_t rather than server_static_t so that it is
 	/// reset on each map command (such as New Game in singleplayer)
-	server_connectfloodaddress_t connectfloodaddresses[MAX_CONNECTFLOODADDRESSES];
+	server_floodaddress_t connectfloodaddresses[MAX_CONNECTFLOODADDRESSES];
+	server_floodaddress_t getstatusfloodaddresses[MAX_GETSTATUSFLOODADDRESSES];
 
 #define SV_MAX_PARTICLEEFFECTNAME 256
 	qboolean particleeffectnamesloaded;
@@ -225,7 +233,7 @@ typedef struct client_s
 	float clmovement_inputtimeout;
 
 /// spawn parms are carried from level to level
-	float spawn_parms[NUM_SPAWN_PARMS];
+	prvm_vec_t spawn_parms[NUM_SPAWN_PARMS];
 
 	// properties that are sent across the network only when changed
 	char name[MAX_SCOREBOARDNAME], old_name[MAX_SCOREBOARDNAME];
@@ -296,6 +304,10 @@ typedef struct client_s
 	// number of skipped entity frames
 	// if it exceeds a limit, an empty entity frame is sent
 	int num_skippedentityframes;
+
+	// last sent move sequence
+	// if the move sequence changed, an empty entity frame is sent
+	int lastmovesequence;
 } client_t;
 
 
@@ -317,6 +329,7 @@ typedef struct client_s
 #define MOVETYPE_FOLLOW			12		///< track movement of aiment
 #define MOVETYPE_FAKEPUSH		13		///< tenebrae's push that doesn't push
 #define MOVETYPE_PHYSICS		32		///< indicates this object is physics controlled
+#define MOVETYPE_FLY_WORLDONLY		33		///< like MOVETYPE_FLY, but uses MOVE_WORLDONLY for all its traces; objects of this movetype better be SOLID_NOT or SOLID_TRIGGER please, or else...
 
 // edict->solid values
 #define	SOLID_NOT				0		///< no interaction with other objects
@@ -327,9 +340,12 @@ typedef struct client_s
 // LordHavoc: corpse code
 #define	SOLID_CORPSE			5		///< same as SOLID_BBOX, except it behaves as SOLID_NOT against SOLID_SLIDEBOX objects (players/monsters)
 // LordHavoc: physics
+// VorteX: now these fields are deprecated, as geomtype is more flexible
 #define	SOLID_PHYSICS_BOX		32		///< physics object (mins, maxs, mass, origin, axis_forward, axis_left, axis_up, velocity, spinvelocity)
 #define	SOLID_PHYSICS_SPHERE	33		///< physics object (mins, maxs, mass, origin, axis_forward, axis_left, axis_up, velocity, spinvelocity)
 #define	SOLID_PHYSICS_CAPSULE	34		///< physics object (mins, maxs, mass, origin, axis_forward, axis_left, axis_up, velocity, spinvelocity)
+#define	SOLID_PHYSICS_TRIMESH	35		///< physics object (mins, maxs, mass, origin, axis_forward, axis_left, axis_up, velocity, spinvelocity)
+#define	SOLID_PHYSICS_CYLINDER	36		///< physics object (mins, maxs, mass, origin, axis_forward, axis_left, axis_up, velocity, spinvelocity)
 
 // edict->deadflag values
 #define	DEAD_NO					0
@@ -431,13 +447,14 @@ extern cvar_t sv_gameplayfix_droptofloorstartsolid_nudgetocorrect;
 extern cvar_t sv_gameplayfix_easierwaterjump;
 extern cvar_t sv_gameplayfix_findradiusdistancetobox;
 extern cvar_t sv_gameplayfix_gravityunaffectedbyticrate;
-extern cvar_t sv_gameplayfix_nogravityonground;
 extern cvar_t sv_gameplayfix_grenadebouncedownslopes;
 extern cvar_t sv_gameplayfix_multiplethinksperframe;
 extern cvar_t sv_gameplayfix_noairborncorpse;
 extern cvar_t sv_gameplayfix_noairborncorpse_allowsuspendeditems;
 extern cvar_t sv_gameplayfix_nudgeoutofsolid;
-extern cvar_t sv_gameplayfix_nudgeoutofsolid_bias;
+extern cvar_t sv_gameplayfix_nudgeoutofsolid_separation;
+extern cvar_t sv_gameplayfix_q2airaccelerate;
+extern cvar_t sv_gameplayfix_nogravityonground;
 extern cvar_t sv_gameplayfix_setmodelrealbox;
 extern cvar_t sv_gameplayfix_slidemoveprojectiles;
 extern cvar_t sv_gameplayfix_stepdown;
@@ -447,6 +464,10 @@ extern cvar_t sv_gameplayfix_nostepmoveonsteepslopes;
 extern cvar_t sv_gameplayfix_swiminbmodels;
 extern cvar_t sv_gameplayfix_upwardvelocityclearsongroundflag;
 extern cvar_t sv_gameplayfix_downtracesupportsongroundflag;
+extern cvar_t sv_gameplayfix_q1bsptracelinereportstexture;
+extern cvar_t sv_gameplayfix_unstickplayers;
+extern cvar_t sv_gameplayfix_unstickentities;
+extern cvar_t sv_gameplayfix_fixedcheckwatertransition;
 extern cvar_t sv_gravity;
 extern cvar_t sv_idealpitchscale;
 extern cvar_t sv_jumpstep;
@@ -468,6 +489,7 @@ extern cvar_t sv_stopspeed;
 extern cvar_t sv_wallfriction;
 extern cvar_t sv_wateraccelerate;
 extern cvar_t sv_waterfriction;
+extern cvar_t sv_areadebug;
 extern cvar_t sys_ticrate;
 extern cvar_t teamplay;
 extern cvar_t temp1;
@@ -488,13 +510,13 @@ void SV_Init (void);
 
 void SV_StartParticle (vec3_t org, vec3_t dir, int color, int count);
 void SV_StartEffect (vec3_t org, int modelindex, int startframe, int framecount, int framerate);
-void SV_StartSound (prvm_edict_t *entity, int channel, const char *sample, int volume, float attenuation);
-void SV_StartPointSound (vec3_t origin, const char *sample, int volume, float attenuation);
+void SV_StartSound (prvm_edict_t *entity, int channel, const char *sample, int volume, float attenuation, qboolean reliable, float speed);
+void SV_StartPointSound (vec3_t origin, const char *sample, int volume, float attenuation, float speed);
 
 void SV_ConnectClient (int clientnum, netconn_t *netconnection);
 void SV_DropClient (qboolean crash);
 
-void SV_SendClientMessages (void);
+void SV_SendClientMessages(void);
 
 void SV_ReadClientMessage(void);
 
@@ -548,6 +570,7 @@ int SV_GenericHitSuperContentsMask(const prvm_edict_t *edict);
 trace_t SV_TraceBox(const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int type, prvm_edict_t *passedict, int hitsupercontentsmask);
 trace_t SV_TraceLine(const vec3_t start, const vec3_t end, int type, prvm_edict_t *passedict, int hitsupercontentsmask);
 trace_t SV_TracePoint(const vec3_t start, int type, prvm_edict_t *passedict, int hitsupercontentsmask);
+int SV_EntitiesInBox(const vec3_t mins, const vec3_t maxs, int maxedicts, prvm_edict_t **resultedicts);
 
 qboolean SV_CanSeeBox(int numsamples, vec_t enlarge, vec3_t eye, vec3_t entboxmins, vec3_t entboxmaxs);
 
@@ -556,7 +579,7 @@ int SV_PointSuperContents(const vec3_t point);
 void SV_FlushBroadcastMessages(void);
 void SV_WriteClientdataToMessage (client_t *client, prvm_edict_t *ent, sizebuf_t *msg, int *stats);
 
-void SV_MoveToGoal (void);
+void VM_SV_MoveToGoal(prvm_prog_t *prog);
 
 void SV_ApplyClientMove (void);
 void SV_SaveSpawnparms (void);
@@ -566,13 +589,20 @@ void SV_CheckVelocity (prvm_edict_t *ent);
 
 void SV_SetupVM(void);
 
-void SV_VM_Begin(void);
-void SV_VM_End(void);
+const char *Host_TimingReport(char *buf, size_t buflen); ///< for output in Host_Status_f
 
-const char *Host_TimingReport(void); ///< for output in Host_Status_f
+int SV_GetPitchSign(prvm_prog_t *prog, prvm_edict_t *ent);
+void SV_GetEntityMatrix(prvm_prog_t *prog, prvm_edict_t *ent, matrix4x4_t *out, qboolean viewmatrix);
 
-int SV_GetPitchSign(prvm_edict_t *ent);
-void SV_GetEntityMatrix (prvm_edict_t *ent, matrix4x4_t *out, qboolean viewmatrix);
+void SV_StartThread(void);
+void SV_StopThread(void);
+#define SV_LockThreadMutex() (void)(svs.threaded ? Thread_LockMutex(svs.threadmutex) : 0)
+#define SV_UnlockThreadMutex() (void)(svs.threaded ? Thread_UnlockMutex(svs.threadmutex) : 0)
+
+void VM_CustomStats_Clear(void);
+void VM_SV_UpdateCustomStats(client_t *client, prvm_edict_t *ent, sizebuf_t *msg, int *stats);
+void Host_Savegame_to(prvm_prog_t *prog, const char *name);
+void SV_SendServerinfo(client_t *client);
 
 #endif
 

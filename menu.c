@@ -273,7 +273,7 @@ static void M_DrawTextBox(float x, float y, float width, float height)
 M_ToggleMenu
 ================
 */
-void M_ToggleMenu(int mode)
+static void M_ToggleMenu(int mode)
 {
 	m_entersound = true;
 
@@ -308,7 +308,7 @@ static void M_Demo_Draw (void)
 }
 
 
-void M_Menu_Demos_f (void)
+static void M_Menu_Demos_f (void)
 {
 	key_dest = key_menu;
 	m_state = m_demo;
@@ -318,6 +318,7 @@ void M_Menu_Demos_f (void)
 
 static void M_Demo_Key (int k, int ascii)
 {
+	char vabuf[1024];
 	switch (k)
 	{
 	case K_ESCAPE:
@@ -328,7 +329,7 @@ static void M_Demo_Key (int k, int ascii)
 		S_LocalSound ("sound/misc/menu2.wav");
 		m_state = m_none;
 		key_dest = key_game;
-		Cbuf_AddText (va ("playdemo %s\n", NehahraDemos[demo_cursor].name));
+		Cbuf_AddText (va(vabuf, sizeof(vabuf), "playdemo %s\n", NehahraDemos[demo_cursor].name));
 		return;
 
 	case K_UPARROW:
@@ -431,6 +432,7 @@ static void M_Main_Draw (void)
 {
 	int		f;
 	cachepic_t	*p;
+	char vabuf[1024];
 
 	if (m_missingdata)
 	{
@@ -460,14 +462,14 @@ static void M_Main_Draw (void)
 		{
 			if (MAIN_ITEMS == 7 && y1 == 4)
 				y1++;
-			M_DrawPic (0, y2, va("gfx/menu/mainmenu%i", y1));
+			M_DrawPic (0, y2, va(vabuf, sizeof(vabuf), "gfx/menu/mainmenu%i", y1));
 			y2 += 40;
 		}
 		if (MAIN_ITEMS == 7 && m_main_cursor > 2)
 			y3 = m_main_cursor + 2;
 		else
 			y3 = m_main_cursor + 1;
-		M_DrawPic (0, 120 + m_main_cursor * 40, va("gfx/menu/mainmenu%iselected", y3));
+		M_DrawPic (0, 120 + m_main_cursor * 40, va(vabuf, sizeof(vabuf), "gfx/menu/mainmenu%iselected", y3));
 		return;
 	}
 
@@ -490,7 +492,7 @@ static void M_Main_Draw (void)
 
 	f = (int)(realtime * 10)%6;
 
-	M_DrawPic (54, 32 + m_main_cursor * 20, va("gfx/menudot%i", f+1));
+	M_DrawPic (54, 32 + m_main_cursor * 20, va(vabuf, sizeof(vabuf), "gfx/menudot%i", f+1));
 }
 
 
@@ -743,6 +745,7 @@ void M_Menu_SinglePlayer_f (void)
 static void M_SinglePlayer_Draw (void)
 {
 	cachepic_t	*p;
+	char vabuf[1024];
 
 	M_Background(320, 200);
 
@@ -770,7 +773,7 @@ static void M_SinglePlayer_Draw (void)
 
 		f = (int)(realtime * 10)%6;
 
-		M_DrawPic (54, 32 + m_singleplayer_cursor * 20, va("gfx/menudot%i", f+1));
+		M_DrawPic (54, 32 + m_singleplayer_cursor * 20, va(vabuf, sizeof(vabuf), "gfx/menudot%i", f+1));
 	}
 }
 
@@ -866,10 +869,10 @@ static void M_ScanSaves (void)
 		buf[len] = 0;
 		t = buf;
 		// version
-		COM_ParseToken_Simple(&t, false, false);
+		COM_ParseToken_Simple(&t, false, false, true);
 		//version = atoi(com_token);
 		// description
-		COM_ParseToken_Simple(&t, false, false);
+		COM_ParseToken_Simple(&t, false, false, true);
 		strlcpy (m_filenames[i], com_token, sizeof (m_filenames[i]));
 
 	// change _ back to space
@@ -949,6 +952,7 @@ static void M_Save_Draw (void)
 
 static void M_Load_Key (int k, int ascii)
 {
+	char vabuf[1024];
 	switch (k)
 	{
 	case K_ESCAPE:
@@ -966,7 +970,7 @@ static void M_Load_Key (int k, int ascii)
 		key_dest = key_game;
 
 		// issue the load command
-		Cbuf_AddText (va ("load s%i\n", load_cursor) );
+		Cbuf_AddText (va(vabuf, sizeof(vabuf), "load s%i\n", load_cursor) );
 		return;
 
 	case K_UPARROW:
@@ -990,6 +994,7 @@ static void M_Load_Key (int k, int ascii)
 
 static void M_Save_Key (int k, int ascii)
 {
+	char vabuf[1024];
 	switch (k)
 	{
 	case K_ESCAPE:
@@ -1002,7 +1007,7 @@ static void M_Save_Key (int k, int ascii)
 	case K_ENTER:
 		m_state = m_none;
 		key_dest = key_game;
-		Cbuf_AddText (va("save s%i\n", load_cursor));
+		Cbuf_AddText (va(vabuf, sizeof(vabuf), "save s%i\n", load_cursor));
 		return;
 
 	case K_UPARROW:
@@ -1040,15 +1045,16 @@ static void M_Transfusion_Episode_Draw (void)
 {
 	int y;
 	cachepic_t *p;
+	char vabuf[1024];
 	M_Background(640, 480);
 
 	p = Draw_CachePic ("gfx/menu/tb-episodes");
 	M_DrawPic (640/2 - p->width/2, 40, "gfx/menu/tb-episodes");
 	for (y = 0; y < EPISODE_ITEMS; y++){
-		M_DrawPic (0, 160 + y * 40, va("gfx/menu/episode%i", y+1));
+		M_DrawPic (0, 160 + y * 40, va(vabuf, sizeof(vabuf), "gfx/menu/episode%i", y+1));
 	}
 
-	M_DrawPic (0, 120 + (m_episode_cursor + 1) * 40, va("gfx/menu/episode%iselected", m_episode_cursor + 1));
+	M_DrawPic (0, 120 + (m_episode_cursor + 1) * 40, va(vabuf, sizeof(vabuf), "gfx/menu/episode%iselected", m_episode_cursor + 1));
 }
 
 static void M_Transfusion_Episode_Key (int key, int ascii)
@@ -1097,6 +1103,7 @@ static void M_Transfusion_Skill_Draw (void)
 {
 	int y;
 	cachepic_t	*p;
+	char vabuf[1024];
 	M_Background(640, 480);
 
 	p = Draw_CachePic ("gfx/menu/tb-difficulty");
@@ -1104,9 +1111,9 @@ static void M_Transfusion_Skill_Draw (void)
 
 	for (y = 0; y < SKILL_ITEMS; y++)
 	{
-		M_DrawPic (0, 180 + y * 40, va("gfx/menu/difficulty%i", y+1));
+		M_DrawPic (0, 180 + y * 40, va(vabuf, sizeof(vabuf), "gfx/menu/difficulty%i", y+1));
 	}
-	M_DrawPic (0, 140 + (m_skill_cursor + 1) *40, va("gfx/menu/difficulty%iselected", m_skill_cursor + 1));
+	M_DrawPic (0, 140 + (m_skill_cursor + 1) *40, va(vabuf, sizeof(vabuf), "gfx/menu/difficulty%iselected", m_skill_cursor + 1));
 }
 
 static void M_Transfusion_Skill_Key (int key, int ascii)
@@ -1199,6 +1206,7 @@ static void M_MultiPlayer_Draw (void)
 {
 	int		f;
 	cachepic_t	*p;
+	char vabuf[1024];
 
 	if (gamemode == GAME_TRANSFUSION)
 	{
@@ -1206,8 +1214,8 @@ static void M_MultiPlayer_Draw (void)
 		p = Draw_CachePic ("gfx/menu/tb-online");
 		M_DrawPic (640/2 - p->width/2, 140, "gfx/menu/tb-online");
 		for (f = 1; f <= MULTIPLAYER_ITEMS; f++)
-			M_DrawPic (0, 180 + f*40, va("gfx/menu/online%i", f));
-		M_DrawPic (0, 220 + m_multiplayer_cursor * 40, va("gfx/menu/online%iselected", m_multiplayer_cursor + 1));
+			M_DrawPic (0, 180 + f*40, va(vabuf, sizeof(vabuf), "gfx/menu/online%i", f));
+		M_DrawPic (0, 220 + m_multiplayer_cursor * 40, va(vabuf, sizeof(vabuf), "gfx/menu/online%iselected", m_multiplayer_cursor + 1));
 		return;
 	}
 	M_Background(320, 200);
@@ -1219,7 +1227,7 @@ static void M_MultiPlayer_Draw (void)
 
 	f = (int)(realtime * 10)%6;
 
-	M_DrawPic (54, 32 + m_multiplayer_cursor * 20, va("gfx/menudot%i", f+1));
+	M_DrawPic (54, 32 + m_multiplayer_cursor * 20, va(vabuf, sizeof(vabuf), "gfx/menudot%i", f+1));
 }
 
 
@@ -1327,6 +1335,7 @@ static void M_Setup_Draw (void)
 {
 	int i, j;
 	cachepic_t	*p;
+	char vabuf[1024];
 
 	M_Background(320, 200);
 
@@ -1345,7 +1354,7 @@ static void M_Setup_Draw (void)
 	}
 
 	M_Print(64, 124-8, "Network speed limit");
-	M_Print(168, 124, va("%i (%s)", setup_rate, setup_ratetable[setup_rateindex(setup_rate)].name));
+	M_Print(168, 124, va(vabuf, sizeof(vabuf), "%i (%s)", setup_rate, setup_ratetable[setup_rateindex(setup_rate)].name));
 
 	M_DrawTextBox (64, 140-8, 14, 1);
 	M_Print(72, 140, "Accept Changes");
@@ -1419,6 +1428,7 @@ static void M_Setup_Draw (void)
 static void M_Setup_Key (int k, int ascii)
 {
 	int			l;
+	char vabuf[1024];
 
 	switch (k)
 	{
@@ -1483,11 +1493,11 @@ forward:
 
 		// setup_cursor == 4 (Accept changes)
 		if (strcmp(cl_name.string, setup_myname) != 0)
-			Cbuf_AddText ( va ("name \"%s\"\n", setup_myname) );
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "name \"%s\"\n", setup_myname) );
 		if (setup_top != setup_oldtop || setup_bottom != setup_oldbottom)
-			Cbuf_AddText( va ("color %i %i\n", setup_top, setup_bottom) );
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "color %i %i\n", setup_top, setup_bottom) );
 		if (setup_rate != setup_oldrate)
-			Cbuf_AddText(va("rate %i\n", setup_rate));
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "rate %i\n", setup_rate));
 
 		m_entersound = true;
 		M_Menu_MultiPlayer_f ();
@@ -1978,10 +1988,8 @@ extern cvar_t r_bloom_colorexponent;
 extern cvar_t r_bloom_blur;
 extern cvar_t r_bloom_brighten;
 extern cvar_t r_bloom_resolution;
-extern cvar_t r_hdr;
 extern cvar_t r_hdr_scenebrightness;
 extern cvar_t r_hdr_glowintensity;
-extern cvar_t r_hdr_range;
 extern cvar_t gl_picmip;
 
 static void M_Menu_Options_Graphics_AdjustSliders (int dir)
@@ -1999,10 +2007,8 @@ static void M_Menu_Options_Graphics_AdjustSliders (int dir)
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_shadow_realtime_world,					!r_shadow_realtime_world.integer);
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_shadow_realtime_world_lightmaps,		bound(0, r_shadow_realtime_world_lightmaps.value + dir * 0.1, 1));
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_shadow_realtime_world_shadows,			!r_shadow_realtime_world_shadows.integer);
-	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_hdr_scenebrightness,                   bound(0.25, r_hdr_scenebrightness.value + dir * 0.125, 4));
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_bloom,                                 !r_bloom.integer);
-	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_hdr,                                   !r_hdr.integer);
-	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_hdr_range,                             bound(1, r_hdr_range.value + dir * 0.25, 16));
+	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_hdr_scenebrightness,                   bound(0.25, r_hdr_scenebrightness.value + dir * 0.125, 4));
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_hdr_glowintensity,                     bound(0, r_hdr_glowintensity.value + dir * 0.25, 4));
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_bloom_colorscale,                      bound(0.0625, r_bloom_colorscale.value + dir * 0.0625, 1));
 	else if (options_graphics_cursor == optnum++) Cvar_SetValueQuick (&r_bloom_colorsubtract,                   bound(0, r_bloom_colorsubtract.value + dir * 0.0625, 1-0.0625));
@@ -2038,17 +2044,15 @@ static void M_Options_Graphics_Draw (void)
 	M_Options_PrintCheckbox("              RT World", true, r_shadow_realtime_world.integer);
 	M_Options_PrintSlider(  "    RT World Lightmaps", true, r_shadow_realtime_world_lightmaps.value, 0, 1);
 	M_Options_PrintCheckbox("       RT World Shadow", true, r_shadow_realtime_world_shadows.integer);
+	M_Options_PrintCheckbox("          Bloom Effect", true, r_bloom.integer);
 	M_Options_PrintSlider(  "      Scene Brightness", true, r_hdr_scenebrightness.value, 0.25, 4);
-	M_Options_PrintCheckbox("          Bloom Effect", !r_hdr.integer, r_bloom.integer);
-	M_Options_PrintCheckbox("      HDR Bloom Effect", true, r_hdr.integer);
-	M_Options_PrintSlider(  "     HDR Dynamic Range", r_hdr.integer, r_hdr_range.value, 1, 16);
-	M_Options_PrintSlider(  "    HDR Glow Intensity", r_hdr.integer, r_hdr_glowintensity.value, 0, 4);
-	M_Options_PrintSlider(  "     Bloom Color Scale", r_hdr.integer || r_bloom.integer, r_bloom_colorscale.value, 0.0625, 1);
-	M_Options_PrintSlider(  "  Bloom Color Subtract", r_hdr.integer || r_bloom.integer, r_bloom_colorsubtract.value, 0, 1-0.0625);
-	M_Options_PrintSlider(  "  Bloom Color Exponent", r_hdr.integer || r_bloom.integer, r_bloom_colorexponent.value, 1, 8);
-	M_Options_PrintSlider(  "       Bloom Intensity", r_hdr.integer || r_bloom.integer, r_bloom_brighten.value, 1, 4);
-	M_Options_PrintSlider(  "            Bloom Blur", r_hdr.integer || r_bloom.integer, r_bloom_blur.value, 1, 16);
-	M_Options_PrintSlider(  "      Bloom Resolution", r_hdr.integer || r_bloom.integer, r_bloom_resolution.value, 64, 2048);
+	M_Options_PrintSlider(  "       Glow Brightness", true, r_hdr_glowintensity.value, 0, 4);
+	M_Options_PrintSlider(  "     Bloom Color Scale", r_bloom.integer, r_bloom_colorscale.value, 0.0625, 1);
+	M_Options_PrintSlider(  "  Bloom Color Subtract", r_bloom.integer, r_bloom_colorsubtract.value, 0, 1-0.0625);
+	M_Options_PrintSlider(  "  Bloom Color Exponent", r_bloom.integer, r_bloom_colorexponent.value, 1, 8);
+	M_Options_PrintSlider(  "       Bloom Intensity", r_bloom.integer, r_bloom_brighten.value, 1, 4);
+	M_Options_PrintSlider(  "            Bloom Blur", r_bloom.integer, r_bloom_blur.value, 1, 16);
+	M_Options_PrintSlider(  "      Bloom Resolution", r_bloom.integer, r_bloom_resolution.value, 64, 2048);
 	M_Options_PrintCommand( "      Restart Renderer", true);
 }
 
@@ -2635,6 +2639,7 @@ static void M_Keys_Draw (void)
 			strlcpy(keystring, "???", sizeof(keystring));
 		else
 		{
+			char tinystr[2];
 			keystring[0] = 0;
 			for (j = 0;j < NUMKEYS;j++)
 			{
@@ -2642,7 +2647,7 @@ static void M_Keys_Draw (void)
 				{
 					if (j > 0)
 						strlcat(keystring, " or ", sizeof(keystring));
-					strlcat(keystring, Key_KeynumToString (keys[j]), sizeof(keystring));
+					strlcat(keystring, Key_KeynumToString (keys[j], tinystr, sizeof(tinystr)), sizeof(keystring));
 				}
 			}
 		}
@@ -2660,6 +2665,7 @@ static void M_Keys_Key (int k, int ascii)
 {
 	char	cmd[80];
 	int		keys[NUMKEYS];
+	char	tinystr[2];
 
 	if (bind_grab)
 	{	// defining a key
@@ -2670,7 +2676,7 @@ static void M_Keys_Key (int k, int ascii)
 		}
 		else //if (k != '`')
 		{
-			dpsnprintf (cmd, sizeof(cmd), "bind \"%s\" \"%s\"\n", Key_KeynumToString (k), bindnames[keys_cursor][0]);
+			dpsnprintf (cmd, sizeof(cmd), "bind \"%s\" \"%s\"\n", Key_KeynumToString (k, tinystr, sizeof(tinystr)), bindnames[keys_cursor][0]);
 			Cbuf_InsertText (cmd);
 		}
 
@@ -2902,6 +2908,7 @@ static void M_Video_Draw (void)
 {
 	int t;
 	cachepic_t	*p;
+	char vabuf[1024];
 
 	if(!!vid_fullscreen.integer != menu_video_resolutions_forfullscreen)
 	{
@@ -2921,12 +2928,12 @@ static void M_Video_Draw (void)
 	// Current and Proposed Resolution
 	M_Print(16, video_cursor_table[t] - 12, "    Current Resolution");
 	if (vid_supportrefreshrate && vid.userefreshrate && vid.fullscreen)
-		M_Print(220, video_cursor_table[t] - 12, va("%dx%d %.2fhz", vid.width, vid.height, vid.refreshrate));
+		M_Print(220, video_cursor_table[t] - 12, va(vabuf, sizeof(vabuf), "%dx%d %.2fhz", vid.width, vid.height, vid.refreshrate));
 	else
-		M_Print(220, video_cursor_table[t] - 12, va("%dx%d", vid.width, vid.height));
+		M_Print(220, video_cursor_table[t] - 12, va(vabuf, sizeof(vabuf), "%dx%d", vid.width, vid.height));
 	M_Print(16, video_cursor_table[t], "        New Resolution");
-	M_Print(220, video_cursor_table[t], va("%dx%d", menu_video_resolutions[menu_video_resolution].width, menu_video_resolutions[menu_video_resolution].height));
-	M_Print(96, video_cursor_table[t] + 8, va("Type: %s", menu_video_resolutions[menu_video_resolution].type));
+	M_Print(220, video_cursor_table[t], va(vabuf, sizeof(vabuf), "%dx%d", menu_video_resolutions[menu_video_resolution].width, menu_video_resolutions[menu_video_resolution].height));
+	M_Print(96, video_cursor_table[t] + 8, va(vabuf, sizeof(vabuf), "Type: %s", menu_video_resolutions[menu_video_resolution].type));
 	t++;
 
 	// Bits per pixel
@@ -3101,8 +3108,9 @@ void M_Menu_Help_f (void)
 
 static void M_Help_Draw (void)
 {
+	char vabuf[1024];
 	M_Background(320, 200);
-	M_DrawPic (0, 0, va("gfx/help%i", help_page));
+	M_DrawPic (0, 0, va(vabuf, sizeof(vabuf), "gfx/help%i", help_page));
 }
 
 
@@ -3348,6 +3356,7 @@ static void M_LanConfig_Draw (void)
 	int		basex;
 	const char	*startJoin;
 	const char	*protocol;
+	char vabuf[1024];
 
 	M_Background(320, 200);
 
@@ -3361,7 +3370,7 @@ static void M_LanConfig_Draw (void)
 	else
 		startJoin = "Join Game";
 	protocol = "TCP/IP";
-	M_Print(basex, 32, va ("%s - %s", startJoin, protocol));
+	M_Print(basex, 32, va(vabuf, sizeof(vabuf), "%s - %s", startJoin, protocol));
 	basex += 8;
 
 	M_Print(basex, lanConfig_cursor_table[0], "Port");
@@ -3398,6 +3407,7 @@ static void M_LanConfig_Draw (void)
 static void M_LanConfig_Key (int key, int ascii)
 {
 	int		l;
+	char vabuf[1024];
 
 	switch (key)
 	{
@@ -3447,7 +3457,7 @@ static void M_LanConfig_Key (int key, int ascii)
 		}
 
 		if (lanConfig_cursor == 3)
-			Cbuf_AddText ( va ("connect \"%s\"\n", lanConfig_joinname) );
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "connect \"%s\"\n", lanConfig_joinname) );
 		break;
 
 	case K_BACKSPACE:
@@ -3969,6 +3979,7 @@ void M_GameOptions_Draw (void)
 {
 	cachepic_t	*p;
 	int		x;
+	char vabuf[1024];
 
 	M_Background(320, 200);
 
@@ -3980,7 +3991,7 @@ void M_GameOptions_Draw (void)
 	M_Print(160, 40, "begin game");
 
 	M_Print(0, 56, "      Max players");
-	M_Print(160, 56, va("%i", maxplayers) );
+	M_Print(160, 56, va(vabuf, sizeof(vabuf), "%i", maxplayers) );
 
 	if (gamemode != GAME_GOODVSBAD2)
 	{
@@ -4073,20 +4084,20 @@ void M_GameOptions_Draw (void)
 		if (fraglimit.integer == 0)
 			M_Print(160, 88, "none");
 		else
-			M_Print(160, 88, va("%i frags", fraglimit.integer));
+			M_Print(160, 88, va(vabuf, sizeof(vabuf), "%i frags", fraglimit.integer));
 
 		M_Print(0, 96, "       Time Limit");
 		if (timelimit.integer == 0)
 			M_Print(160, 96, "none");
 		else
-			M_Print(160, 96, va("%i minutes", timelimit.integer));
+			M_Print(160, 96, va(vabuf, sizeof(vabuf), "%i minutes", timelimit.integer));
 	}
 
 	M_Print(0, 104, "    Public server");
 	M_Print(160, 104, (sv_public.integer == 0) ? "no" : "yes");
 
 	M_Print(0, 112, "   Server maxrate");
-	M_Print(160, 112, va("%i", sv_maxrate.integer));
+	M_Print(160, 112, va(vabuf, sizeof(vabuf), "%i", sv_maxrate.integer));
 
 	M_Print(0, 128, "      Server name");
 	M_DrawTextBox (0, 132, 38, 1);
@@ -4290,6 +4301,7 @@ static void M_GameOptions_Key (int key, int ascii)
 {
 	int l;
 	char hostnamebuf[128];
+	char vabuf[1024];
 
 	switch (key)
 	{
@@ -4330,10 +4342,10 @@ static void M_GameOptions_Key (int key, int ascii)
 		if (gameoptions_cursor == 0)
 		{
 			if (sv.active)
-				Cbuf_AddText ("disconnect\n");
-			Cbuf_AddText ( va ("maxplayers %u\n", maxplayers) );
+				Cbuf_AddText("disconnect\n");
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "maxplayers %u\n", maxplayers) );
 
-			Cbuf_AddText ( va ("map %s\n", gameoptions_levels->levels[gameoptions_levels->episodes[startepisode].firstLevel + startlevel].name) );
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "map %s\n", gameoptions_levels->levels[gameoptions_levels->episodes[startepisode].firstLevel + startlevel].name) );
 			return;
 		}
 
@@ -4395,6 +4407,7 @@ static void M_ServerList_Draw (void)
 	int n, y, visible, start, end, numplayers, maxplayers;
 	cachepic_t *p;
 	const char *s;
+	char vabuf[1024];
 
 	// use as much vertical space as available
 	if (gamemode == GAME_TRANSFUSION)
@@ -4403,7 +4416,7 @@ static void M_ServerList_Draw (void)
 		M_Background(640, vid_conheight.integer);
 	// scroll the list as the cursor moves
 	ServerList_GetPlayerStatistics(&numplayers, &maxplayers);
-	s = va("%i/%i masters %i/%i servers %i/%i players", masterreplycount, masterquerycount, serverreplycount, serverquerycount, numplayers, maxplayers);
+	s = va(vabuf, sizeof(vabuf), "%i/%i masters %i/%i servers %i/%i players", masterreplycount, masterquerycount, serverreplycount, serverquerycount, numplayers, maxplayers);
 	M_PrintRed((640 - strlen(s) * 8) / 2, 32, s);
 	if (*m_return_reason)
 		M_Print(16, menu_height - 8, m_return_reason);
@@ -4443,6 +4456,7 @@ static void M_ServerList_Draw (void)
 
 static void M_ServerList_Key(int k, int ascii)
 {
+	char vabuf[1024];
 	switch (k)
 	{
 	case K_ESCAPE:
@@ -4475,7 +4489,7 @@ static void M_ServerList_Key(int k, int ascii)
 	case K_ENTER:
 		S_LocalSound ("sound/misc/menu2.wav");
 		if (serverlist_viewcount)
-			Cbuf_AddText(va("connect \"%s\"\n", ServerList_GetViewEntry(slist_cursor)->info.cname));
+			Cbuf_AddText(va(vabuf, sizeof(vabuf), "connect \"%s\"\n", ServerList_GetViewEntry(slist_cursor)->info.cname));
 		break;
 
 	default:
@@ -4508,14 +4522,14 @@ static int modlist_cursor;
 static int modlist_count = 0;
 static modlist_entry_t modlist[MODLIST_TOTALSIZE];
 
-void ModList_RebuildList(void)
+static void ModList_RebuildList(void)
 {
 	int i,j;
 	stringlist_t list;
 
 	stringlistinit(&list);
 	listdirectory(&list, fs_basedir, "");
-	stringlistsort(&list);
+	stringlistsort(&list, true);
 	modlist_count = 0;
 	modlist_numenabled = fs_numgamedirs;
 	for (i = 0;i < list.numstrings;i++)
@@ -4545,7 +4559,7 @@ void ModList_RebuildList(void)
 	stringlistfreecontents(&list);
 }
 
-void ModList_Enable (void)
+static void ModList_Enable (void)
 {
 	int i;
 	int numgamedirs;
@@ -4714,7 +4728,7 @@ static void M_Draw(void);
 void M_ToggleMenu(int mode);
 static void M_Shutdown(void);
 
-void M_Init (void)
+static void M_Init (void)
 {
 	menuplyr_load = true;
 	menuplyr_pixels = NULL;
@@ -4742,6 +4756,7 @@ void M_Init (void)
 
 void M_Draw (void)
 {
+	char vabuf[1024];
 	if (key_dest != key_menu && key_dest != key_menu_grabbed)
 		m_state = m_none;
 
@@ -4855,7 +4870,7 @@ void M_Draw (void)
 			g = (int)(realtime * 64)%96;
 			scale_y_rate = (float)(g+1) / 96;
 			top_offset = (g+12)/12;
-			p = Draw_CachePic (va("gfx/menu/blooddrip%i", top_offset));
+			p = Draw_CachePic (va(vabuf, sizeof(vabuf), "gfx/menu/blooddrip%i", top_offset));
 			drop1 = Draw_CachePic ("gfx/menu/blooddrop1");
 			drop2 = Draw_CachePic ("gfx/menu/blooddrop2");
 			drop3 = Draw_CachePic ("gfx/menu/blooddrop3");
@@ -4873,7 +4888,7 @@ void M_Draw (void)
 					DrawQ_Pic (scale_x + 557, scale_y_repeat * .9425 + scale_y + scale_y_rate * scale_y_repeat, drop1, 0, 0, 1, 1, 1, 1, 0);
 					DrawQ_Pic (scale_x + 606, scale_y_repeat * .5 + scale_y + scale_y_rate * scale_y_repeat, drop2, 0, 0, 1, 1, 1, 1, 0);
 				}
-				DrawQ_Pic (scale_x, -1, Draw_CachePic (va("gfx/menu/blooddrip%i", top_offset)), 0, 0, 1, 1, 1, 1, 0);
+				DrawQ_Pic (scale_x, -1, Draw_CachePic (va(vabuf, sizeof(vabuf), "gfx/menu/blooddrip%i", top_offset)), 0, 0, 1, 1, 1, 1, 0);
 			}
 		}
 	}
@@ -4992,7 +5007,7 @@ void M_KeyEvent (int key, int ascii, qboolean downevent)
 
 }
 
-void M_NewMap(void)
+static void M_NewMap(void)
 {
 }
 
@@ -5015,11 +5030,170 @@ static const char *m_required_func[] = {
 
 static int m_numrequiredfunc = sizeof(m_required_func) / sizeof(char*);
 
+static prvm_required_field_t m_required_fields[] =
+{
+#define PRVM_DECLARE_serverglobalfloat(x)
+#define PRVM_DECLARE_serverglobalvector(x)
+#define PRVM_DECLARE_serverglobalstring(x)
+#define PRVM_DECLARE_serverglobaledict(x)
+#define PRVM_DECLARE_serverglobalfunction(x)
+#define PRVM_DECLARE_clientglobalfloat(x)
+#define PRVM_DECLARE_clientglobalvector(x)
+#define PRVM_DECLARE_clientglobalstring(x)
+#define PRVM_DECLARE_clientglobaledict(x)
+#define PRVM_DECLARE_clientglobalfunction(x)
+#define PRVM_DECLARE_menuglobalfloat(x)
+#define PRVM_DECLARE_menuglobalvector(x)
+#define PRVM_DECLARE_menuglobalstring(x)
+#define PRVM_DECLARE_menuglobaledict(x)
+#define PRVM_DECLARE_menuglobalfunction(x)
+#define PRVM_DECLARE_serverfieldfloat(x)
+#define PRVM_DECLARE_serverfieldvector(x)
+#define PRVM_DECLARE_serverfieldstring(x)
+#define PRVM_DECLARE_serverfieldedict(x)
+#define PRVM_DECLARE_serverfieldfunction(x)
+#define PRVM_DECLARE_clientfieldfloat(x)
+#define PRVM_DECLARE_clientfieldvector(x)
+#define PRVM_DECLARE_clientfieldstring(x)
+#define PRVM_DECLARE_clientfieldedict(x)
+#define PRVM_DECLARE_clientfieldfunction(x)
+#define PRVM_DECLARE_menufieldfloat(x) {ev_float, #x},
+#define PRVM_DECLARE_menufieldvector(x) {ev_vector, #x},
+#define PRVM_DECLARE_menufieldstring(x) {ev_string, #x},
+#define PRVM_DECLARE_menufieldedict(x) {ev_entity, #x},
+#define PRVM_DECLARE_menufieldfunction(x) {ev_function, #x},
+#define PRVM_DECLARE_serverfunction(x)
+#define PRVM_DECLARE_clientfunction(x)
+#define PRVM_DECLARE_menufunction(x)
+#define PRVM_DECLARE_field(x)
+#define PRVM_DECLARE_global(x)
+#define PRVM_DECLARE_function(x)
+#include "prvm_offsets.h"
+#undef PRVM_DECLARE_serverglobalfloat
+#undef PRVM_DECLARE_serverglobalvector
+#undef PRVM_DECLARE_serverglobalstring
+#undef PRVM_DECLARE_serverglobaledict
+#undef PRVM_DECLARE_serverglobalfunction
+#undef PRVM_DECLARE_clientglobalfloat
+#undef PRVM_DECLARE_clientglobalvector
+#undef PRVM_DECLARE_clientglobalstring
+#undef PRVM_DECLARE_clientglobaledict
+#undef PRVM_DECLARE_clientglobalfunction
+#undef PRVM_DECLARE_menuglobalfloat
+#undef PRVM_DECLARE_menuglobalvector
+#undef PRVM_DECLARE_menuglobalstring
+#undef PRVM_DECLARE_menuglobaledict
+#undef PRVM_DECLARE_menuglobalfunction
+#undef PRVM_DECLARE_serverfieldfloat
+#undef PRVM_DECLARE_serverfieldvector
+#undef PRVM_DECLARE_serverfieldstring
+#undef PRVM_DECLARE_serverfieldedict
+#undef PRVM_DECLARE_serverfieldfunction
+#undef PRVM_DECLARE_clientfieldfloat
+#undef PRVM_DECLARE_clientfieldvector
+#undef PRVM_DECLARE_clientfieldstring
+#undef PRVM_DECLARE_clientfieldedict
+#undef PRVM_DECLARE_clientfieldfunction
+#undef PRVM_DECLARE_menufieldfloat
+#undef PRVM_DECLARE_menufieldvector
+#undef PRVM_DECLARE_menufieldstring
+#undef PRVM_DECLARE_menufieldedict
+#undef PRVM_DECLARE_menufieldfunction
+#undef PRVM_DECLARE_serverfunction
+#undef PRVM_DECLARE_clientfunction
+#undef PRVM_DECLARE_menufunction
+#undef PRVM_DECLARE_field
+#undef PRVM_DECLARE_global
+#undef PRVM_DECLARE_function
+};
+
+static int m_numrequiredfields = sizeof(m_required_fields) / sizeof(m_required_fields[0]);
+
+static prvm_required_field_t m_required_globals[] =
+{
+#define PRVM_DECLARE_serverglobalfloat(x)
+#define PRVM_DECLARE_serverglobalvector(x)
+#define PRVM_DECLARE_serverglobalstring(x)
+#define PRVM_DECLARE_serverglobaledict(x)
+#define PRVM_DECLARE_serverglobalfunction(x)
+#define PRVM_DECLARE_clientglobalfloat(x)
+#define PRVM_DECLARE_clientglobalvector(x)
+#define PRVM_DECLARE_clientglobalstring(x)
+#define PRVM_DECLARE_clientglobaledict(x)
+#define PRVM_DECLARE_clientglobalfunction(x)
+#define PRVM_DECLARE_menuglobalfloat(x) {ev_float, #x},
+#define PRVM_DECLARE_menuglobalvector(x) {ev_vector, #x},
+#define PRVM_DECLARE_menuglobalstring(x) {ev_string, #x},
+#define PRVM_DECLARE_menuglobaledict(x) {ev_entity, #x},
+#define PRVM_DECLARE_menuglobalfunction(x) {ev_function, #x},
+#define PRVM_DECLARE_serverfieldfloat(x)
+#define PRVM_DECLARE_serverfieldvector(x)
+#define PRVM_DECLARE_serverfieldstring(x)
+#define PRVM_DECLARE_serverfieldedict(x)
+#define PRVM_DECLARE_serverfieldfunction(x)
+#define PRVM_DECLARE_clientfieldfloat(x)
+#define PRVM_DECLARE_clientfieldvector(x)
+#define PRVM_DECLARE_clientfieldstring(x)
+#define PRVM_DECLARE_clientfieldedict(x)
+#define PRVM_DECLARE_clientfieldfunction(x)
+#define PRVM_DECLARE_menufieldfloat(x)
+#define PRVM_DECLARE_menufieldvector(x)
+#define PRVM_DECLARE_menufieldstring(x)
+#define PRVM_DECLARE_menufieldedict(x)
+#define PRVM_DECLARE_menufieldfunction(x)
+#define PRVM_DECLARE_serverfunction(x)
+#define PRVM_DECLARE_clientfunction(x)
+#define PRVM_DECLARE_menufunction(x)
+#define PRVM_DECLARE_field(x)
+#define PRVM_DECLARE_global(x)
+#define PRVM_DECLARE_function(x)
+#include "prvm_offsets.h"
+#undef PRVM_DECLARE_serverglobalfloat
+#undef PRVM_DECLARE_serverglobalvector
+#undef PRVM_DECLARE_serverglobalstring
+#undef PRVM_DECLARE_serverglobaledict
+#undef PRVM_DECLARE_serverglobalfunction
+#undef PRVM_DECLARE_clientglobalfloat
+#undef PRVM_DECLARE_clientglobalvector
+#undef PRVM_DECLARE_clientglobalstring
+#undef PRVM_DECLARE_clientglobaledict
+#undef PRVM_DECLARE_clientglobalfunction
+#undef PRVM_DECLARE_menuglobalfloat
+#undef PRVM_DECLARE_menuglobalvector
+#undef PRVM_DECLARE_menuglobalstring
+#undef PRVM_DECLARE_menuglobaledict
+#undef PRVM_DECLARE_menuglobalfunction
+#undef PRVM_DECLARE_serverfieldfloat
+#undef PRVM_DECLARE_serverfieldvector
+#undef PRVM_DECLARE_serverfieldstring
+#undef PRVM_DECLARE_serverfieldedict
+#undef PRVM_DECLARE_serverfieldfunction
+#undef PRVM_DECLARE_clientfieldfloat
+#undef PRVM_DECLARE_clientfieldvector
+#undef PRVM_DECLARE_clientfieldstring
+#undef PRVM_DECLARE_clientfieldedict
+#undef PRVM_DECLARE_clientfieldfunction
+#undef PRVM_DECLARE_menufieldfloat
+#undef PRVM_DECLARE_menufieldvector
+#undef PRVM_DECLARE_menufieldstring
+#undef PRVM_DECLARE_menufieldedict
+#undef PRVM_DECLARE_menufieldfunction
+#undef PRVM_DECLARE_serverfunction
+#undef PRVM_DECLARE_clientfunction
+#undef PRVM_DECLARE_menufunction
+#undef PRVM_DECLARE_field
+#undef PRVM_DECLARE_global
+#undef PRVM_DECLARE_function
+};
+
+static int m_numrequiredglobals = sizeof(m_required_globals) / sizeof(m_required_globals[0]);
+
 void MR_SetRouting (qboolean forceold);
 
-void MP_Error(const char *format, ...) DP_FUNC_PRINTF(1);
-void MP_Error(const char *format, ...)
+void MVM_error_cmd(const char *format, ...) DP_FUNC_PRINTF(1);
+void MVM_error_cmd(const char *format, ...)
 {
+	prvm_prog_t *prog = MVM_prog;
 	static qboolean processingError = false;
 	char errorstring[MAX_INPUTLINE];
 	va_list argptr;
@@ -5031,10 +5205,10 @@ void MP_Error(const char *format, ...)
 
 	if( !processingError ) {
 		processingError = true;
-		PRVM_Crash();
+		PRVM_Crash(prog);
 		processingError = false;
 	} else {
-		Con_Printf( "Menu_Error: Recursive call to MP_Error (from PRVM_Crash)!\n" );
+		Con_Printf( "Menu_Error: Recursive call to MVM_error_cmd (from PRVM_Crash)!\n" );
 	}
 
 	// fall back to the normal menu
@@ -5053,24 +5227,62 @@ void MP_Error(const char *format, ...)
 	Host_AbortCurrentFrame();
 }
 
-void MP_KeyEvent (int key, int ascii, qboolean downevent)
+static void MVM_begin_increase_edicts(prvm_prog_t *prog)
 {
-	PRVM_Begin;
-	PRVM_SetProg(PRVM_MENUPROG);
-
-	// pass key
-	prog->globals.generic[OFS_PARM0] = (float) key;
-	prog->globals.generic[OFS_PARM1] = (float) ascii;
-	if (downevent)
-		PRVM_ExecuteProgram(prog->funcoffsets.m_keydown,"m_keydown(float key, float ascii) required");
-	else if (prog->funcoffsets.m_keyup)
-		PRVM_ExecuteProgram(prog->funcoffsets.m_keyup,"m_keyup(float key, float ascii) required");
-
-	PRVM_End;
 }
 
-void MP_Draw (void)
+static void MVM_end_increase_edicts(prvm_prog_t *prog)
 {
+}
+
+static void MVM_init_edict(prvm_prog_t *prog, prvm_edict_t *edict)
+{
+}
+
+static void MVM_free_edict(prvm_prog_t *prog, prvm_edict_t *ed)
+{
+}
+
+static void MVM_count_edicts(prvm_prog_t *prog)
+{
+	int i;
+	prvm_edict_t *ent;
+	int active;
+
+	active = 0;
+	for (i=0 ; i<prog->num_edicts ; i++)
+	{
+		ent = PRVM_EDICT_NUM(i);
+		if (ent->priv.required->free)
+			continue;
+		active++;
+	}
+
+	Con_Printf("num_edicts:%3i\n", prog->num_edicts);
+	Con_Printf("active    :%3i\n", active);
+}
+
+static qboolean MVM_load_edict(prvm_prog_t *prog, prvm_edict_t *ent)
+{
+	return true;
+}
+
+static void MP_KeyEvent (int key, int ascii, qboolean downevent)
+{
+	prvm_prog_t *prog = MVM_prog;
+
+	// pass key
+	prog->globals.fp[OFS_PARM0] = (prvm_vec_t) key;
+	prog->globals.fp[OFS_PARM1] = (prvm_vec_t) ascii;
+	if (downevent)
+		prog->ExecuteProgram(prog, PRVM_menufunction(m_keydown),"m_keydown(float key, float ascii) required");
+	else if (PRVM_menufunction(m_keyup))
+		prog->ExecuteProgram(prog, PRVM_menufunction(m_keyup),"m_keyup(float key, float ascii) required");
+}
+
+static void MP_Draw (void)
+{
+	prvm_prog_t *prog = MVM_prog;
 	// declarations that are needed right now
 
 	float oldquality;
@@ -5086,14 +5298,9 @@ void MP_Draw (void)
 	// TODO: this needs to be exposed to R_SetView (or something similar) ASAP [2/5/2008 Andreas]
 	r_refdef.scene.time = realtime;
 
-	PRVM_Begin;
-	PRVM_SetProg(PRVM_MENUPROG);
-
 	// FIXME: this really shouldnt error out lest we have a very broken refdef state...?
 	// or does it kill the server too?
-	PRVM_ExecuteProgram(prog->funcoffsets.m_draw,"m_draw() required");
-
-	PRVM_End;
+	prog->ExecuteProgram(prog, PRVM_menufunction(m_draw),"m_draw() required");
 
 	// TODO: imo this should be moved into scene, too [1/27/2008 Andreas]
 	r_refdef.view.quality = oldquality;
@@ -5101,64 +5308,63 @@ void MP_Draw (void)
 	R_SelectScene( RST_CLIENT );
 }
 
-void MP_ToggleMenu(int mode)
+static void MP_ToggleMenu(int mode)
 {
-	PRVM_Begin;
-	PRVM_SetProg(PRVM_MENUPROG);
+	prvm_prog_t *prog = MVM_prog;
 
-	prog->globals.generic[OFS_PARM0] = (float) mode;
-	PRVM_ExecuteProgram(prog->funcoffsets.m_toggle,"m_toggle() required");
-
-	PRVM_End;
+	prog->globals.fp[OFS_PARM0] = (prvm_vec_t) mode;
+	prog->ExecuteProgram(prog, PRVM_menufunction(m_toggle),"m_toggle(float mode) required");
 }
 
-void MP_NewMap(void)
+static void MP_NewMap(void)
 {
-	PRVM_Begin;
-	PRVM_SetProg(PRVM_MENUPROG);
-	if (prog->funcoffsets.m_newmap)
-		PRVM_ExecuteProgram(prog->funcoffsets.m_newmap,"m_newmap() required");
-	PRVM_End;
+	prvm_prog_t *prog = MVM_prog;
+	if (PRVM_menufunction(m_newmap))
+		prog->ExecuteProgram(prog, PRVM_menufunction(m_newmap),"m_newmap() required");
 }
 
-void MP_Shutdown (void)
+static void MP_Shutdown (void)
 {
-	PRVM_Begin;
-	PRVM_SetProg(PRVM_MENUPROG);
+	prvm_prog_t *prog = MVM_prog;
 
-	PRVM_ExecuteProgram(prog->funcoffsets.m_shutdown,"m_shutdown() required");
+	prog->ExecuteProgram(prog, PRVM_menufunction(m_shutdown),"m_shutdown() required");
 
 	// reset key_dest
 	key_dest = key_game;
 
 	// AK not using this cause Im not sure whether this is useful at all instead :
-	PRVM_ResetProg();
-
-	PRVM_End;
+	PRVM_Prog_Reset(prog);
 }
 
-void MP_Init (void)
+static void MP_Init (void)
 {
-	PRVM_Begin;
-	PRVM_InitProg(PRVM_MENUPROG);
+	prvm_prog_t *prog = MVM_prog;
+	PRVM_Prog_Init(prog);
 
-	prog->headercrc = M_PROGHEADER_CRC;
 	prog->edictprivate_size = 0; // no private struct used
-	prog->name = M_NAME;
+	prog->name = "menu";
 	prog->num_edicts = 1;
 	prog->limit_edicts = M_MAX_EDICTS;
 	prog->extensionstring = vm_m_extensions;
 	prog->builtins = vm_m_builtins;
 	prog->numbuiltins = vm_m_numbuiltins;
-	prog->init_cmd = VM_M_Cmd_Init;
-	prog->reset_cmd = VM_M_Cmd_Reset;
-	prog->error_cmd = MP_Error;
-	prog->ExecuteProgram = MVM_ExecuteProgram;
+
+	// all callbacks must be defined (pointers are not checked before calling)
+	prog->begin_increase_edicts = MVM_begin_increase_edicts;
+	prog->end_increase_edicts   = MVM_end_increase_edicts;
+	prog->init_edict            = MVM_init_edict;
+	prog->free_edict            = MVM_free_edict;
+	prog->count_edicts          = MVM_count_edicts;
+	prog->load_edict            = MVM_load_edict;
+	prog->init_cmd              = MVM_init_cmd;
+	prog->reset_cmd             = MVM_reset_cmd;
+	prog->error_cmd             = MVM_error_cmd;
+	prog->ExecuteProgram        = MVM_ExecuteProgram;
 
 	// allocate the mempools
 	prog->progs_mempool = Mem_AllocPool(M_PROG_FILENAME, 0, NULL);
 
-	PRVM_LoadProgs(M_PROG_FILENAME, m_numrequiredfunc, m_required_func, 0, NULL, 0, NULL);
+	PRVM_Prog_Load(prog, M_PROG_FILENAME, m_numrequiredfunc, m_required_func, m_numrequiredfields, m_required_fields, m_numrequiredglobals, m_required_globals);
 
 	// note: OP_STATE is not supported by menu qc, we don't even try to detect
 	// it here
@@ -5166,9 +5372,7 @@ void MP_Init (void)
 	in_client_mouse = true;
 
 	// call the prog init
-	PRVM_ExecuteProgram(prog->funcoffsets.m_init,"m_init() required");
-
-	PRVM_End;
+	prog->ExecuteProgram(prog, PRVM_menufunction(m_init),"m_init() required");
 }
 
 //============================================================================
@@ -5212,7 +5416,7 @@ void MR_Restart(void)
 	MR_SetRouting (FALSE);
 }
 
-void Call_MR_ToggleMenu_f(void)
+static void Call_MR_ToggleMenu_f(void)
 {
 	int m;
 	m = ((Cmd_Argc() < 2) ? -1 : atoi(Cmd_Argv(1)));

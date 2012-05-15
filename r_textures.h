@@ -34,6 +34,8 @@
 #define TEXF_RENDERTARGET 0x0010000
 // used for checking if textures mismatch
 #define TEXF_IMPORTANTBITS (TEXF_ALPHA | TEXF_MIPMAP | TEXF_RGBMULTIPLYBYALPHA | TEXF_CLAMP | TEXF_FORCENEAREST | TEXF_FORCELINEAR | TEXF_PICMIP | TEXF_COMPRESS | TEXF_COMPARE | TEXF_LOWPRECISION | TEXF_RENDERTARGET)
+// set as a flag to force the texture to be reloaded
+#define TEXF_FORCE_RELOAD 0x80000000
 
 typedef enum textype_e
 {
@@ -75,8 +77,20 @@ typedef enum textype_e
 	TEXTYPE_COLORBUFFER16F,
 	// this represents an RGBA float texture (4 32bit floats)
 	TEXTYPE_COLORBUFFER32F,
-	// 16bit D16 (16bit depth) or 32bit S8D24 (24bit depth, 8bit stencil unused)
-	TEXTYPE_SHADOWMAP
+	// depth-stencil buffer (or texture)
+	TEXTYPE_DEPTHBUFFER16,
+	// depth-stencil buffer (or texture)
+	TEXTYPE_DEPTHBUFFER24,
+	// 32bit D24S8 buffer (24bit depth, 8bit stencil), not supported on OpenGL ES
+	TEXTYPE_DEPTHBUFFER24STENCIL8,
+	// shadowmap-friendly format with depth comparison (not supported on some hardware)
+	TEXTYPE_SHADOWMAP16_COMP,
+	// shadowmap-friendly format with raw reading (not supported on some hardware)
+	TEXTYPE_SHADOWMAP16_RAW,
+	// shadowmap-friendly format with depth comparison (not supported on some hardware)
+	TEXTYPE_SHADOWMAP24_COMP,
+	// shadowmap-friendly format with raw reading (not supported on some hardware)
+	TEXTYPE_SHADOWMAP24_RAW,
 }
 textype_t;
 
@@ -94,13 +108,17 @@ textype_t;
 typedef struct rtexture_s
 {
 	// this is exposed (rather than private) for speed reasons only
-	int texnum;
-	qboolean dirty;
-	int gltexturetypeenum; // exposed for use in R_Mesh_TexBind
+	int texnum; // GL texture slot number
+	int renderbuffernum; // GL renderbuffer slot number
+	qboolean dirty; // indicates that R_RealGetTexture should be called
+	qboolean glisdepthstencil; // indicates that FBO attachment has to be GL_DEPTH_STENCIL_ATTACHMENT
+	int gltexturetypeenum; // used by R_Mesh_TexBind
 	// d3d stuff the backend needs
 	void *d3dtexture;
+	void *d3dsurface;
 #ifdef SUPPORTD3D
-	qboolean d3disdepthsurface; // for depth/stencil surfaces
+	qboolean d3disrendertargetsurface;
+	qboolean d3disdepthstencilsurface;
 	int d3dformat;
 	int d3dusage;
 	int d3dpool;
@@ -152,8 +170,9 @@ extern cvar_t r_texture_dds_save;
 rtexture_t *R_LoadTexture2D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
 rtexture_t *R_LoadTexture3D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, int depth, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
 rtexture_t *R_LoadTextureCubeMap(rtexturepool_t *rtexturepool, const char *identifier, int width, const unsigned char *data, textype_t textype, int flags, int miplevel, const unsigned int *palette);
-rtexture_t *R_LoadTextureShadowMap2D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, int precision, qboolean filter);
-rtexture_t *R_LoadTextureDDSFile(rtexturepool_t *rtexturepool, const char *filename, int flags, qboolean *hasalphaflag, float *avgcolor, int miplevel);
+rtexture_t *R_LoadTextureShadowMap2D(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, textype_t textype, qboolean filter);
+rtexture_t *R_LoadTextureRenderBuffer(rtexturepool_t *rtexturepool, const char *identifier, int width, int height, textype_t textype);
+rtexture_t *R_LoadTextureDDSFile(rtexturepool_t *rtexturepool, const char *filename, qboolean srgb, int flags, qboolean *hasalphaflag, float *avgcolor, int miplevel, qboolean optionaltexture);
 
 // saves a texture to a DDS file
 int R_SaveTextureDDSFile(rtexture_t *rt, const char *filename, qboolean skipuncompressed, qboolean hasalpha);
@@ -177,6 +196,9 @@ int R_TextureWidth(rtexture_t *rt);
 // returns height of texture, as was specified when it was uploaded
 int R_TextureHeight(rtexture_t *rt);
 
+// returns flags of texture, as was specified when it was uploaded
+int R_TextureFlags(rtexture_t *rt);
+
 // only frees the texture if TEXF_PERSISTENT is not set
 // also resets the variable
 void R_PurgeTexture(rtexture_t *prt);
@@ -193,6 +215,8 @@ void R_ClearTexture (rtexture_t *rt);
 
 // returns the desired picmip level for given TEXF_ flags
 int R_PicmipForFlags(int flags);
+
+void R_TextureStats_Print(qboolean printeach, qboolean printpool, qboolean printtotal);
 
 #endif
 

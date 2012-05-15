@@ -42,6 +42,8 @@ cvar_t r_font_postprocess_shadow_y = {CVAR_SAVE, "r_font_postprocess_shadow_y", 
 cvar_t r_font_postprocess_shadow_z = {CVAR_SAVE, "r_font_postprocess_shadow_z", "0", "font shadow Z shift amount, applied during blurring"};
 cvar_t r_font_hinting = {CVAR_SAVE, "r_font_hinting", "3", "0 = no hinting, 1 = light autohinting, 2 = full autohinting, 3 = full hinting"};
 cvar_t r_font_antialias = {CVAR_SAVE, "r_font_antialias", "1", "0 = monochrome, 1 = grey" /* , 2 = rgb, 3 = bgr" */};
+cvar_t r_nearest_2d = {CVAR_SAVE, "r_nearest_2d", "0", "use nearest filtering on all 2d textures (including conchars)"};
+cvar_t r_nearest_conchars = {CVAR_SAVE, "r_nearest_conchars", "0", "use nearest filtering on conchars texture"};
 
 extern cvar_t v_glslgamma;
 
@@ -109,7 +111,7 @@ static rtexture_t *draw_generateconchars(void)
 	Image_WriteTGABGRA ("gfx/generated_conchars.tga", 256, 256, data);
 #endif
 
-	tex = R_LoadTexture2D(drawtexturepool, "conchars", 256, 256, data, TEXTYPE_BGRA, TEXF_ALPHA, -1, NULL);
+	tex = R_LoadTexture2D(drawtexturepool, "conchars", 256, 256, data, TEXTYPE_BGRA, TEXF_ALPHA | (r_nearest_conchars.integer ? TEXF_FORCENEAREST : 0), -1, NULL);
 	Mem_Free(data);
 	return tex;
 }
@@ -323,19 +325,29 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 	qboolean ddshasalpha;
 	float ddsavgcolor[4];
 	qboolean loaded = false;
+	char vabuf[1024];
 
 	texflags = TEXF_ALPHA;
 	if (!(cachepicflags & CACHEPICFLAG_NOCLAMP))
 		texflags |= TEXF_CLAMP;
+	if (cachepicflags & CACHEPICFLAG_MIPMAP)
+		texflags |= TEXF_MIPMAP;
 	if (!(cachepicflags & CACHEPICFLAG_NOCOMPRESSION) && gl_texturecompression_2d.integer && gl_texturecompression.integer)
 		texflags |= TEXF_COMPRESS;
+	if ((cachepicflags & CACHEPICFLAG_NEAREST) || r_nearest_2d.integer)
+		texflags |= TEXF_FORCENEAREST;
 
 	// check whether the picture has already been cached
 	crc = CRC_Block((unsigned char *)path, strlen(path));
 	hashkey = ((crc >> 8) ^ crc) % CACHEPICHASHSIZE;
 	for (pic = cachepichash[hashkey];pic;pic = pic->chain)
+	{
 		if (!strcmp (path, pic->name))
-			if(!((pic->texflags ^ texflags) & ~(TEXF_COMPRESS))) // ignore TEXF_COMPRESS when comparing, because fallback pics remove the flag
+		{
+			// if it was created (or replaced) by Draw_NewPic, just return it
+			if(pic->flags & CACHEPICFLAG_NEWPIC)
+				return pic;
+			if (!((pic->texflags ^ texflags) & ~(TEXF_COMPRESS | TEXF_MIPMAP))) // ignore TEXF_COMPRESS when comparing, because fallback pics remove the flag, and ignore TEXF_MIPMAP because QC specifies that
 			{
 				if(!(cachepicflags & CACHEPICFLAG_NOTPERSISTENT))
 				{
@@ -346,6 +358,8 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 				}
 				return pic;
 			}
+		}
+	}
 
 	if (numcachepics == MAX_CACHED_PICS)
 	{
@@ -354,21 +368,30 @@ cachepic_t *Draw_CachePic_Flags(const char *path, unsigned int cachepicflags)
 		return cachepics; // return the first one
 	}
 	pic = cachepics + (numcachepics++);
+	memset(pic, 0, sizeof(*pic));
 	strlcpy (pic->name, path, sizeof(pic->name));
 	// link into list
 	pic->chain = cachepichash[hashkey];
 	cachepichash[hashkey] = pic;
 
 reload:
+	// TODO why does this crash?
+	if(pic->allow_free_tex && pic->tex)
+		R_PurgeTexture(pic->tex);
+
 	// check whether it is an dynamic texture (if so, we can directly use its texture handler)
+	pic->flags = cachepicflags;
 	pic->tex = CL_GetDynTexture( path );
 	// if so, set the width/height, too
 	if( pic->tex ) {
+		pic->allow_free_tex = false;
 		pic->width = R_TextureWidth(pic->tex);
 		pic->height = R_TextureHeight(pic->tex);
 		// we're done now (early-out)
 		return pic;
 	}
+
+	pic->allow_free_tex = true;
 
 	pic->hasalpha = true; // assume alpha unless we know it has none
 	pic->texflags = texflags;
@@ -376,7 +399,7 @@ reload:
 	pic->lastusedframe = draw_frame;
 
 	// load a high quality image from disk if possible
-	if (!loaded && r_texture_dds_load.integer != 0 && (pic->tex = R_LoadTextureDDSFile(drawtexturepool, va("dds/%s.dds", pic->name), pic->texflags, &ddshasalpha, ddsavgcolor, 0)))
+	if (!loaded && r_texture_dds_load.integer != 0 && (pic->tex = R_LoadTextureDDSFile(drawtexturepool, va(vabuf, sizeof(vabuf), "dds/%s.dds", pic->name), vid.sRGB2D, pic->texflags, &ddshasalpha, ddsavgcolor, 0, false)))
 	{
 		// note this loads even if autoload is true, otherwise we can't get the width/height
 		loaded = true;
@@ -404,9 +427,11 @@ reload:
 		pic->height = image_height;
 		if (!pic->autoload)
 		{
-			pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, image_width, image_height, pixels, r_texture_sRGB_2d.integer ? TEXTYPE_SRGB_BGRA : TEXTYPE_BGRA, pic->texflags & (pic->hasalpha ? ~0 : ~TEXF_ALPHA), -1, NULL);
+			pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, image_width, image_height, pixels, vid.sRGB2D ? TEXTYPE_SRGB_BGRA : TEXTYPE_BGRA, pic->texflags & (pic->hasalpha ? ~0 : ~TEXF_ALPHA), -1, NULL);
+#ifndef USE_GLES2
 			if (r_texture_dds_save.integer && qglGetCompressedTexImageARB && pic->tex)
-				R_SaveTextureDDSFile(pic->tex, va("dds/%s.dds", pic->name), r_texture_dds_save.integer < 2, pic->hasalpha);
+				R_SaveTextureDDSFile(pic->tex, va(vabuf, sizeof(vabuf), "dds/%s.dds", pic->name), r_texture_dds_save.integer < 2, pic->hasalpha);
+#endif
 		}
 	}
 	if (!loaded)
@@ -434,7 +459,7 @@ reload:
 			if (!loaded)
 			{
 				loaded = true;
-				pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, pic->width, pic->height, lmpdata + 8, TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_transparent);
+				pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, pic->width, pic->height, lmpdata + 8, vid.sRGB2D ? TEXTYPE_SRGB_PALETTE : TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_transparent);
 			}
 		}
 		Mem_Free(lmpdata);
@@ -453,7 +478,7 @@ reload:
 			if (!loaded)
 			{
 				loaded = true;
-				pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, 128, 128, lmpdata, TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_font);
+				pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, 128, 128, lmpdata, vid.sRGB2D != 0 ? TEXTYPE_SRGB_PALETTE : TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_font);
 			}
 		}
 		else
@@ -464,7 +489,7 @@ reload:
 			if (!loaded)
 			{
 				loaded = true;
-				pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, pic->width, pic->height, lmpdata + 8, TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_transparent);
+				pic->tex = R_LoadTexture2D(drawtexturepool, pic->name, pic->width, pic->height, lmpdata + 8, vid.sRGB2D != 0 ? TEXTYPE_SRGB_PALETTE : TEXTYPE_PALETTE, pic->texflags, -1, palette_bgra_transparent);
 			}
 		}
 	}
@@ -480,6 +505,7 @@ reload:
 		pic->tex = draw_generatepic(pic->name, (cachepicflags & CACHEPICFLAG_QUIET) != 0);
 		pic->width = R_TextureWidth(pic->tex);
 		pic->height = R_TextureHeight(pic->tex);
+		pic->allow_free_tex = (pic->tex != r_texture_notexture);
 	}
 
 	return pic;
@@ -492,25 +518,30 @@ cachepic_t *Draw_CachePic (const char *path)
 
 rtexture_t *Draw_GetPicTexture(cachepic_t *pic)
 {
+	char vabuf[1024];
 	if (pic->autoload && !pic->tex)
 	{
 		if (pic->tex == NULL && r_texture_dds_load.integer != 0)
 		{
 			qboolean ddshasalpha;
 			float ddsavgcolor[4];
-			pic->tex = R_LoadTextureDDSFile(drawtexturepool, va("dds/%s.dds", pic->name), pic->texflags, &ddshasalpha, ddsavgcolor, 0);
+			pic->tex = R_LoadTextureDDSFile(drawtexturepool, va(vabuf, sizeof(vabuf), "dds/%s.dds", pic->name), vid.sRGB2D, pic->texflags, &ddshasalpha, ddsavgcolor, 0, false);
 		}
 		if (pic->tex == NULL)
 		{
-			pic->tex = loadtextureimage(drawtexturepool, pic->name, false, pic->texflags, true, r_texture_sRGB_2d.integer != 0);
+			pic->tex = loadtextureimage(drawtexturepool, pic->name, false, pic->texflags, true, vid.sRGB2D);
+#ifndef USE_GLES2
 			if (r_texture_dds_save.integer && qglGetCompressedTexImageARB && pic->tex)
-				R_SaveTextureDDSFile(pic->tex, va("dds/%s.dds", pic->name), r_texture_dds_save.integer < 2, pic->hasalpha);
+				R_SaveTextureDDSFile(pic->tex, va(vabuf, sizeof(vabuf), "dds/%s.dds", pic->name), r_texture_dds_save.integer < 2, pic->hasalpha);
+#endif
 		}
 		if (pic->tex == NULL && !strncmp(pic->name, "gfx/", 4))
 		{
-			pic->tex = loadtextureimage(drawtexturepool, pic->name+4, false, pic->texflags, true, r_texture_sRGB_2d.integer != 0);
+			pic->tex = loadtextureimage(drawtexturepool, pic->name+4, false, pic->texflags, true, vid.sRGB2D);
+#ifndef USE_GLES2
 			if (r_texture_dds_save.integer && qglGetCompressedTexImageARB && pic->tex)
-				R_SaveTextureDDSFile(pic->tex, va("dds/%s.dds", pic->name), r_texture_dds_save.integer < 2, pic->hasalpha);
+				R_SaveTextureDDSFile(pic->tex, va(vabuf, sizeof(vabuf), "dds/%s.dds", pic->name), r_texture_dds_save.integer < 2, pic->hasalpha);
+#endif
 		}
 		if (pic->tex == NULL)
 			pic->tex = draw_generatepic(pic->name, true);
@@ -551,7 +582,7 @@ cachepic_t *Draw_NewPic(const char *picname, int width, int height, int alpha, u
 
 	if (pic)
 	{
-		if (pic->tex && pic->width == width && pic->height == height)
+		if (pic->flags == CACHEPICFLAG_NEWPIC && pic->tex && pic->width == width && pic->height == height)
 		{
 			R_UpdateTexture(pic->tex, pixels_bgra, 0, 0, 0, width, height, 1);
 			return pic;
@@ -559,25 +590,24 @@ cachepic_t *Draw_NewPic(const char *picname, int width, int height, int alpha, u
 	}
 	else
 	{
-		if (pic == NULL)
+		if (numcachepics == MAX_CACHED_PICS)
 		{
-			if (numcachepics == MAX_CACHED_PICS)
-			{
-				Con_Printf ("Draw_NewPic: numcachepics == MAX_CACHED_PICS\n");
-				// FIXME: support NULL in callers?
-				return cachepics; // return the first one
-			}
-			pic = cachepics + (numcachepics++);
-			strlcpy (pic->name, picname, sizeof(pic->name));
-			// link into list
-			pic->chain = cachepichash[hashkey];
-			cachepichash[hashkey] = pic;
+			Con_Printf ("Draw_NewPic: numcachepics == MAX_CACHED_PICS\n");
+			// FIXME: support NULL in callers?
+			return cachepics; // return the first one
 		}
+		pic = cachepics + (numcachepics++);
+		memset(pic, 0, sizeof(*pic));
+		strlcpy (pic->name, picname, sizeof(pic->name));
+		// link into list
+		pic->chain = cachepichash[hashkey];
+		cachepichash[hashkey] = pic;
 	}
 
+	pic->flags = CACHEPICFLAG_NEWPIC; // disable texflags checks in Draw_CachePic
 	pic->width = width;
 	pic->height = height;
-	if (pic->tex)
+	if (pic->allow_free_tex && pic->tex)
 		R_FreeTexture(pic->tex);
 	pic->tex = R_LoadTexture2D(drawtexturepool, picname, width, height, pixels_bgra, TEXTYPE_BGRA, (alpha ? TEXF_ALPHA : 0), -1, NULL);
 	return pic;
@@ -649,20 +679,20 @@ void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, 
 			Con_DPrintf("Failed to load font-file for '%s', it will not support as many characters.\n", fnt->texpath);
 	}
 
-	fnt->tex = Draw_CachePic_Flags(fnt->texpath, CACHEPICFLAG_QUIET | CACHEPICFLAG_NOCOMPRESSION)->tex;
+	fnt->tex = Draw_CachePic_Flags(fnt->texpath, CACHEPICFLAG_QUIET | CACHEPICFLAG_NOCOMPRESSION | (r_nearest_conchars.integer ? CACHEPICFLAG_NEAREST : 0))->tex;
 	if(fnt->tex == r_texture_notexture)
 	{
 		for (i = 0; i < MAX_FONT_FALLBACKS; ++i)
 		{
 			if (!fnt->fallbacks[i][0])
 				break;
-			fnt->tex = Draw_CachePic_Flags(fnt->fallbacks[i], CACHEPICFLAG_QUIET | CACHEPICFLAG_NOCOMPRESSION)->tex;
+			fnt->tex = Draw_CachePic_Flags(fnt->fallbacks[i], CACHEPICFLAG_QUIET | CACHEPICFLAG_NOCOMPRESSION | (r_nearest_conchars.integer ? CACHEPICFLAG_NEAREST : 0))->tex;
 			if(fnt->tex != r_texture_notexture)
 				break;
 		}
 		if(fnt->tex == r_texture_notexture)
 		{
-			fnt->tex = Draw_CachePic_Flags("gfx/conchars", CACHEPICFLAG_NOCOMPRESSION)->tex;
+			fnt->tex = Draw_CachePic_Flags("gfx/conchars", CACHEPICFLAG_NOCOMPRESSION | (r_nearest_conchars.integer ? CACHEPICFLAG_NEAREST : 0))->tex;
 			strlcpy(widthfile, "gfx/conchars.width", sizeof(widthfile));
 		}
 		else
@@ -684,7 +714,7 @@ void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, 
 		ch = 0;
 		while(ch < 256)
 		{
-			if(!COM_ParseToken_Simple(&p, false, false))
+			if(!COM_ParseToken_Simple(&p, false, false, true))
 				return;
 
 			switch(*com_token)
@@ -708,20 +738,20 @@ void LoadFont(qboolean override, const char *name, dp_font_t *fnt, float scale, 
 				default:
 					if(!strcmp(com_token, "extraspacing"))
 					{
-						if(!COM_ParseToken_Simple(&p, false, false))
+						if(!COM_ParseToken_Simple(&p, false, false, true))
 							return;
 						extraspacing = atof(com_token);
 					}
 					else if(!strcmp(com_token, "scale"))
 					{
-						if(!COM_ParseToken_Simple(&p, false, false))
+						if(!COM_ParseToken_Simple(&p, false, false, true))
 							return;
 						fnt->settings.scale = atof(com_token);
 					}
 					else
 					{
 						Con_Printf("Warning: skipped unknown font property %s\n", com_token);
-						if(!COM_ParseToken_Simple(&p, false, false))
+						if(!COM_ParseToken_Simple(&p, false, false, true))
 							return;
 					}
 					break;
@@ -974,6 +1004,7 @@ Draw_Init
 static void gl_draw_start(void)
 {
 	int i;
+	char vabuf[1024];
 	drawtexturepool = R_AllocTexturePool();
 
 	numcachepics = 0;
@@ -984,10 +1015,10 @@ static void gl_draw_start(void)
 	// load default font textures
 	for(i = 0; i < dp_fonts.maxsize; ++i)
 		if (dp_fonts.f[i].title[0])
-			LoadFont(false, va("gfx/font_%s", dp_fonts.f[i].title), &dp_fonts.f[i], 1, 0);
+			LoadFont(false, va(vabuf, sizeof(vabuf), "gfx/font_%s", dp_fonts.f[i].title), &dp_fonts.f[i], 1, 0);
 
 	// draw the loading screen so people have something to see in the newly opened window
-	SCR_UpdateLoadingScreen(true);
+	SCR_UpdateLoadingScreen(true, true);
 }
 
 static void gl_draw_shutdown(void)
@@ -1019,6 +1050,8 @@ void GL_Draw_Init (void)
 	Cvar_RegisterVariable(&r_textshadow);
 	Cvar_RegisterVariable(&r_textbrightness);
 	Cvar_RegisterVariable(&r_textcontrast);
+	Cvar_RegisterVariable(&r_nearest_2d);
+	Cvar_RegisterVariable(&r_nearest_conchars);
 
 	// allocate fonts storage
 	fonts_mempool = Mem_AllocPool("FONTS", 0, NULL);
@@ -1044,33 +1077,19 @@ void GL_Draw_Init (void)
 	R_RegisterModule("GL_Draw", gl_draw_start, gl_draw_shutdown, gl_draw_newmap, NULL, NULL);
 }
 
-static void _DrawQ_Setup(void)
+static void _DrawQ_Setup(void) // see R_ResetViewRendering2D
 {
-	r_viewport_t viewport;
 	if (r_refdef.draw2dstage == 1)
 		return;
 	r_refdef.draw2dstage = 1;
-	CHECKGLERROR
-	R_Viewport_InitOrtho(&viewport, &identitymatrix, r_refdef.view.x, vid.height - r_refdef.view.y - r_refdef.view.height, r_refdef.view.width, r_refdef.view.height, 0, 0, vid_conwidth.integer, vid_conheight.integer, -10, 100, NULL);
-	R_Mesh_ResetRenderTargets();
-	R_SetViewport(&viewport);
-	GL_ColorMask(r_refdef.view.colormask[0], r_refdef.view.colormask[1], r_refdef.view.colormask[2], 1);
-	GL_DepthFunc(GL_LEQUAL);
-	GL_PolygonOffset(0,0);
-	GL_CullFace(GL_NONE);
-	R_EntityMatrix(&identitymatrix);
 
-	GL_DepthRange(0, 1);
-	GL_PolygonOffset(0, 0);
-	GL_DepthTest(false);
-	GL_Color(1,1,1,1);
+	R_ResetViewRendering2D_Common(0, NULL, NULL, vid_conwidth.integer, vid_conheight.integer);
 }
 
 qboolean r_draw2d_force = false;
-void _DrawQ_SetupAndProcessDrawFlag(int flags, cachepic_t *pic, float alpha)
+static void _DrawQ_SetupAndProcessDrawFlag(int flags, cachepic_t *pic, float alpha)
 {
 	_DrawQ_Setup();
-	CHECKGLERROR
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 	DrawQ_ProcessDrawFlag(flags, (alpha < 1) || (pic && pic->hasalpha));
@@ -1132,7 +1151,7 @@ void DrawQ_Pic(float x, float y, cachepic_t *pic, float width, float height, flo
 			width = pic->width;
 		if (height == 0)
 			height = pic->height;
-		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1, (flags & DRAWFLAGS_BLEND) ? false : true, true, false);
 
 #if 0
       // AK07: lets be texel correct on the corners
@@ -1148,7 +1167,7 @@ void DrawQ_Pic(float x, float y, cachepic_t *pic, float width, float height, flo
 #endif
 	}
 	else
-		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic_NoTexture((flags & DRAWFLAGS_BLEND) ? false : true, true);
 
 	floats[2] = floats[5] = floats[8] = floats[11] = 0;
 	floats[0] = floats[9] = x;
@@ -1181,10 +1200,10 @@ void DrawQ_RotPic(float x, float y, cachepic_t *pic, float width, float height, 
 			width = pic->width;
 		if (height == 0)
 			height = pic->height;
-		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1, (flags & DRAWFLAGS_BLEND) ? false : true, true, false);
 	}
 	else
-		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic_NoTexture((flags & DRAWFLAGS_BLEND) ? false : true, true);
 
 	floats[2] = floats[5] = floats[8] = floats[11] = 0;
 
@@ -1226,7 +1245,7 @@ void DrawQ_Fill(float x, float y, float width, float height, float red, float gr
 		return;
 
 //	R_Mesh_ResetTextureState();
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic_NoTexture((flags & DRAWFLAGS_BLEND) ? false : true, true);
 
 	floats[2] = floats[5] = floats[8] = floats[11] = 0;
 	floats[0] = floats[9] = x;
@@ -1368,7 +1387,8 @@ float DrawQ_TextWidth_UntilWidth_TrackColors_Scale(const char *text, size_t *max
 	else
 		width_of = fnt->width_of;
 
-	for (i = 0;((bytes_left = *maxlen - (text - text_start)) > 0) && *text;)
+	i = 0;
+	while (((bytes_left = *maxlen - (text - text_start)) > 0) && *text)
 	{
 		size_t i0 = i;
 		nextch = ch = u8_getnchar(text, &text, bytes_left);
@@ -1553,7 +1573,7 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 //	R_Mesh_ResetTextureState();
 	if (!fontmap)
 		R_Mesh_TexBind(0, fnt->tex);
-	R_SetupShader_Generic(fnt->tex, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic(fnt->tex, NULL, GL_MODULATE, 1, (flags & DRAWFLAGS_BLEND) ? false : true, true, false);
 
 	ac = color4f;
 	at = texcoord2f;
@@ -1597,7 +1617,7 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 			y += r_textshadow.value * vid.height / vid_conheight.value;
 		}
 		*/
-		for (i = 0;((bytes_left = maxlen - (text - text_start)) > 0) && *text;)
+		while (((bytes_left = maxlen - (text - text_start)) > 0) && *text)
 		{
 			nextch = ch = u8_getnchar(text, &text, bytes_left);
 			i = text - text_start;
@@ -1689,7 +1709,7 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 							at = texcoord2f;
 							av = vertex3f;
 						}
-						R_SetupShader_Generic(fnt->tex, NULL, GL_MODULATE, 1);
+						R_SetupShader_Generic(fnt->tex, NULL, GL_MODULATE, 1, (flags & DRAWFLAGS_BLEND) ? false : true, true, false);
 						map = ft2_oldstyle_map;
 					}
 				}
@@ -1698,10 +1718,20 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 				//thisw = fnt->width_of[num];
 				thisw = fnt->width_of[ch];
 				// FIXME make these smaller to just include the occupied part of the character for slightly faster rendering
-				s = (ch & 15)*0.0625f + (0.5f / tw);
-				t = (ch >> 4)*0.0625f + (0.5f / th);
-				u = 0.0625f * thisw - (1.0f / tw);
-				v = 0.0625f - (1.0f / th);
+				if (r_nearest_conchars.integer)
+				{
+					s = (ch & 15)*0.0625f;
+					t = (ch >> 4)*0.0625f;
+					u = 0.0625f * thisw;
+					v = 0.0625f;
+				}
+				else
+				{
+					s = (ch & 15)*0.0625f + (0.5f / tw);
+					t = (ch >> 4)*0.0625f + (0.5f / th);
+					u = 0.0625f * thisw - (1.0f / tw);
+					v = 0.0625f - (1.0f / th);
+				}
 				ac[ 0] = DrawQ_Color[0];ac[ 1] = DrawQ_Color[1];ac[ 2] = DrawQ_Color[2];ac[ 3] = DrawQ_Color[3];
 				ac[ 4] = DrawQ_Color[0];ac[ 5] = DrawQ_Color[1];ac[ 6] = DrawQ_Color[2];ac[ 7] = DrawQ_Color[3];
 				ac[ 8] = DrawQ_Color[0];ac[ 9] = DrawQ_Color[1];ac[10] = DrawQ_Color[2];ac[11] = DrawQ_Color[3];
@@ -1758,7 +1788,7 @@ float DrawQ_String_Scale(float startx, float starty, const char *text, size_t ma
 							break;
 						}
 					}
-					R_SetupShader_Generic(map->pic->tex, NULL, GL_MODULATE, 1);
+					R_SetupShader_Generic(map->pic->tex, NULL, GL_MODULATE, 1, (flags & DRAWFLAGS_BLEND) ? false : true, true, false);
 				}
 
 				mapch = ch - map->start;
@@ -1902,10 +1932,10 @@ void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height
 			width = pic->width;
 		if (height == 0)
 			height = pic->height;
-		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic(Draw_GetPicTexture(pic), NULL, GL_MODULATE, 1, (flags & (DRAWFLAGS_BLEND | DRAWFLAG_NOGAMMA)) ? false : true, true, false);
 	}
 	else
-		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic_NoTexture((flags & (DRAWFLAGS_BLEND | DRAWFLAG_NOGAMMA)) ? false : true, true);
 
 	floats[2] = floats[5] = floats[8] = floats[11] = 0;
 	floats[0] = floats[9] = x;
@@ -1928,13 +1958,12 @@ void DrawQ_SuperPic(float x, float y, cachepic_t *pic, float width, float height
 void DrawQ_Mesh (drawqueuemesh_t *mesh, int flags, qboolean hasalpha)
 {
 	_DrawQ_Setup();
-	CHECKGLERROR
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 	DrawQ_ProcessDrawFlag(flags, hasalpha);
 
 //	R_Mesh_ResetTextureState();
-	R_SetupShader_Generic(mesh->texture, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic(mesh->texture, NULL, GL_MODULATE, 1, (flags & DRAWFLAGS_BLEND) ? false : true, true, false);
 
 	R_Mesh_PrepareVertices_Generic_Arrays(mesh->num_vertices, mesh->data_vertex3f, mesh->data_color4f, mesh->data_texcoord2f);
 	R_Mesh_Draw(0, mesh->num_vertices, 0, mesh->num_triangles, mesh->data_element3i, NULL, 0, mesh->data_element3s, NULL, 0);
@@ -1954,6 +1983,7 @@ void DrawQ_LineLoop (drawqueuemesh_t *mesh, int flags)
 	case RENDERPATH_GL11:
 	case RENDERPATH_GL13:
 	case RENDERPATH_GL20:
+#ifndef USE_GLES2
 		CHECKGLERROR
 		qglBegin(GL_LINE_LOOP);
 		for (num = 0;num < mesh->num_vertices;num++)
@@ -1964,6 +1994,7 @@ void DrawQ_LineLoop (drawqueuemesh_t *mesh, int flags)
 		}
 		qglEnd();
 		CHECKGLERROR
+#endif
 		break;
 	case RENDERPATH_D3D9:
 		//Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
@@ -1991,13 +2022,14 @@ void DrawQ_Line (float width, float x1, float y1, float x2, float y2, float r, f
 	if(!r_draw2d.integer && !r_draw2d_force)
 		return;
 
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic_NoTexture((flags & DRAWFLAGS_BLEND) ? false : true, true);
 
 	switch(vid.renderpath)
 	{
 	case RENDERPATH_GL11:
 	case RENDERPATH_GL13:
 	case RENDERPATH_GL20:
+#ifndef USE_GLES2
 		CHECKGLERROR
 
 		//qglLineWidth(width);CHECKGLERROR
@@ -2009,6 +2041,7 @@ void DrawQ_Line (float width, float x1, float y1, float x2, float y2, float r, f
 		qglVertex2f(x2, y2);
 		qglEnd();
 		CHECKGLERROR
+#endif
 		break;
 	case RENDERPATH_D3D9:
 		//Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
@@ -2049,7 +2082,7 @@ void DrawQ_Lines (float width, int numlines, const float *vertex3f, const float 
 	case RENDERPATH_GL20:
 		CHECKGLERROR
 
-		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic_NoTexture((flags & DRAWFLAGS_BLEND) ? false : true, true);
 
 		//qglLineWidth(width);CHECKGLERROR
 
@@ -2154,11 +2187,41 @@ void R_DrawGamma(void)
 	}
 	// all the blends ignore depth
 //	R_Mesh_ResetTextureState();
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic_NoTexture(true, true);
 	GL_DepthMask(true);
 	GL_DepthRange(0, 1);
 	GL_PolygonOffset(0, 0);
 	GL_DepthTest(false);
+
+	// interpretation of brightness and contrast:
+	//   color range := brightness .. (brightness + contrast)
+	// i.e. "c *= contrast; c += brightness"
+	// plausible values for brightness thus range from -contrast to 1
+
+	// apply pre-brightness (subtractive brightness, for where contrast was >= 1)
+	if (vid.support.ext_blend_subtract)
+	{
+		if (v_color_enable.integer)
+		{
+			c[0] = -v_color_black_r.value / v_color_white_r.value;
+			c[1] = -v_color_black_g.value / v_color_white_g.value;
+			c[2] = -v_color_black_b.value / v_color_white_b.value;
+		}
+		else
+			c[0] = c[1] = c[2] = -v_brightness.value / v_contrast.value;
+		if (c[0] >= 0.01f || c[1] >= 0.01f || c[2] >= 0.01f)
+		{
+			// need SUBTRACTIVE blending to do this!
+			GL_BlendEquationSubtract(true);
+			GL_BlendFunc(GL_ONE, GL_ONE);
+			GL_Color(c[0], c[1], c[2], 1);
+			R_Mesh_PrepareVertices_Generic_Arrays(3, blendvertex3f, NULL, NULL);
+			R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
+			GL_BlendEquationSubtract(false);
+		}
+	}
+
+	// apply contrast
 	if (v_color_enable.integer)
 	{
 		c[0] = v_color_white_r.value;
@@ -2167,17 +2230,32 @@ void R_DrawGamma(void)
 	}
 	else
 		c[0] = c[1] = c[2] = v_contrast.value;
-	if (c[0] >= 1.01f || c[1] >= 1.01f || c[2] >= 1.01f)
+	if (c[0] >= 1.003f || c[1] >= 1.003f || c[2] >= 1.003f)
 	{
 		GL_BlendFunc(GL_DST_COLOR, GL_ONE);
-		while (c[0] >= 1.01f || c[1] >= 1.01f || c[2] >= 1.01f)
+		while (c[0] >= 1.003f || c[1] >= 1.003f || c[2] >= 1.003f)
 		{
-			GL_Color(c[0] - 1, c[1] - 1, c[2] - 1, 1);
+			float cc[4];
+			cc[0] = bound(0, c[0] - 1, 1);
+			cc[1] = bound(0, c[1] - 1, 1);
+			cc[2] = bound(0, c[2] - 1, 1);
+			GL_Color(cc[0], cc[1], cc[2], 1);
 			R_Mesh_PrepareVertices_Generic_Arrays(3, blendvertex3f, NULL, NULL);
 			R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
-			VectorScale(c, 0.5, c);
+			c[0] /= 1 + cc[0];
+			c[1] /= 1 + cc[1];
+			c[2] /= 1 + cc[2];
 		}
 	}
+	if (c[0] <= 0.997f || c[1] <= 0.997f || c[2] <= 0.997f)
+	{
+		GL_BlendFunc(GL_DST_COLOR, GL_ZERO);
+		GL_Color(c[0], c[1], c[2], 1);
+		R_Mesh_PrepareVertices_Generic_Arrays(3, blendvertex3f, NULL, NULL);
+		R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
+	}
+
+	// apply post-brightness (additive brightness, for where contrast was <= 1)
 	if (v_color_enable.integer)
 	{
 		c[0] = v_color_black_r.value;
@@ -2189,7 +2267,7 @@ void R_DrawGamma(void)
 	if (c[0] >= 0.01f || c[1] >= 0.01f || c[2] >= 0.01f)
 	{
 		GL_BlendFunc(GL_ONE, GL_ONE);
-		GL_Color(c[0] - 1, c[1] - 1, c[2] - 1, 1);
+		GL_Color(c[0], c[1], c[2], 1);
 		R_Mesh_PrepareVertices_Generic_Arrays(3, blendvertex3f, NULL, NULL);
 		R_Mesh_Draw(0, 3, 0, 1, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 	}

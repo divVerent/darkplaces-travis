@@ -70,7 +70,7 @@ cvar_t *Cvar_FindVarAfter (const char *prev_var_name, int neededflags)
 	return var;
 }
 
-cvar_t *Cvar_FindVarLink (const char *var_name, cvar_t **parent, cvar_t ***link, cvar_t **prev_alpha)
+static cvar_t *Cvar_FindVarLink (const char *var_name, cvar_t **parent, cvar_t ***link, cvar_t **prev_alpha)
 {
 	int hashindex;
 	cvar_t *var;
@@ -105,30 +105,39 @@ cvar_t *Cvar_FindVarLink (const char *var_name, cvar_t **parent, cvar_t ***link,
 Cvar_VariableValue
 ============
 */
-float Cvar_VariableValue (const char *var_name)
+float Cvar_VariableValueOr (const char *var_name, float def)
 {
 	cvar_t *var;
 
 	var = Cvar_FindVar (var_name);
 	if (!var)
-		return 0;
+		return def;
 	return atof (var->string);
 }
 
+float Cvar_VariableValue (const char *var_name)
+{
+	return Cvar_VariableValueOr(var_name, 0);
+}
 
 /*
 ============
 Cvar_VariableString
 ============
 */
-const char *Cvar_VariableString (const char *var_name)
+const char *Cvar_VariableStringOr (const char *var_name, const char *def)
 {
 	cvar_t *var;
 
 	var = Cvar_FindVar (var_name);
 	if (!var)
-		return cvar_null_string;
+		return def;
 	return var->string;
+}
+
+const char *Cvar_VariableString (const char *var_name)
+{
+	return Cvar_VariableStringOr(var_name, cvar_null_string);
 }
 
 /*
@@ -257,40 +266,43 @@ void Cvar_CompleteCvarPrint (const char *partial)
 static void Cvar_UpdateAutoCvar(cvar_t *var)
 {
 	int i;
-	if(!prog)
-		Host_Error("Cvar_UpdateAutoCvar: no prog set");
-	i = PRVM_GetProgNr();
-	if(var->globaldefindex_progid[i] == prog->id)
+	int j;
+	const char *s;
+	vec3_t v;
+	prvm_prog_t *prog;
+	for (i = 0;i < PRVM_PROG_MAX;i++)
 	{
-		// MUST BE SYNCED WITH prvm_edict.c PRVM_LoadProgs
-		int j;
-		const char *s;
-		prvm_eval_t *val = (prvm_eval_t *)(prog->globals.generic + prog->globaldefs[var->globaldefindex[i]].ofs);
-		switch(prog->globaldefs[var->globaldefindex[i]].type & ~DEF_SAVEGLOBAL)
+		prog = &prvm_prog_list[i];
+		if (prog->loaded && var->globaldefindex_progid[i] == prog->id)
 		{
+			// MUST BE SYNCED WITH prvm_edict.c PRVM_LoadProgs
+			switch(prog->globaldefs[var->globaldefindex[i]].type & ~DEF_SAVEGLOBAL)
+			{
 			case ev_float:
-				val->_float = var->value;
+				PRVM_GLOBALFIELDFLOAT(prog->globaldefs[var->globaldefindex[i]].ofs) = var->value;
 				break;
 			case ev_vector:
 				s = var->string;
-				VectorClear(val->vector);
+				VectorClear(v);
 				for (j = 0;j < 3;j++)
 				{
 					while (*s && ISWHITESPACE(*s))
 						s++;
 					if (!*s)
 						break;
-					val->vector[j] = atof(s);
+					v[j] = atof(s);
 					while (!ISWHITESPACE(*s))
 						s++;
 					if (!*s)
 						break;
 				}
+				VectorCopy(v, PRVM_GLOBALFIELDVECTOR(prog->globaldefs[var->globaldefindex[i]].ofs));
 				break;
 			case ev_string:
-				PRVM_ChangeEngineString(var->globaldefindex_stringno[i], var->string);
-				val->string = var->globaldefindex_stringno[i];
+				PRVM_ChangeEngineString(prog, var->globaldefindex_stringno[i], var->string);
+				PRVM_GLOBALFIELDSTRING(prog->globaldefs[var->globaldefindex[i]].ofs) = var->globaldefindex_stringno[i];
 				break;
+			}
 		}
 	}
 }
@@ -308,12 +320,12 @@ void Cvar_UpdateAllAutoCvars(void)
 Cvar_Set
 ============
 */
-void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
+extern cvar_t sv_disablenotify;
+static void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
 {
 	qboolean changed;
 	size_t valuelen;
-	prvm_prog_t *tmpprog;
-	int i;
+	char vabuf[1024];
 
 	changed = strcmp(var->string, value) != 0;
 	// LordHavoc: don't reallocate when there is no change
@@ -331,7 +343,7 @@ void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
 	memcpy ((char *)var->string, value, valuelen + 1);
 	var->value = atof (var->string);
 	var->integer = (int) var->value;
-	if ((var->flags & CVAR_NOTIFY) && changed && sv.active)
+	if ((var->flags & CVAR_NOTIFY) && changed && sv.active && !sv_disablenotify.integer)
 		SV_BroadcastPrintf("\"%s\" changed to \"%s\"\n", var->name, var->string);
 #if 0
 	// TODO: add infostring support to the server?
@@ -359,16 +371,16 @@ void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
 		if (!strcmp(var->name, "_cl_color"))
 		{
 			int top = (var->integer >> 4) & 15, bottom = var->integer & 15;
-			CL_SetInfo("topcolor", va("%i", top), true, false, false, false);
-			CL_SetInfo("bottomcolor", va("%i", bottom), true, false, false, false);
+			CL_SetInfo("topcolor", va(vabuf, sizeof(vabuf), "%i", top), true, false, false, false);
+			CL_SetInfo("bottomcolor", va(vabuf, sizeof(vabuf), "%i", bottom), true, false, false, false);
 			if (cls.protocol != PROTOCOL_QUAKEWORLD && cls.netcon)
 			{
 				MSG_WriteByte(&cls.netcon->message, clc_stringcmd);
-				MSG_WriteString(&cls.netcon->message, va("color %i %i", top, bottom));
+				MSG_WriteString(&cls.netcon->message, va(vabuf, sizeof(vabuf), "color %i %i", top, bottom));
 			}
 		}
 		else if (!strcmp(var->name, "_cl_rate"))
-			CL_SetInfo("rate", va("%i", var->integer), true, false, false, false);
+			CL_SetInfo("rate", va(vabuf, sizeof(vabuf), "%i", var->integer), true, false, false, false);
 		else if (!strcmp(var->name, "_cl_playerskin"))
 			CL_SetInfo("playerskin", var->string, true, false, false, false);
 		else if (!strcmp(var->name, "_cl_playermodel"))
@@ -387,16 +399,7 @@ void Cvar_SetQuick_Internal (cvar_t *var, const char *value)
 			NetConn_UpdateFavorites();
 	}
 
-	tmpprog = prog;
-	for(i = 0; i < PRVM_MAXPROGS; ++i)
-	{
-		if(PRVM_ProgLoaded(i))
-		{
-			PRVM_SetProg(i);
-			Cvar_UpdateAutoCvar(var);
-		}
-	}
-	prog = tmpprog;
+	Cvar_UpdateAutoCvar(var);
 }
 
 void Cvar_SetQuick (cvar_t *var, const char *value)
@@ -820,7 +823,7 @@ void Cvar_WriteVariables (qfile_t *f)
 
 	// don't save cvars that match their default value
 	for (var = cvar_vars ; var ; var = var->next)
-		if ((var->flags & CVAR_SAVE) && (strcmp(var->string, var->defstring) || !(var->flags & CVAR_DEFAULTSET)))
+		if ((var->flags & CVAR_SAVE) && (strcmp(var->string, var->defstring) || ((var->flags & CVAR_ALLOCATED) && !(var->flags & CVAR_DEFAULTSET))))
 		{
 			Cmd_QuoteString(buf1, sizeof(buf1), var->name, "\"\\$", false);
 			Cmd_QuoteString(buf2, sizeof(buf2), var->string, "\"\\$", false);
@@ -848,14 +851,14 @@ void Cvar_List_f (void)
 	{
 		partial = Cmd_Argv (1);
 		len = strlen(partial);
+		ispattern = (strchr(partial, '*') || strchr(partial, '?'));
 	}
 	else
 	{
 		partial = NULL;
 		len = 0;
+		ispattern = false;
 	}
-
-	ispattern = partial && (strchr(partial, '*') || strchr(partial, '?'));
 
 	count = 0;
 	for (cvar = cvar_vars; cvar; cvar = cvar->next)

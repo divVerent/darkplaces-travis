@@ -26,10 +26,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "snd_modplug.h"
 #include "csprogs.h"
 #include "cl_collision.h"
+#include "cdaudio.h"
 
 
 #define SND_MIN_SPEED 8000
-#define SND_MAX_SPEED 96000
+#define SND_MAX_SPEED 192000
 #define SND_MIN_WIDTH 1
 #define SND_MAX_WIDTH 2
 #define SND_MIN_CHANNELS 1
@@ -165,6 +166,8 @@ cvar_t volume = {CVAR_SAVE, "volume", "0.7", "volume of sound effects"};
 cvar_t snd_initialized = { CVAR_READONLY, "snd_initialized", "0", "indicates the sound subsystem is active"};
 cvar_t snd_staticvolume = {CVAR_SAVE, "snd_staticvolume", "1", "volume of ambient sound effects (such as swampy sounds at the start of e1m2)"};
 cvar_t snd_soundradius = {CVAR_SAVE, "snd_soundradius", "1200", "radius of weapon sounds and other standard sound effects (monster idle noises are half this radius and flickering light noises are one third of this radius)"};
+cvar_t snd_attenuation_exponent = {CVAR_SAVE, "snd_attenuation_exponent", "1", "Exponent of (1-radius) in sound attenuation formula"};
+cvar_t snd_attenuation_decibel = {CVAR_SAVE, "snd_attenuation_decibel", "0", "Decibel sound attenuation per sound radius distance"};
 cvar_t snd_spatialization_min_radius = {CVAR_SAVE, "snd_spatialization_min_radius", "10000", "use minimum spatialization above to this radius"};
 cvar_t snd_spatialization_max_radius = {CVAR_SAVE, "snd_spatialization_max_radius", "100", "use maximum spatialization below this radius"};
 cvar_t snd_spatialization_min = {CVAR_SAVE, "snd_spatialization_min", "0.70", "minimum spatializazion of sounds"};
@@ -177,43 +180,55 @@ cvar_t snd_spatialization_occlusion = {CVAR_SAVE, "snd_spatialization_occlusion"
 
 // Cvars declared in snd_main.h (shared with other snd_*.c files)
 cvar_t _snd_mixahead = {CVAR_SAVE, "_snd_mixahead", "0.15", "how much sound to mix ahead of time"};
-cvar_t snd_streaming = { CVAR_SAVE, "snd_streaming", "1", "enables keeping compressed ogg sound files compressed, decompressing them only as needed, otherwise they will be decompressed completely at load (may use a lot of memory)"};
+cvar_t snd_streaming = { CVAR_SAVE, "snd_streaming", "1", "enables keeping compressed ogg sound files compressed, decompressing them only as needed, otherwise they will be decompressed completely at load (may use a lot of memory); when set to 2, streaming is performed even if this would waste memory"};
+cvar_t snd_streaming_length = { CVAR_SAVE, "snd_streaming_length", "1", "decompress sounds completely if they are less than this play time when snd_streaming is 1"};
 cvar_t snd_swapstereo = {CVAR_SAVE, "snd_swapstereo", "0", "swaps left/right speakers for old ISA soundblaster cards"};
 extern cvar_t v_flipped;
 cvar_t snd_channellayout = {0, "snd_channellayout", "0", "channel layout. Can be 0 (auto - snd_restart needed), 1 (standard layout), or 2 (ALSA layout)"};
 cvar_t snd_mutewhenidle = {CVAR_SAVE, "snd_mutewhenidle", "1", "whether to disable sound output when game window is inactive"};
-cvar_t snd_entchannel0volume = {CVAR_SAVE, "snd_entchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of regular entities"};
-cvar_t snd_entchannel1volume = {CVAR_SAVE, "snd_entchannel1volume", "1", "volume multiplier of the 1st entity channel of regular entities"};
-cvar_t snd_entchannel2volume = {CVAR_SAVE, "snd_entchannel2volume", "1", "volume multiplier of the 2nd entity channel of regular entities"};
-cvar_t snd_entchannel3volume = {CVAR_SAVE, "snd_entchannel3volume", "1", "volume multiplier of the 3rd entity channel of regular entities"};
-cvar_t snd_entchannel4volume = {CVAR_SAVE, "snd_entchannel4volume", "1", "volume multiplier of the 4th entity channel of regular entities"};
-cvar_t snd_entchannel5volume = {CVAR_SAVE, "snd_entchannel5volume", "1", "volume multiplier of the 5th entity channel of regular entities"};
-cvar_t snd_entchannel6volume = {CVAR_SAVE, "snd_entchannel6volume", "1", "volume multiplier of the 6th entity channel of regular entities"};
-cvar_t snd_entchannel7volume = {CVAR_SAVE, "snd_entchannel7volume", "1", "volume multiplier of the 7th entity channel of regular entities"};
-cvar_t snd_playerchannel0volume = {CVAR_SAVE, "snd_playerchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of player entities"};
-cvar_t snd_playerchannel1volume = {CVAR_SAVE, "snd_playerchannel1volume", "1", "volume multiplier of the 1st entity channel of player entities"};
-cvar_t snd_playerchannel2volume = {CVAR_SAVE, "snd_playerchannel2volume", "1", "volume multiplier of the 2nd entity channel of player entities"};
-cvar_t snd_playerchannel3volume = {CVAR_SAVE, "snd_playerchannel3volume", "1", "volume multiplier of the 3rd entity channel of player entities"};
-cvar_t snd_playerchannel4volume = {CVAR_SAVE, "snd_playerchannel4volume", "1", "volume multiplier of the 4th entity channel of player entities"};
-cvar_t snd_playerchannel5volume = {CVAR_SAVE, "snd_playerchannel5volume", "1", "volume multiplier of the 5th entity channel of player entities"};
-cvar_t snd_playerchannel6volume = {CVAR_SAVE, "snd_playerchannel6volume", "1", "volume multiplier of the 6th entity channel of player entities"};
-cvar_t snd_playerchannel7volume = {CVAR_SAVE, "snd_playerchannel7volume", "1", "volume multiplier of the 7th entity channel of player entities"};
-cvar_t snd_worldchannel0volume = {CVAR_SAVE, "snd_worldchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of the world entity"};
-cvar_t snd_worldchannel1volume = {CVAR_SAVE, "snd_worldchannel1volume", "1", "volume multiplier of the 1st entity channel of the world entity"};
-cvar_t snd_worldchannel2volume = {CVAR_SAVE, "snd_worldchannel2volume", "1", "volume multiplier of the 2nd entity channel of the world entity"};
-cvar_t snd_worldchannel3volume = {CVAR_SAVE, "snd_worldchannel3volume", "1", "volume multiplier of the 3rd entity channel of the world entity"};
-cvar_t snd_worldchannel4volume = {CVAR_SAVE, "snd_worldchannel4volume", "1", "volume multiplier of the 4th entity channel of the world entity"};
-cvar_t snd_worldchannel5volume = {CVAR_SAVE, "snd_worldchannel5volume", "1", "volume multiplier of the 5th entity channel of the world entity"};
-cvar_t snd_worldchannel6volume = {CVAR_SAVE, "snd_worldchannel6volume", "1", "volume multiplier of the 6th entity channel of the world entity"};
-cvar_t snd_worldchannel7volume = {CVAR_SAVE, "snd_worldchannel7volume", "1", "volume multiplier of the 7th entity channel of the world entity"};
-cvar_t snd_csqcchannel0volume = {CVAR_SAVE, "snd_csqcchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of the world entity"};
-cvar_t snd_csqcchannel1volume = {CVAR_SAVE, "snd_csqcchannel1volume", "1", "volume multiplier of the 1st entity channel of the world entity"};
-cvar_t snd_csqcchannel2volume = {CVAR_SAVE, "snd_csqcchannel2volume", "1", "volume multiplier of the 2nd entity channel of the world entity"};
-cvar_t snd_csqcchannel3volume = {CVAR_SAVE, "snd_csqcchannel3volume", "1", "volume multiplier of the 3rd entity channel of the world entity"};
-cvar_t snd_csqcchannel4volume = {CVAR_SAVE, "snd_csqcchannel4volume", "1", "volume multiplier of the 4th entity channel of the world entity"};
-cvar_t snd_csqcchannel5volume = {CVAR_SAVE, "snd_csqcchannel5volume", "1", "volume multiplier of the 5th entity channel of the world entity"};
-cvar_t snd_csqcchannel6volume = {CVAR_SAVE, "snd_csqcchannel6volume", "1", "volume multiplier of the 6th entity channel of the world entity"};
-cvar_t snd_csqcchannel7volume = {CVAR_SAVE, "snd_csqcchannel7volume", "1", "volume multiplier of the 7th entity channel of the world entity"};
+cvar_t snd_maxchannelvolume = {CVAR_SAVE, "snd_maxchannelvolume", "10", "maximum volume of a single sound"};
+cvar_t snd_softclip = {CVAR_SAVE, "snd_softclip", "0", "Use soft-clipping. Soft-clipping can make the sound more smooth if very high volume levels are used. Enable this option if the dynamic range of the loudspeakers is very low. WARNING: This feature creates distortion and should be considered a last resort."};
+//cvar_t snd_softclip = {CVAR_SAVE, "snd_softclip", "0", "Use soft-clipping (when set to 2, use it even if output is floating point). Soft-clipping can make the sound more smooth if very high volume levels are used. Enable this option if the dynamic range of the loudspeakers is very low. WARNING: This feature creates distortion and should be considered a last resort."};
+cvar_t snd_entchannel0volume = {CVAR_SAVE, "snd_entchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel1volume = {CVAR_SAVE, "snd_entchannel1volume", "1", "volume multiplier of the 1st entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel2volume = {CVAR_SAVE, "snd_entchannel2volume", "1", "volume multiplier of the 2nd entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel3volume = {CVAR_SAVE, "snd_entchannel3volume", "1", "volume multiplier of the 3rd entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel4volume = {CVAR_SAVE, "snd_entchannel4volume", "1", "volume multiplier of the 4th entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel5volume = {CVAR_SAVE, "snd_entchannel5volume", "1", "volume multiplier of the 5th entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel6volume = {CVAR_SAVE, "snd_entchannel6volume", "1", "volume multiplier of the 6th entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_entchannel7volume = {CVAR_SAVE, "snd_entchannel7volume", "1", "volume multiplier of the 7th entity channel of regular entities (DEPRECATED)"};
+cvar_t snd_playerchannel0volume = {CVAR_SAVE, "snd_playerchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel1volume = {CVAR_SAVE, "snd_playerchannel1volume", "1", "volume multiplier of the 1st entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel2volume = {CVAR_SAVE, "snd_playerchannel2volume", "1", "volume multiplier of the 2nd entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel3volume = {CVAR_SAVE, "snd_playerchannel3volume", "1", "volume multiplier of the 3rd entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel4volume = {CVAR_SAVE, "snd_playerchannel4volume", "1", "volume multiplier of the 4th entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel5volume = {CVAR_SAVE, "snd_playerchannel5volume", "1", "volume multiplier of the 5th entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel6volume = {CVAR_SAVE, "snd_playerchannel6volume", "1", "volume multiplier of the 6th entity channel of player entities (DEPRECATED)"};
+cvar_t snd_playerchannel7volume = {CVAR_SAVE, "snd_playerchannel7volume", "1", "volume multiplier of the 7th entity channel of player entities (DEPRECATED)"};
+cvar_t snd_worldchannel0volume = {CVAR_SAVE, "snd_worldchannel0volume", "1", "volume multiplier of the auto-allocate entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel1volume = {CVAR_SAVE, "snd_worldchannel1volume", "1", "volume multiplier of the 1st entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel2volume = {CVAR_SAVE, "snd_worldchannel2volume", "1", "volume multiplier of the 2nd entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel3volume = {CVAR_SAVE, "snd_worldchannel3volume", "1", "volume multiplier of the 3rd entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel4volume = {CVAR_SAVE, "snd_worldchannel4volume", "1", "volume multiplier of the 4th entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel5volume = {CVAR_SAVE, "snd_worldchannel5volume", "1", "volume multiplier of the 5th entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel6volume = {CVAR_SAVE, "snd_worldchannel6volume", "1", "volume multiplier of the 6th entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_worldchannel7volume = {CVAR_SAVE, "snd_worldchannel7volume", "1", "volume multiplier of the 7th entity channel of the world entity (DEPRECATED)"};
+cvar_t snd_csqcchannel0volume = {CVAR_SAVE, "snd_csqcchannel0volume", "1", "volume multiplier of the auto-allocate entity channel CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel1volume = {CVAR_SAVE, "snd_csqcchannel1volume", "1", "volume multiplier of the 1st entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel2volume = {CVAR_SAVE, "snd_csqcchannel2volume", "1", "volume multiplier of the 2nd entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel3volume = {CVAR_SAVE, "snd_csqcchannel3volume", "1", "volume multiplier of the 3rd entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel4volume = {CVAR_SAVE, "snd_csqcchannel4volume", "1", "volume multiplier of the 4th entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel5volume = {CVAR_SAVE, "snd_csqcchannel5volume", "1", "volume multiplier of the 5th entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel6volume = {CVAR_SAVE, "snd_csqcchannel6volume", "1", "volume multiplier of the 6th entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_csqcchannel7volume = {CVAR_SAVE, "snd_csqcchannel7volume", "1", "volume multiplier of the 7th entity channel of CSQC entities (DEPRECATED)"};
+cvar_t snd_channel0volume = {CVAR_SAVE, "snd_channel0volume", "1", "volume multiplier of the auto-allocate entity channel"};
+cvar_t snd_channel1volume = {CVAR_SAVE, "snd_channel1volume", "1", "volume multiplier of the 1st entity channel"};
+cvar_t snd_channel2volume = {CVAR_SAVE, "snd_channel2volume", "1", "volume multiplier of the 2nd entity channel"};
+cvar_t snd_channel3volume = {CVAR_SAVE, "snd_channel3volume", "1", "volume multiplier of the 3rd entity channel"};
+cvar_t snd_channel4volume = {CVAR_SAVE, "snd_channel4volume", "1", "volume multiplier of the 4th entity channel"};
+cvar_t snd_channel5volume = {CVAR_SAVE, "snd_channel5volume", "1", "volume multiplier of the 5th entity channel"};
+cvar_t snd_channel6volume = {CVAR_SAVE, "snd_channel6volume", "1", "volume multiplier of the 6th entity channel"};
+cvar_t snd_channel7volume = {CVAR_SAVE, "snd_channel7volume", "1", "volume multiplier of the 7th entity channel"};
 
 // Local cvars
 static cvar_t nosound = {0, "nosound", "0", "disables sound"};
@@ -228,6 +243,13 @@ static cvar_t snd_show = {0, "snd_show", "0", "shows some statistics about sound
 static cvar_t snd_speed = {CVAR_SAVE, "snd_speed", "48000", "sound output frequency, in hertz"};
 static cvar_t snd_width = {CVAR_SAVE, "snd_width", "2", "sound output precision, in bytes (1 and 2 supported)"};
 static cvar_t snd_channels = {CVAR_SAVE, "snd_channels", "2", "number of channels for the sound output (2 for stereo; up to 8 supported for 3D sound)"};
+
+static cvar_t snd_startloopingsounds = {0, "snd_startloopingsounds", "1", "whether to start sounds that would loop (you want this to be 1); existing sounds are not affected"};
+static cvar_t snd_startnonloopingsounds = {0, "snd_startnonloopingsounds", "1", "whether to start sounds that would not loop (you want this to be 1); existing sounds are not affected"};
+
+// randomization
+static cvar_t snd_identicalsoundrandomization_time = {0, "snd_identicalsoundrandomization_time", "0.1", "how much seconds to randomly skip (positive) or delay (negative) sounds when multiple identical sounds are started on the same frame"};
+static cvar_t snd_identicalsoundrandomization_tics = {0, "snd_identicalsoundrandomization_tics", "0", "if nonzero, how many tics to limit sound randomization as defined by snd_identicalsoundrandomization_time"};
 
 // Ambient sounds
 static sfx_t* ambient_sfxs [2] = { NULL, NULL };
@@ -303,17 +325,15 @@ static void S_SoundList_f (void)
 		if (sfx->fetcher != NULL)
 		{
 			unsigned int size;
-			const snd_format_t* format;
 
 			size = sfx->memsize;
-			format = sfx->fetcher->getfmt(sfx);
-			Con_Printf ("%c%c%c%c(%2db, %6s) %8i : %s\n",
+			Con_Printf ("%c%c%c(%5iHz %2db %6s) %8i : %s\n",
 						(sfx->loopstart < sfx->total_length) ? 'L' : ' ',
 						(sfx->flags & SFXFLAG_STREAMED) ? 'S' : ' ',
-						(sfx->locks > 0) ? 'K' : ' ',
-						(sfx->flags & SFXFLAG_PERMANENTLOCK) ? 'P' : ' ',
-						format->width * 8,
-						(format->channels == 1) ? "mono" : "stereo",
+						(sfx->flags & SFXFLAG_MENUSOUND) ? 'P' : ' ',
+						sfx->format.speed,
+						sfx->format.width * 8,
+						(sfx->format.channels == 1) ? "mono" : "stereo",
 						size,
 						sfx->name);
 			total += size;
@@ -325,7 +345,7 @@ static void S_SoundList_f (void)
 }
 
 
-void S_SoundInfo_f(void)
+static void S_SoundInfo_f(void)
 {
 	if (snd_renderbuffer == NULL)
 	{
@@ -604,6 +624,8 @@ void S_Startup (void)
 		fixed_width = true;
 	}
 
+#if 0
+	// LordHavoc: now you can with the resampler...
 	// You can't change sound speed after start time (not yet supported)
 	if (prev_render_format.speed != 0)
 	{
@@ -615,6 +637,7 @@ void S_Startup (void)
 			chosen_fmt.speed = prev_render_format.speed;
 		}
 	}
+#endif
 
 	// Sanity checks
 	if (chosen_fmt.speed < SND_MIN_SPEED)
@@ -754,7 +777,7 @@ void S_Shutdown(void)
 	sound_spatialized = false;
 }
 
-void S_Restart_f(void)
+static void S_Restart_f(void)
 {
 	// NOTE: we can't free all sounds if we are running a map (this frees sfx_t that are still referenced by precaches)
 	// So, refuse to do this if we are connected.
@@ -811,6 +834,17 @@ void S_Init(void)
 	Cvar_RegisterVariable(&snd_csqcchannel5volume);
 	Cvar_RegisterVariable(&snd_csqcchannel6volume);
 	Cvar_RegisterVariable(&snd_csqcchannel7volume);
+	Cvar_RegisterVariable(&snd_channel0volume);
+	Cvar_RegisterVariable(&snd_channel1volume);
+	Cvar_RegisterVariable(&snd_channel2volume);
+	Cvar_RegisterVariable(&snd_channel3volume);
+	Cvar_RegisterVariable(&snd_channel4volume);
+	Cvar_RegisterVariable(&snd_channel5volume);
+	Cvar_RegisterVariable(&snd_channel6volume);
+	Cvar_RegisterVariable(&snd_channel7volume);
+
+	Cvar_RegisterVariable(&snd_attenuation_exponent);
+	Cvar_RegisterVariable(&snd_attenuation_decibel);
 
 	Cvar_RegisterVariable(&snd_spatialization_min_radius);
 	Cvar_RegisterVariable(&snd_spatialization_max_radius);
@@ -826,6 +860,14 @@ void S_Init(void)
 	Cvar_RegisterVariable(&snd_width);
 	Cvar_RegisterVariable(&snd_channels);
 	Cvar_RegisterVariable(&snd_mutewhenidle);
+	Cvar_RegisterVariable(&snd_maxchannelvolume);
+	Cvar_RegisterVariable(&snd_softclip);
+
+	Cvar_RegisterVariable(&snd_startloopingsounds);
+	Cvar_RegisterVariable(&snd_startnonloopingsounds);
+
+	Cvar_RegisterVariable(&snd_identicalsoundrandomization_time);
+	Cvar_RegisterVariable(&snd_identicalsoundrandomization_tics);
 
 // COMMANDLINEOPTION: Sound: -nosound disables sound (including CD audio)
 	if (COM_CheckParm("-nosound"))
@@ -855,6 +897,7 @@ void S_Init(void)
 	Cvar_RegisterVariable(&snd_precache);
 	Cvar_RegisterVariable(&snd_initialized);
 	Cvar_RegisterVariable(&snd_streaming);
+	Cvar_RegisterVariable(&snd_streaming_length);
 	Cvar_RegisterVariable(&ambient_level);
 	Cvar_RegisterVariable(&ambient_fade);
 	Cvar_RegisterVariable(&snd_noextraupdate);
@@ -956,6 +999,15 @@ sfx_t *S_FindName (const char *name)
 		if(!strcmp (sfx->name, name))
 			return sfx;
 
+	// check for # in the beginning, try lookup by soundindex
+	if (name[0] == '#' && name[1])
+	{
+		int soundindex = atoi(name + 1);
+		if (soundindex > 0 && soundindex < MAX_SOUNDS)
+			if (cl.sound_precache[soundindex]->name[0])
+				return cl.sound_precache[soundindex];
+	}
+
 	// Add a sfx_t struct for this sound
 	sfx = (sfx_t *)Mem_Alloc (snd_mempool, sizeof (*sfx));
 	memset (sfx, 0, sizeof(*sfx));
@@ -977,8 +1029,8 @@ void S_FreeSfx (sfx_t *sfx, qboolean force)
 {
 	unsigned int i;
 
-	// Never free a locked sfx unless forced
-	if (!force && (sfx->locks > 0 || (sfx->flags & SFXFLAG_PERMANENTLOCK)))
+	// Do not free a precached sound during purge
+	if (!force && (sfx->flags & (SFXFLAG_LEVELSOUND | SFXFLAG_MENUSOUND)))
 		return;
 
 	if (developer_loading.integer)
@@ -1006,12 +1058,17 @@ void S_FreeSfx (sfx_t *sfx, qboolean force)
 
 	// Stop all channels using this sfx
 	for (i = 0; i < total_channels; i++)
+	{
 		if (channels[i].sfx == sfx)
-			S_StopChannel (i, true);
+		{
+			Con_Printf("S_FreeSfx: stopping channel %i for sfx \"%s\"\n", i, sfx->name);
+			S_StopChannel (i, true, false);
+		}
+	}
 
 	// Free it
-	if (sfx->fetcher != NULL && sfx->fetcher->free != NULL)
-		sfx->fetcher->free (sfx->fetcher_data);
+	if (sfx->fetcher != NULL && sfx->fetcher->freesfx != NULL)
+		sfx->fetcher->freesfx(sfx);
 	Mem_Free (sfx);
 }
 
@@ -1030,28 +1087,22 @@ void S_ClearUsed (void)
 	// Start the ambient sounds and make them loop
 	for (i = 0; i < sizeof (ambient_sfxs) / sizeof (ambient_sfxs[0]); i++)
 	{
-		// Precache it if it's not done (request a lock to make sure it will never be freed)
+		// Precache it if it's not done (and pass false for levelsound because these are permanent)
 		if (ambient_sfxs[i] == NULL)
-			ambient_sfxs[i] = S_PrecacheSound (ambient_names[i], false, true);
+			ambient_sfxs[i] = S_PrecacheSound (ambient_names[i], false, false);
 		if (ambient_sfxs[i] != NULL)
 		{
-			// Add a lock to the SFX while playing. It will be
-			// removed by S_StopAllSounds at the end of the level
-			S_LockSfx (ambient_sfxs[i]);
-
 			channels[i].sfx = ambient_sfxs[i];
+			channels[i].sfx->flags |= SFXFLAG_MENUSOUND;
 			channels[i].flags |= CHANNELFLAG_FORCELOOP;
-			channels[i].master_vol = 0;
+			channels[i].basevolume = 0.0f;
+			channels[i].basespeed = channels[i].mixspeed = 1.0f;
 		}
 	}
 
-	// Remove 1 lock from all sfx with the SFXFLAG_SERVERSOUND flag, and remove the flag
+	// Clear SFXFLAG_LEVELSOUND flag so that sounds not precached this level will be purged
 	for (sfx = known_sfx; sfx != NULL; sfx = sfx->next)
-		if (sfx->flags & SFXFLAG_SERVERSOUND)
-		{
-			S_UnlockSfx (sfx);
-			sfx->flags &= ~SFXFLAG_SERVERSOUND;
-		}
+		sfx->flags &= ~SFXFLAG_LEVELSOUND;
 }
 
 /*
@@ -1064,11 +1115,12 @@ void S_PurgeUnused(void)
 	sfx_t *sfx;
 	sfx_t *sfxnext;
 
-	// Free all unlocked sfx
+	// Free all not-precached per-level sfx
 	for (sfx = known_sfx;sfx;sfx = sfxnext)
 	{
 		sfxnext = sfx->next;
-		S_FreeSfx (sfx, false);
+		if (!(sfx->flags & (SFXFLAG_LEVELSOUND | SFXFLAG_MENUSOUND)))
+			S_FreeSfx (sfx, false);
 	}
 }
 
@@ -1078,7 +1130,7 @@ void S_PurgeUnused(void)
 S_PrecacheSound
 ==================
 */
-sfx_t *S_PrecacheSound (const char *name, qboolean complain, qboolean serversound)
+sfx_t *S_PrecacheSound (const char *name, qboolean complain, qboolean levelsound)
 {
 	sfx_t *sfx;
 
@@ -1097,11 +1149,11 @@ sfx_t *S_PrecacheSound (const char *name, qboolean complain, qboolean serversoun
 	// previously missing file
 	sfx->flags &= ~ SFXFLAG_FILEMISSING;
 
-	if (serversound && !(sfx->flags & SFXFLAG_SERVERSOUND))
-	{
-		S_LockSfx (sfx);
-		sfx->flags |= SFXFLAG_SERVERSOUND;
-	}
+	// set a flag to indicate this has been precached for this level or permanently
+	if (levelsound)
+		sfx->flags |= SFXFLAG_LEVELSOUND;
+	else
+		sfx->flags |= SFXFLAG_MENUSOUND;
 
 	if (!nosound.integer && snd_precache.integer)
 		S_LoadSound(sfx, complain);
@@ -1142,31 +1194,6 @@ qboolean S_IsSoundPrecached (const sfx_t *sfx)
 
 /*
 ==================
-S_LockSfx
-
-Add a lock to a SFX
-==================
-*/
-void S_LockSfx (sfx_t *sfx)
-{
-	sfx->locks++;
-}
-
-/*
-==================
-S_UnlockSfx
-
-Remove a lock from a SFX
-==================
-*/
-void S_UnlockSfx (sfx_t *sfx)
-{
-	sfx->locks--;
-}
-
-
-/*
-==================
 S_BlockSound
 ==================
 */
@@ -1194,27 +1221,29 @@ SND_PickChannel
 Picks a channel based on priorities, empty slots, number of channels
 =================
 */
-channel_t *SND_PickChannel(int entnum, int entchannel)
+static channel_t *SND_PickChannel(int entnum, int entchannel)
 {
 	int ch_idx;
 	int first_to_die;
 	int first_life_left, life_left;
 	channel_t* ch;
+	sfx_t *sfx; // use this instead of ch->sfx->, because that is volatile.
 
 // Check for replacement sound, or find the best one to replace
 	first_to_die = -1;
 	first_life_left = 0x7fffffff;
 
 	// entity channels try to replace the existing sound on the channel
-	if (entchannel != 0)
+	// channels <= 0 are autochannels
+	if (IS_CHAN_SINGLE(entchannel))
 	{
 		for (ch_idx=NUM_AMBIENTS ; ch_idx < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS ; ch_idx++)
 		{
 			ch = &channels[ch_idx];
-			if (ch->entnum == entnum && (ch->entchannel == entchannel || entchannel == -1) )
+			if (ch->entnum == entnum && ch->entchannel == entchannel)
 			{
 				// always override sound from same entity
-				S_StopChannel (ch_idx, true);
+				S_StopChannel (ch_idx, true, false);
 				return &channels[ch_idx];
 			}
 		}
@@ -1224,7 +1253,8 @@ channel_t *SND_PickChannel(int entnum, int entchannel)
 	for (ch_idx=NUM_AMBIENTS ; ch_idx < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS ; ch_idx++)
 	{
 		ch = &channels[ch_idx];
-		if (!ch->sfx)
+		sfx = ch->sfx; // fetch the volatile variable
+		if (!sfx)
 		{
 			// no sound on this channel
 			first_to_die = ch_idx;
@@ -1232,13 +1262,13 @@ channel_t *SND_PickChannel(int entnum, int entchannel)
 		}
 
 		// don't let monster sounds override player sounds
-		if (ch->entnum == cl.viewentity && entnum != cl.viewentity)
+		if ((ch->entnum == cl.viewentity || ch->entnum == CL_VM_GetViewEntity()) && !(entnum == cl.viewentity || entnum == CL_VM_GetViewEntity()))
 			continue;
 
 		// don't override looped sounds
-		if ((ch->flags & CHANNELFLAG_FORCELOOP) || ch->sfx->loopstart < ch->sfx->total_length)
+		if ((ch->flags & CHANNELFLAG_FORCELOOP) || sfx->loopstart < sfx->total_length)
 			continue;
-		life_left = ch->sfx->total_length - ch->pos;
+		life_left = (int)((double)sfx->total_length - ch->position);
 
 		if (life_left < first_life_left)
 		{
@@ -1250,7 +1280,7 @@ channel_t *SND_PickChannel(int entnum, int entchannel)
 	if (first_to_die == -1)
 		return NULL;
 	
-	S_StopChannel (first_to_die, true);
+	S_StopChannel (first_to_die, true, false);
 
 emptychan_found:
 	return &channels[first_to_die];
@@ -1264,13 +1294,14 @@ Spatializes a channel
 =================
 */
 extern cvar_t cl_gameplayfix_soundsmovewithentities;
-void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
+static void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 {
 	int i;
 	double f;
-	float angle_side, angle_front, angle_factor;
-	vec_t dist, mastervol, intensity, vol;
+	float angle_side, angle_front, angle_factor, mixspeed;
+	vec_t dist, mastervol, intensity;
 	vec3_t source_vec;
+	char vabuf[1024];
 
 	// update sound origin if we know about the entity
 	if (ch->entnum > 0 && cls.state == ca_connected && cl_gameplayfix_soundsmovewithentities.integer)
@@ -1293,15 +1324,26 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 			else
 				Matrix4x4_OriginFromMatrix(&cl.entities[ch->entnum].render.matrix, ch->origin);
 		}
+		else if (cl.csqc_server2csqcentitynumber[ch->entnum])
+		{
+			//Con_Printf("-- entnum %i (client %i) origin %f %f %f neworigin %f %f %f\n", ch->entnum, cl.csqc_server2csqcentitynumber[ch->entnum], ch->origin[0], ch->origin[1], ch->origin[2], cl.entities[ch->entnum].state_current.origin[0], cl.entities[ch->entnum].state_current.origin[1], cl.entities[ch->entnum].state_current.origin[2]);
+
+			if (!CL_VM_GetEntitySoundOrigin(cl.csqc_server2csqcentitynumber[ch->entnum] + MAX_EDICTS, ch->origin))
+				ch->entnum = MAX_EDICTS; // entity was removed, disown sound
+		}
 	}
 
-	mastervol = ch->master_vol;
+	mastervol = ch->basevolume;
+	mixspeed = ch->basespeed;
+
+	// TODO: implement doppler based on origin change relative to viewer and time of recent origin changes
 
 	// Adjust volume of static sounds
 	if (isstatic)
 		mastervol *= snd_staticvolume.value;
 	else if(!(ch->flags & CHANNELFLAG_FULLVOLUME)) // same as SND_PaintChannel uses
 	{
+		// old legacy separated cvars
 		if(ch->entnum >= MAX_EDICTS)
 		{
 			switch(ch->entchannel)
@@ -1362,14 +1404,30 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 				default:                                          break;
 			}
 		}
+
+		switch(ch->entchannel)
+		{
+			case 0:  mastervol *= snd_channel0volume.value; break;
+			case 1:  mastervol *= snd_channel1volume.value; break;
+			case 2:  mastervol *= snd_channel2volume.value; break;
+			case 3:  mastervol *= snd_channel3volume.value; break;
+			case 4:  mastervol *= snd_channel4volume.value; break;
+			case 5:  mastervol *= snd_channel5volume.value; break;
+			case 6:  mastervol *= snd_channel6volume.value; break;
+			case 7:  mastervol *= snd_channel7volume.value; break;
+			default: mastervol *= Cvar_VariableValueOr(va(vabuf, sizeof(vabuf), "snd_channel%dvolume", CHAN_ENGINE2CVAR(ch->entchannel)), 1.0); break;
+		}
 	}
 
 	// If this channel does not manage its own volume (like CD tracks)
 	if (!(ch->flags & CHANNELFLAG_FULLVOLUME))
 		mastervol *= volume.value;
 
-	// clamp HERE to allow to go at most 10dB past mastervolume (before clamping), when mastervolume < -10dB (so relative volumes don't get too messy)
-	mastervol = bound(0, mastervol, 655360);
+	if(snd_maxchannelvolume.value > 0)
+	{
+		// clamp HERE to allow to go at most 10dB past mastervolume (before clamping), when mastervolume < -10dB (so relative volumes don't get too messy)
+		mastervol = bound(0.0f, mastervol, 10.0f * snd_maxchannelvolume.value);
+	}
 
 	// always apply "master"
 	mastervol *= mastervolume.value;
@@ -1381,35 +1439,40 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 		// Replaygain support
 		// Con_DPrintf("Setting volume on ReplayGain-enabled track... %f -> ", fvol);
 		mastervol *= sfx->volume_mult;
-		if(mastervol * sfx->volume_peak > 65536)
-			mastervol = 65536 / sfx->volume_peak;
+		if(snd_maxchannelvolume.value > 0)
+		{
+			if(mastervol * sfx->volume_peak > snd_maxchannelvolume.value)
+				mastervol = snd_maxchannelvolume.value / sfx->volume_peak;
+		}
 		// Con_DPrintf("%f\n", fvol);
 	}
 
-	// clamp HERE to keep relative volumes of the channels correct
-	mastervol = bound(0, mastervol, 65536);
+	if(snd_maxchannelvolume.value > 0)
+	{
+		// clamp HERE to keep relative volumes of the channels correct
+		mastervol = min(mastervol, snd_maxchannelvolume.value);
+	}
+
+	mastervol = max(0.0f, mastervol);
+
+	ch->mixspeed = mixspeed;
 
 	// anything coming from the view entity will always be full volume
 	// LordHavoc: make sounds with ATTN_NONE have no spatialization
-	if (ch->entnum == cl.viewentity || ch->dist_mult == 0)
+	if (ch->entnum == cl.viewentity || ch->entnum == CL_VM_GetViewEntity() || ch->distfade == 0)
 	{
 		ch->prologic_invert = 1;
 		if (snd_spatialization_prologic.integer != 0)
 		{
-			vol = mastervol * snd_speakerlayout.listeners[0].ambientvolume * sqrt(0.5);
-			ch->listener_volume[0] = (int)bound(0, vol, 65536);
-			vol = mastervol * snd_speakerlayout.listeners[1].ambientvolume * sqrt(0.5);
-			ch->listener_volume[1] = (int)bound(0, vol, 65536);
+			ch->volume[0] = mastervol * snd_speakerlayout.listeners[0].ambientvolume * sqrt(0.5);
+			ch->volume[1] = mastervol * snd_speakerlayout.listeners[1].ambientvolume * sqrt(0.5);
 			for (i = 2;i < SND_LISTENERS;i++)
-				ch->listener_volume[i] = 0;
+				ch->volume[i] = 0;
 		}
 		else
 		{
 			for (i = 0;i < SND_LISTENERS;i++)
-			{
-				vol = mastervol * snd_speakerlayout.listeners[i].ambientvolume;
-				ch->listener_volume[i] = (int)bound(0, vol, 65536);
-			}
+				ch->volume[i] = mastervol * snd_speakerlayout.listeners[i].ambientvolume;
 		}
 	}
 	else
@@ -1417,7 +1480,14 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 		// calculate stereo seperation and distance attenuation
 		VectorSubtract(listener_origin, ch->origin, source_vec);
 		dist = VectorLength(source_vec);
-		intensity = mastervol * (1.0 - dist * ch->dist_mult);
+		f = dist * ch->distfade;
+
+		f =
+			((snd_attenuation_exponent.value == 0) ? 1.0 : pow(1.0 - min(1.0, f), (double)snd_attenuation_exponent.value))
+			*
+			((snd_attenuation_decibel.value == 0) ? 1.0 : pow(0.1, 0.1 * snd_attenuation_decibel.value * f));
+
+		intensity = mastervol * f;
 		if (intensity > 0)
 		{
 			qboolean occluded = false;
@@ -1437,13 +1507,13 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 							occluded = true;
 			}
 			if(occluded)
-				intensity *= 0.5;
+				intensity *= 0.5f;
 
 			ch->prologic_invert = 1;
 			if (snd_spatialization_prologic.integer != 0)
 			{
 				if (dist == 0)
-					angle_factor = 0.5;
+					angle_factor = 0.5f;
 				else
 				{
 					Matrix4x4_Transform(&listener_basematrix, ch->origin, source_vec);
@@ -1492,12 +1562,10 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 						//angle_factor is between 0 and 1 and represents the angle range from the front left to the center to the front right speaker
 				}
 
-				vol = intensity * sqrt(angle_factor);
-				ch->listener_volume[0] = (int)bound(0, vol, 65536);
-				vol = intensity * sqrt(1 - angle_factor);
-				ch->listener_volume[1] = (int)bound(0, vol, 65536);
+				ch->volume[0] = intensity * sqrt(angle_factor);
+				ch->volume[1] = intensity * sqrt(1 - angle_factor);
 				for (i = 2;i < SND_LISTENERS;i++)
-					ch->listener_volume[i] = 0;
+					ch->volume[i] = 0;
 			}
 			else
 			{
@@ -1529,18 +1597,16 @@ void SND_Spatialize_WithSfx(channel_t *ch, qboolean isstatic, sfx_t *sfx)
 							break;
 					}
 
-					vol = intensity * max(0, source_vec[0] * snd_speakerlayout.listeners[i].dotscale + snd_speakerlayout.listeners[i].dotbias);
-
-					ch->listener_volume[i] = (int)bound(0, vol, 65536);
+					ch->volume[i] = intensity * max(0, source_vec[0] * snd_speakerlayout.listeners[i].dotscale + snd_speakerlayout.listeners[i].dotbias);
 				}
 			}
 		}
 		else
 			for (i = 0;i < SND_LISTENERS;i++)
-				ch->listener_volume[i] = 0;
+				ch->volume[i] = 0;
 	}
 }
-void SND_Spatialize(channel_t *ch, qboolean isstatic)
+static void SND_Spatialize(channel_t *ch, qboolean isstatic)
 {
 	sfx_t *sfx = ch->sfx;
 	SND_Spatialize_WithSfx(ch, isstatic, sfx);
@@ -1551,27 +1617,39 @@ void SND_Spatialize(channel_t *ch, qboolean isstatic)
 // Start a sound effect
 // =======================================================================
 
-void S_PlaySfxOnChannel (sfx_t *sfx, channel_t *target_chan, unsigned int flags, vec3_t origin, float fvol, float attenuation, qboolean isstatic, int entnum, int entchannel, int startpos)
+static void S_PlaySfxOnChannel (sfx_t *sfx, channel_t *target_chan, unsigned int flags, vec3_t origin, float fvol, float attenuation, qboolean isstatic, int entnum, int entchannel, int startpos, float fspeed)
 {
 	if (!sfx)
 	{
 		Con_Printf("S_PlaySfxOnChannel called with NULL??\n");
 		return;
 	}
+
+	if ((sfx->loopstart < sfx->total_length) || (flags & CHANNELFLAG_FORCELOOP))
+	{
+		if(!snd_startloopingsounds.integer)
+			return;
+	}
+	else
+	{
+		if(!snd_startnonloopingsounds.integer)
+			return;
+	}
+
 	// Initialize the channel
 	// a crash was reported on an in-use channel, so check here...
 	if (target_chan->sfx)
 	{
 		int channelindex = (int)(target_chan - channels);
 		Con_Printf("S_PlaySfxOnChannel(%s): channel %i already in use??  Clearing.\n", sfx->name, channelindex);
-		S_StopChannel (channelindex, true);
+		S_StopChannel (channelindex, true, false);
 	}
 	// We MUST set sfx LAST because otherwise we could crash a threaded mixer
 	// (otherwise we'd have to call SndSys_LockRenderBuffer here)
 	memset (target_chan, 0, sizeof (*target_chan));
 	VectorCopy (origin, target_chan->origin);
 	target_chan->flags = flags;
-	target_chan->pos = startpos; // start of the sound
+	target_chan->position = startpos; // start of the sound
 	target_chan->entnum = entnum;
 	target_chan->entchannel = entchannel;
 
@@ -1580,17 +1658,15 @@ void S_PlaySfxOnChannel (sfx_t *sfx, channel_t *target_chan, unsigned int flags,
 	{
 		if (sfx->loopstart >= sfx->total_length && (cls.protocol == PROTOCOL_QUAKE || cls.protocol == PROTOCOL_QUAKEWORLD))
 			Con_DPrintf("Quake compatibility warning: Static sound \"%s\" is not looped\n", sfx->name);
-		target_chan->dist_mult = attenuation / (64.0f * snd_soundradius.value);
+		target_chan->distfade = attenuation / (64.0f * snd_soundradius.value);
 	}
 	else
-		target_chan->dist_mult = attenuation / snd_soundradius.value;
+		target_chan->distfade = attenuation / snd_soundradius.value;
 
 	// set the listener volumes
 	S_SetChannelVolume(target_chan - channels, fvol);
+	S_SetChannelSpeed(target_chan - channels, fspeed);
 	SND_Spatialize_WithSfx (target_chan, isstatic, sfx);
-
-	// Lock the SFX during play
-	S_LockSfx (sfx);
 
 	// finally, set the sfx pointer, so the channel becomes valid for playback
 	// and will be noticed by the mixer
@@ -1598,7 +1674,7 @@ void S_PlaySfxOnChannel (sfx_t *sfx, channel_t *target_chan, unsigned int flags,
 }
 
 
-int S_StartSound_StartPosition (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float fvol, float attenuation, float startposition)
+int S_StartSound_StartPosition_Flags (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float fvol, float attenuation, float startposition, int flags, float fspeed)
 {
 	channel_t *target_chan, *check, *ch;
 	int		ch_idx, startpos;
@@ -1608,15 +1684,16 @@ int S_StartSound_StartPosition (int entnum, int entchannel, sfx_t *sfx, vec3_t o
 
 	if(sfx == &changevolume_sfx)
 	{
-		if(entchannel == 0)
+		if (!IS_CHAN_SINGLE(entchannel))
 			return -1;
 		for (ch_idx=NUM_AMBIENTS ; ch_idx < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS ; ch_idx++)
 		{
 			ch = &channels[ch_idx];
-			if (ch->entnum == entnum && (ch->entchannel == entchannel || entchannel == -1) )
+			if (ch->entnum == entnum && ch->entchannel == entchannel)
 			{
 				S_SetChannelVolume(ch_idx, fvol);
-				ch->dist_mult = attenuation / snd_soundradius.value;
+				S_SetChannelSpeed(ch_idx, fspeed);
+				ch->distfade = attenuation / snd_soundradius.value;
 				SND_Spatialize(ch, false);
 				return ch_idx;
 			}
@@ -1635,35 +1712,46 @@ int S_StartSound_StartPosition (int entnum, int entchannel, sfx_t *sfx, vec3_t o
 	// if an identical sound has also been started this frame, offset the pos
 	// a bit to keep it from just making the first one louder
 	check = &channels[NUM_AMBIENTS];
-	startpos = (int)(startposition * S_GetSoundRate());
+	startpos = (int)(startposition * sfx->format.speed);
 	if (startpos == 0)
 	{
 		for (ch_idx=NUM_AMBIENTS ; ch_idx < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS ; ch_idx++, check++)
 		{
 			if (check == target_chan)
 				continue;
-			if (check->sfx == sfx && check->pos == 0)
+			if (check->sfx == sfx && check->position == 0 && check->basespeed == fspeed)
 			{
+				// calculate max offset
+				float maxtime = snd_identicalsoundrandomization_time.value;
+				float maxtics = snd_identicalsoundrandomization_tics.value;
+				float maxticsdelta = ((cls.state == ca_connected) ? (maxtics * (cl.mtime[0] - cl.mtime[1])) : 0);
+				float maxdelta = 0;
+				if(maxticsdelta == 0 || fabs(maxticsdelta) > fabs(maxtime))
+					maxdelta = maxtime;
+				else
+					maxdelta = fabs(maxticsdelta) * ((maxtime > 0) ? 1 : -1);
+
 				// use negative pos offset to delay this sound effect
-				startpos = (int)lhrandom(0, -0.1 * snd_renderbuffer->format.speed);
+				startpos = lhrandom(0, maxdelta * sfx->format.speed);
 				break;
 			}
 		}
 	}
 
-	S_PlaySfxOnChannel (sfx, target_chan, CHANNELFLAG_NONE, origin, fvol, attenuation, false, entnum, entchannel, startpos);
+	S_PlaySfxOnChannel (sfx, target_chan, flags, origin, fvol, attenuation, false, entnum, entchannel, startpos, fspeed);
 
 	return (target_chan - channels);
 }
 
 int S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float fvol, float attenuation)
 {
-	return S_StartSound_StartPosition(entnum, entchannel, sfx, origin, fvol, attenuation, 0);
+	return S_StartSound_StartPosition_Flags(entnum, entchannel, sfx, origin, fvol, attenuation, 0, CHANNELFLAG_NONE, 1.0f);
 }
 
-void S_StopChannel (unsigned int channel_ind, qboolean lockmutex)
+void S_StopChannel (unsigned int channel_ind, qboolean lockmutex, qboolean freesfx)
 {
 	channel_t *ch;
+	sfx_t *sfx;
 
 	if (channel_ind >= total_channels)
 		return;
@@ -1676,22 +1764,15 @@ void S_StopChannel (unsigned int channel_ind, qboolean lockmutex)
 		SndSys_LockRenderBuffer();
 	
 	ch = &channels[channel_ind];
-	if (ch->sfx != NULL)
+	sfx = ch->sfx;
+	if (sfx != NULL)
 	{
-		sfx_t *sfx = ch->sfx;
-
-		if (sfx->fetcher != NULL)
-		{
-			snd_fetcher_endsb_t fetcher_endsb = sfx->fetcher->endsb;
-			if (fetcher_endsb != NULL)
-				fetcher_endsb (ch->fetcher_data);
-		}
-
-		// Remove the lock it holds
-		S_UnlockSfx (sfx);
-
+		if (sfx->fetcher != NULL && sfx->fetcher->stopchannel != NULL)
+			sfx->fetcher->stopchannel(ch);
 		ch->fetcher_data = NULL;
 		ch->sfx = NULL;
+		if (freesfx)
+			S_FreeSfx(sfx, true);
 	}
 	if (lockmutex && !simsound)
 		SndSys_UnlockRenderBuffer();
@@ -1724,12 +1805,11 @@ void S_StopSound(int entnum, int entchannel)
 	for (i = 0; i < MAX_DYNAMIC_CHANNELS; i++)
 		if (channels[i].entnum == entnum && channels[i].entchannel == entchannel)
 		{
-			S_StopChannel (i, true);
+			S_StopChannel (i, true, false);
 			return;
 		}
 }
 
-extern void CDAudio_Stop(void);
 void S_StopAllSounds (void)
 {
 	unsigned int i;
@@ -1747,7 +1827,8 @@ void S_StopAllSounds (void)
 		size_t memsize;
 
 		for (i = 0; i < total_channels; i++)
-			S_StopChannel (i, false);
+			if (channels[i].sfx)
+				S_StopChannel (i, false, false);
 
 		total_channels = MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS;	// no statics
 		memset(channels, 0, MAX_CHANNELS * sizeof(channel_t));
@@ -1778,24 +1859,29 @@ void S_PauseGameSounds (qboolean toggle)
 
 void S_SetChannelVolume(unsigned int ch_ind, float fvol)
 {
-	channels[ch_ind].master_vol = (int)(fvol * 65536.0f);
+	channels[ch_ind].basevolume = fvol;
+}
+
+void S_SetChannelSpeed(unsigned int ch_ind, float fspeed)
+{
+	channels[ch_ind].basespeed = fspeed;
 }
 
 float S_GetChannelPosition (unsigned int ch_ind)
 {
 	// note: this is NOT accurate yet
-	int s;
+	double s;
 	channel_t *ch = &channels[ch_ind];
 	sfx_t *sfx = ch->sfx;
 	if (!sfx)
 		return -1;
 
-	s = ch->pos;
+	s = ch->position / sfx->format.speed;
 	/*
 	if(!snd_usethreadedmixing)
-		s += _snd_mixahead.value * S_GetSoundRate();
+		s += _snd_mixahead.value;
 	*/
-	return (s % sfx->total_length) / (float) S_GetSoundRate();
+	return (float)s;
 }
 
 float S_GetEntChannelPosition(int entnum, int entchannel)
@@ -1836,7 +1922,7 @@ void S_StaticSound (sfx_t *sfx, vec3_t origin, float fvol, float attenuation)
 	}
 
 	target_chan = &channels[total_channels++];
-	S_PlaySfxOnChannel (sfx, target_chan, CHANNELFLAG_FORCELOOP, origin, fvol, attenuation, true, 0, 0, 0);
+	S_PlaySfxOnChannel (sfx, target_chan, CHANNELFLAG_FORCELOOP, origin, fvol, attenuation, true, 0, 0, 0, 1.0f);
 }
 
 
@@ -1845,13 +1931,15 @@ void S_StaticSound (sfx_t *sfx, vec3_t origin, float fvol, float attenuation)
 S_UpdateAmbientSounds
 ===================
 */
-void S_UpdateAmbientSounds (void)
+static void S_UpdateAmbientSounds (void)
 {
 	int			i;
-	int			vol;
+	float		vol;
+	float		fade = (float)max(0.0, cl.time - cl.oldtime) * ambient_fade.value / 256.0f;
 	int			ambient_channel;
 	channel_t	*chan;
 	unsigned char		ambientlevels[NUM_AMBIENTS];
+	sfx_t		*sfx;
 
 	memset(ambientlevels, 0, sizeof(ambientlevels));
 	if (cl.worldmodel && cl.worldmodel->brush.AmbientSoundLevelsForPoint)
@@ -1861,43 +1949,40 @@ void S_UpdateAmbientSounds (void)
 	for (ambient_channel = 0 ; ambient_channel< NUM_AMBIENTS ; ambient_channel++)
 	{
 		chan = &channels[ambient_channel];
-		if (chan->sfx == NULL || chan->sfx->fetcher == NULL)
+		sfx = chan->sfx; // fetch the volatile variable
+		if (sfx == NULL || sfx->fetcher == NULL)
 			continue;
 
-		vol = (int)ambientlevels[ambient_channel];
-		if (vol < 8)
-			vol = 0;
-		vol *= 256;
+		i = ambientlevels[ambient_channel];
+		if (i < 8)
+			i = 0;
+		vol = i * (1.0f / 256.0f);
 
 		// Don't adjust volume too fast
-		// FIXME: this rounds off to an int each frame, meaning there is little to no fade at extremely high framerates!
-		if (cl.time > cl.oldtime)
+		if (chan->basevolume < vol)
 		{
-			if (chan->master_vol < vol)
-			{
-				chan->master_vol += (int)((cl.time - cl.oldtime) * 256.0 * ambient_fade.value);
-				if (chan->master_vol > vol)
-					chan->master_vol = vol;
-			}
-			else if (chan->master_vol > vol)
-			{
-				chan->master_vol -= (int)((cl.time - cl.oldtime) * 256.0 * ambient_fade.value);
-				if (chan->master_vol < vol)
-					chan->master_vol = vol;
-			}
+			chan->basevolume += fade;
+			if (chan->basevolume > vol)
+				chan->basevolume = vol;
+		}
+		else if (chan->basevolume > vol)
+		{
+			chan->basevolume -= fade;
+			if (chan->basevolume < vol)
+				chan->basevolume = vol;
 		}
 
 		if (snd_spatialization_prologic.integer != 0)
 		{
-			chan->listener_volume[0] = (int)bound(0, chan->master_vol * ambient_level.value * volume.value * mastervolume.value * snd_speakerlayout.listeners[0].ambientvolume * sqrt(0.5), 65536);
-			chan->listener_volume[1] = (int)bound(0, chan->master_vol * ambient_level.value * volume.value * mastervolume.value * snd_speakerlayout.listeners[1].ambientvolume * sqrt(0.5), 65536);
+			chan->volume[0] = chan->basevolume * ambient_level.value * volume.value * mastervolume.value * snd_speakerlayout.listeners[0].ambientvolume * sqrt(0.5);
+			chan->volume[1] = chan->basevolume * ambient_level.value * volume.value * mastervolume.value * snd_speakerlayout.listeners[1].ambientvolume * sqrt(0.5);
 			for (i = 2;i < SND_LISTENERS;i++)
-				chan->listener_volume[i] = 0;
+				chan->volume[i] = 0.0f;
 		}
 		else
 		{
 			for (i = 0;i < SND_LISTENERS;i++)
-				chan->listener_volume[i] = (int)bound(0, chan->master_vol * ambient_level.value * volume.value * mastervolume.value * snd_speakerlayout.listeners[i].ambientvolume, 65536);
+				chan->volume[i] = chan->basevolume * ambient_level.value * volume.value * mastervolume.value * snd_speakerlayout.listeners[i].ambientvolume;
 		}
 	}
 }
@@ -2172,7 +2257,7 @@ void S_Update(const matrix4x4_t *listenermatrix)
 		{
 			// no need to merge silent channels
 			for (j = 0;j < SND_LISTENERS;j++)
-				if (ch->listener_volume[j])
+				if (ch->volume[j])
 					break;
 			if (j == SND_LISTENERS)
 				continue;
@@ -2194,13 +2279,13 @@ void S_Update(const matrix4x4_t *listenermatrix)
 			{
 				for (j = 0;j < SND_LISTENERS;j++)
 				{
-					combine->listener_volume[j] = bound(0, combine->listener_volume[j] + ch->listener_volume[j], 65536);
-					ch->listener_volume[j] = 0;
+					combine->volume[j] += ch->volume[j];
+					ch->volume[j] = 0;
 				}
 			}
 		}
 		for (k = 0;k < SND_LISTENERS;k++)
-			if (ch->listener_volume[k])
+			if (ch->volume[k])
 				break;
 		if (k < SND_LISTENERS)
 			cls.soundstats.mixedsounds++;
@@ -2239,9 +2324,12 @@ qboolean S_LocalSound (const char *sound)
 		return false;
 	}
 
-	// Local sounds must not be freed
-	sfx->flags |= SFXFLAG_PERMANENTLOCK;
+	// menu sounds must not be freed on level change
+	sfx->flags |= SFXFLAG_MENUSOUND;
 
+	// fun fact: in Quake 1, this used -1 "replace any entity channel",
+	// which we no longer support anyway
+	// changed by Black in r4297 "Changed S_LocalSound to play multiple sounds at a time."
 	ch_ind = S_StartSound (cl.viewentity, 0, sfx, vec3_origin, 1, 0);
 	if (ch_ind < 0)
 		return false;

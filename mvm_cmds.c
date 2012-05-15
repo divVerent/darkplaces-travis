@@ -3,6 +3,7 @@
 #include "prvm_cmds.h"
 #include "clvm_cmds.h"
 #include "menu.h"
+#include "csprogs.h"
 
 // TODO check which strings really should be engine strings
 
@@ -18,7 +19,6 @@ const char *vm_m_extensions =
 "DP_GFX_FONTS_FREETYPE "
 "DP_UTF8 "
 "DP_FONT_VARIABLEWIDTH "
-"DP_GECKO_SUPPORT "
 "DP_MENU_EXTRESPONSEPACKET "
 "DP_QC_ASINACOSATANATAN2TAN "
 "DP_QC_AUTOCVARS "
@@ -26,13 +26,17 @@ const char *vm_m_extensions =
 "DP_QC_CRC16 "
 "DP_QC_CVAR_TYPE "
 "DP_QC_CVAR_DESCRIPTION "
+"DP_QC_DIGEST "
+"DP_QC_DIGEST_SHA256 "
 "DP_QC_FINDCHAIN_TOFIELD "
+"DP_QC_I18N "
 "DP_QC_LOG "
 "DP_QC_RENDER_SCENE "
 "DP_QC_SPRINTF "
 "DP_QC_STRFTIME "
 "DP_QC_STRINGBUFFERS "
 "DP_QC_STRINGBUFFERS_CVARLIST "
+"DP_QC_STRINGBUFFERS_EXT_WIP "
 "DP_QC_STRINGCOLORFUNCTIONS "
 "DP_QC_STRING_CASE_FUNCTIONS "
 "DP_QC_STRREPLACE "
@@ -53,7 +57,7 @@ VM_M_setmousetarget
 setmousetarget(float target)
 =========
 */
-void VM_M_setmousetarget(void)
+static void VM_M_setmousetarget(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_setmousetarget);
 
@@ -66,7 +70,7 @@ void VM_M_setmousetarget(void)
 		in_client_mouse = true;
 		break;
 	default:
-		PRVM_ERROR("VM_M_setmousetarget: wrong destination %f !",PRVM_G_FLOAT(OFS_PARM0));
+		prog->error_cmd("VM_M_setmousetarget: wrong destination %f !",PRVM_G_FLOAT(OFS_PARM0));
 	}
 }
 
@@ -77,7 +81,7 @@ VM_M_getmousetarget
 float	getmousetarget
 =========
 */
-void VM_M_getmousetarget(void)
+static void VM_M_getmousetarget(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(0,VM_M_getmousetarget);
 
@@ -96,7 +100,7 @@ VM_M_setkeydest
 setkeydest(float dest)
 =========
 */
-void VM_M_setkeydest(void)
+static void VM_M_setkeydest(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1,VM_M_setkeydest);
 
@@ -119,7 +123,7 @@ void VM_M_setkeydest(void)
 		// key_dest = key_message
 		// break;
 	default:
-		PRVM_ERROR("VM_M_setkeydest: wrong destination %f !", PRVM_G_FLOAT(OFS_PARM0));
+		prog->error_cmd("VM_M_setkeydest: wrong destination %f !", PRVM_G_FLOAT(OFS_PARM0));
 	}
 }
 
@@ -130,7 +134,7 @@ VM_M_getkeydest
 float	getkeydest
 =========
 */
-void VM_M_getkeydest(void)
+static void VM_M_getkeydest(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(0,VM_M_getkeydest);
 
@@ -163,7 +167,7 @@ VM_M_getresolution
 vector	getresolution(float number)
 =========
 */
-void VM_M_getresolution(void)
+static void VM_M_getresolution(prvm_prog_t *prog)
 {
 	int nr, fs;
 	VM_SAFEPARMCOUNTRANGE(1, 2, VM_getresolution);
@@ -187,7 +191,7 @@ void VM_M_getresolution(void)
 	}
 }
 
-void VM_M_getgamedirinfo(void)
+static void VM_M_getgamedirinfo(prvm_prog_t *prog)
 {
 	int nr, item;
 	VM_SAFEPARMCOUNT(2, VM_getgamedirinfo);
@@ -200,9 +204,9 @@ void VM_M_getgamedirinfo(void)
 	if(nr >= 0 && nr < fs_all_gamedirs_count)
 	{
 		if(item == 0)
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( fs_all_gamedirs[nr].name );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, fs_all_gamedirs[nr].name );
 		else if(item == 1)
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( fs_all_gamedirs[nr].description );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, fs_all_gamedirs[nr].description );
 	}
 }
 
@@ -224,7 +228,7 @@ float	getserverliststat(float type)
 6	sortfield
 7	sortflags
 */
-void VM_M_getserverliststat( void )
+static void VM_M_getserverliststat(prvm_prog_t *prog)
 {
 	int type;
 	VM_SAFEPARMCOUNT ( 1, VM_M_getserverliststat );
@@ -259,7 +263,7 @@ void VM_M_getserverliststat( void )
 		PRVM_G_FLOAT ( OFS_RETURN ) = serverlist_sortflags;
 		return;
 	default:
-		VM_Warning( "VM_M_getserverliststat: bad type %i!\n", type );
+		VM_Warning(prog, "VM_M_getserverliststat: bad type %i!\n", type );
 	}
 }
 
@@ -270,7 +274,7 @@ VM_M_resetserverlistmasks
 resetserverlistmasks()
 ========================
 */
-void VM_M_resetserverlistmasks( void )
+static void VM_M_resetserverlistmasks(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(0, VM_M_resetserverlistmasks);
 	ServerList_ResetMasks();
@@ -286,7 +290,7 @@ setserverlistmaskstring(float mask, float fld, string str, float op)
 512 - 1024	or
 ========================
 */
-void VM_M_setserverlistmaskstring( void )
+static void VM_M_setserverlistmaskstring(prvm_prog_t *prog)
 {
 	const char *str;
 	int masknr;
@@ -303,7 +307,7 @@ void VM_M_setserverlistmaskstring( void )
 		mask = &serverlist_ormasks[masknr - 512 ];
 	else
 	{
-		VM_Warning( "VM_M_setserverlistmaskstring: invalid mask number %i\n", masknr );
+		VM_Warning(prog, "VM_M_setserverlistmaskstring: invalid mask number %i\n", masknr );
 		return;
 	}
 
@@ -332,7 +336,7 @@ void VM_M_setserverlistmaskstring( void )
 			strlcpy( mask->info.game, str, sizeof(mask->info.game)  );
 			break;
 		default:
-			VM_Warning( "VM_M_setserverlistmaskstring: Bad field number %i passed!\n", field );
+			VM_Warning(prog, "VM_M_setserverlistmaskstring: Bad field number %i passed!\n", field );
 			return;
 	}
 
@@ -350,7 +354,7 @@ setserverlistmasknumber(float mask, float fld, float num, float op)
 512 - 1024	or
 ========================
 */
-void VM_M_setserverlistmasknumber( void )
+static void VM_M_setserverlistmasknumber(prvm_prog_t *prog)
 {
 	int number;
 	serverlist_mask_t *mask;
@@ -365,7 +369,7 @@ void VM_M_setserverlistmasknumber( void )
 		mask = &serverlist_ormasks[masknr - 512 ];
 	else
 	{
-		VM_Warning( "VM_M_setserverlistmasknumber: invalid mask number %i\n", masknr );
+		VM_Warning(prog, "VM_M_setserverlistmasknumber: invalid mask number %i\n", masknr );
 		return;
 	}
 
@@ -398,7 +402,7 @@ void VM_M_setserverlistmasknumber( void )
 			mask->info.isfavorite = number != 0;
 			break;
 		default:
-			VM_Warning( "VM_M_setserverlistmasknumber: Bad field number %i passed!\n", field );
+			VM_Warning(prog, "VM_M_setserverlistmasknumber: Bad field number %i passed!\n", field );
 			return;
 	}
 
@@ -414,7 +418,7 @@ VM_M_resortserverlist
 resortserverlist
 ========================
 */
-void VM_M_resortserverlist( void )
+static void VM_M_resortserverlist(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(0, VM_M_resortserverlist);
 	ServerList_RebuildViewList();
@@ -427,7 +431,7 @@ VM_M_getserverliststring
 string	getserverliststring(float field, float hostnr)
 =========
 */
-void VM_M_getserverliststring(void)
+static void VM_M_getserverliststring(prvm_prog_t *prog)
 {
 	serverlist_entry_t *cache;
 	int hostnr;
@@ -446,32 +450,32 @@ void VM_M_getserverliststring(void)
 	cache = ServerList_GetViewEntry(hostnr);
 	switch( (int) PRVM_G_FLOAT(OFS_PARM0) ) {
 		case SLIF_CNAME:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->info.cname );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.cname );
 			break;
 		case SLIF_NAME:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->info.name );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.name );
 			break;
 		case SLIF_QCSTATUS:
-			PRVM_G_INT (OFS_RETURN ) = PRVM_SetTempString (cache->info.qcstatus );
+			PRVM_G_INT (OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.qcstatus );
 			break;
 		case SLIF_PLAYERS:
-			PRVM_G_INT (OFS_RETURN ) = PRVM_SetTempString (cache->info.players );
+			PRVM_G_INT (OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.players );
 			break;
 		case SLIF_GAME:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->info.game );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.game );
 			break;
 		case SLIF_MOD:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->info.mod );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.mod );
 			break;
 		case SLIF_MAP:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->info.map );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->info.map );
 			break;
 		// TODO remove this again
 		case 1024:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->line1 );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->line1 );
 			break;
 		case 1025:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( cache->line2 );
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, cache->line2 );
 			break;
 		default:
 			Con_Print("VM_M_getserverliststring: bad field number passed!\n");
@@ -485,7 +489,7 @@ VM_M_getserverlistnumber
 float	getserverlistnumber(float field, float hostnr)
 =========
 */
-void VM_M_getserverlistnumber(void)
+static void VM_M_getserverlistnumber(prvm_prog_t *prog)
 {
 	serverlist_entry_t *cache;
 	int hostnr;
@@ -539,7 +543,7 @@ VM_M_setserverlistsort
 setserverlistsort(float field, float flags)
 ========================
 */
-void VM_M_setserverlistsort( void )
+static void VM_M_setserverlistsort(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT( 2, VM_M_setserverlistsort );
 
@@ -554,7 +558,7 @@ VM_M_refreshserverlist
 refreshserverlist()
 ========================
 */
-void VM_M_refreshserverlist( void )
+static void VM_M_refreshserverlist(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT( 0, VM_M_refreshserverlist );
 	ServerList_QueryList(false, true, false, false);
@@ -567,13 +571,13 @@ VM_M_getserverlistindexforkey
 float getserverlistindexforkey(string key)
 ========================
 */
-void VM_M_getserverlistindexforkey( void )
+static void VM_M_getserverlistindexforkey(prvm_prog_t *prog)
 {
 	const char *key;
 	VM_SAFEPARMCOUNT( 1, VM_M_getserverlistindexforkey );
 
 	key = PRVM_G_STRING( OFS_PARM0 );
-	VM_CheckEmptyString( key );
+	VM_CheckEmptyString( prog, key );
 
 	if( !strcmp( key, "cname" ) )
 		PRVM_G_FLOAT( OFS_RETURN ) = SLIF_CNAME;
@@ -616,7 +620,7 @@ VM_M_addwantedserverlistkey
 addwantedserverlistkey(string key)
 ========================
 */
-void VM_M_addwantedserverlistkey( void )
+static void VM_M_addwantedserverlistkey(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT( 1, VM_M_addwantedserverlistkey );
 }
@@ -638,13 +642,13 @@ Write*(* data, float type, float to)
 #define	MSG_ALL			2		// reliable to all
 #define	MSG_INIT		3		// write to the init string
 
-sizebuf_t *VM_M_WriteDest (void)
+static sizebuf_t *VM_M_WriteDest (prvm_prog_t *prog)
 {
 	int		dest;
 	int		destclient;
 
 	if(!sv.active)
-		PRVM_ERROR("VM_M_WriteDest: game is not server (%s)", PRVM_NAME);
+		prog->error_cmd("VM_M_WriteDest: game is not server (%s)", prog->name);
 
 	dest = (int)PRVM_G_FLOAT(OFS_PARM1);
 	switch (dest)
@@ -655,7 +659,7 @@ sizebuf_t *VM_M_WriteDest (void)
 	case MSG_ONE:
 		destclient = (int) PRVM_G_FLOAT(OFS_PARM2);
 		if (destclient < 0 || destclient >= svs.maxclients || !svs.clients[destclient].active || !svs.clients[destclient].netconnection)
-			PRVM_ERROR("VM_clientcommand: %s: invalid client !", PRVM_NAME);
+			prog->error_cmd("VM_clientcommand: %s: invalid client !", prog->name);
 
 		return &svs.clients[destclient].netconnection->message;
 
@@ -666,59 +670,59 @@ sizebuf_t *VM_M_WriteDest (void)
 		return &sv.signon;
 
 	default:
-		PRVM_ERROR ("WriteDest: bad destination");
+		prog->error_cmd("WriteDest: bad destination");
 		break;
 	}
 
 	return NULL;
 }
 
-void VM_M_WriteByte (void)
+static void VM_M_WriteByte (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteByte);
-	MSG_WriteByte (VM_M_WriteDest(), (int)PRVM_G_FLOAT(OFS_PARM0));
+	MSG_WriteByte (VM_M_WriteDest(prog), (int)PRVM_G_FLOAT(OFS_PARM0));
 }
 
-void VM_M_WriteChar (void)
+static void VM_M_WriteChar (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteChar);
-	MSG_WriteChar (VM_M_WriteDest(), (int)PRVM_G_FLOAT(OFS_PARM0));
+	MSG_WriteChar (VM_M_WriteDest(prog), (int)PRVM_G_FLOAT(OFS_PARM0));
 }
 
-void VM_M_WriteShort (void)
+static void VM_M_WriteShort (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteShort);
-	MSG_WriteShort (VM_M_WriteDest(), (int)PRVM_G_FLOAT(OFS_PARM0));
+	MSG_WriteShort (VM_M_WriteDest(prog), (int)PRVM_G_FLOAT(OFS_PARM0));
 }
 
-void VM_M_WriteLong (void)
+static void VM_M_WriteLong (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteLong);
-	MSG_WriteLong (VM_M_WriteDest(), (int)PRVM_G_FLOAT(OFS_PARM0));
+	MSG_WriteLong (VM_M_WriteDest(prog), (int)PRVM_G_FLOAT(OFS_PARM0));
 }
 
-void VM_M_WriteAngle (void)
+static void VM_M_WriteAngle (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteAngle);
-	MSG_WriteAngle (VM_M_WriteDest(), PRVM_G_FLOAT(OFS_PARM0), sv.protocol);
+	MSG_WriteAngle (VM_M_WriteDest(prog), PRVM_G_FLOAT(OFS_PARM0), sv.protocol);
 }
 
-void VM_M_WriteCoord (void)
+static void VM_M_WriteCoord (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteCoord);
-	MSG_WriteCoord (VM_M_WriteDest(), PRVM_G_FLOAT(OFS_PARM0), sv.protocol);
+	MSG_WriteCoord (VM_M_WriteDest(prog), PRVM_G_FLOAT(OFS_PARM0), sv.protocol);
 }
 
-void VM_M_WriteString (void)
+static void VM_M_WriteString (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteString);
-	MSG_WriteString (VM_M_WriteDest(), PRVM_G_STRING(OFS_PARM0));
+	MSG_WriteString (VM_M_WriteDest(prog), PRVM_G_STRING(OFS_PARM0));
 }
 
-void VM_M_WriteEntity (void)
+static void VM_M_WriteEntity (prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(1, VM_M_WriteEntity);
-	MSG_WriteShort (VM_M_WriteDest(), PRVM_G_EDICTNUM(OFS_PARM0));
+	MSG_WriteShort (VM_M_WriteDest(prog), PRVM_G_EDICTNUM(OFS_PARM0));
 }
 
 /*
@@ -730,17 +734,17 @@ copies data from one entity to another
 copyentity(entity src, entity dst)
 =================
 */
-static void VM_M_copyentity (void)
+static void VM_M_copyentity (prvm_prog_t *prog)
 {
 	prvm_edict_t *in, *out;
 	VM_SAFEPARMCOUNT(2,VM_M_copyentity);
 	in = PRVM_G_EDICT(OFS_PARM0);
 	out = PRVM_G_EDICT(OFS_PARM1);
-	memcpy(out->fields.vp, in->fields.vp, prog->progs->entityfields * 4);
+	memcpy(out->fields.fp, in->fields.fp, prog->entityfields * sizeof(prvm_vec_t));
 }
 
 //#66 vector() getmousepos (EXT_CSQC)
-static void VM_M_getmousepos(void)
+static void VM_M_getmousepos(prvm_prog_t *prog)
 {
 	VM_SAFEPARMCOUNT(0,VM_M_getmousepos);
 
@@ -752,7 +756,7 @@ static void VM_M_getmousepos(void)
 		VectorSet(PRVM_G_VECTOR(OFS_RETURN), in_mouse_x * vid_conwidth.integer / vid.width, in_mouse_y * vid_conheight.integer / vid.height, 0);
 }
 
-void VM_M_crypto_getkeyfp(void)
+static void VM_M_crypto_getkeyfp(prvm_prog_t *prog)
 {
 	lhnetaddress_t addr;
 	const char *s;
@@ -761,14 +765,14 @@ void VM_M_crypto_getkeyfp(void)
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getkeyfp);
 
 	s = PRVM_G_STRING( OFS_PARM0 );
-	VM_CheckEmptyString( s );
+	VM_CheckEmptyString( prog, s );
 
 	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, keyfp, sizeof(keyfp), NULL, 0, NULL))
-		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( keyfp );
+		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, keyfp );
 	else
 		PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
 }
-void VM_M_crypto_getidfp(void)
+static void VM_M_crypto_getidfp(prvm_prog_t *prog)
 {
 	lhnetaddress_t addr;
 	const char *s;
@@ -777,30 +781,31 @@ void VM_M_crypto_getidfp(void)
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getidfp);
 
 	s = PRVM_G_STRING( OFS_PARM0 );
-	VM_CheckEmptyString( s );
+	VM_CheckEmptyString( prog, s );
 
 	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, NULL, 0, idfp, sizeof(idfp), NULL))
-		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( idfp );
+		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, idfp );
 	else
 		PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
 }
-void VM_M_crypto_getencryptlevel(void)
+static void VM_M_crypto_getencryptlevel(prvm_prog_t *prog)
 {
 	lhnetaddress_t addr;
 	const char *s;
 	int aeslevel;
+	char vabuf[1024];
 
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getencryptlevel);
 
 	s = PRVM_G_STRING( OFS_PARM0 );
-	VM_CheckEmptyString( s );
+	VM_CheckEmptyString( prog, s );
 
 	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, NULL, 0, NULL, 0, &aeslevel))
-		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(aeslevel ? va("%d AES128", aeslevel) : "0");
+		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(prog, aeslevel ? va(vabuf, sizeof(vabuf), "%d AES128", aeslevel) : "0");
 	else
 		PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
 }
-void VM_M_crypto_getmykeyfp(void)
+static void VM_M_crypto_getmykeyfp(prvm_prog_t *prog)
 {
 	int i;
 	char keyfp[FP64_SIZE + 1];
@@ -808,21 +813,21 @@ void VM_M_crypto_getmykeyfp(void)
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getmykey);
 
 	i = PRVM_G_FLOAT( OFS_PARM0 );
-	switch(Crypto_RetrieveLocalKey(i, keyfp, sizeof(keyfp), NULL, 0))
+	switch(Crypto_RetrieveLocalKey(i, keyfp, sizeof(keyfp), NULL, 0, NULL))
 	{
 		case -1:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString("");
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(prog, "");
 			break;
 		case 0:
 			PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
 			break;
 		default:
 		case 1:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(keyfp);
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(prog, keyfp);
 			break;
 	}
 }
-void VM_M_crypto_getmyidfp(void)
+static void VM_M_crypto_getmyidfp(prvm_prog_t *prog)
 {
 	int i;
 	char idfp[FP64_SIZE + 1];
@@ -830,17 +835,39 @@ void VM_M_crypto_getmyidfp(void)
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getmykey);
 
 	i = PRVM_G_FLOAT( OFS_PARM0 );
-	switch(Crypto_RetrieveLocalKey(i, NULL, 0, idfp, sizeof(idfp)))
+	switch(Crypto_RetrieveLocalKey(i, NULL, 0, idfp, sizeof(idfp), NULL))
 	{
 		case -1:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString("");
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(prog, "");
 			break;
 		case 0:
 			PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
 			break;
 		default:
 		case 1:
-			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(idfp);
+			PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString(prog, idfp);
+			break;
+	}
+}
+static void VM_M_crypto_getmyidstatus(prvm_prog_t *prog)
+{
+	int i;
+	qboolean issigned;
+
+	VM_SAFEPARMCOUNT(1,VM_M_crypto_getmykey);
+
+	i = PRVM_G_FLOAT( OFS_PARM0 );
+	switch(Crypto_RetrieveLocalKey(i, NULL, 0, NULL, 0, &issigned))
+	{
+		case -1:
+			PRVM_G_FLOAT( OFS_RETURN ) = 0; // have no ID there
+			break;
+		case 0:
+			PRVM_G_FLOAT( OFS_RETURN ) = -1; // out of range
+			break;
+		default:
+		case 1:
+			PRVM_G_FLOAT( OFS_RETURN ) = issigned ? 2 : 1;
 			break;
 	}
 }
@@ -1408,10 +1435,10 @@ NULL,									// #531
 VM_log,									// #532
 VM_getsoundtime,						// #533 float(entity e, float channel) getsoundtime = #533; (DP_SND_GETSOUNDTIME)
 VM_soundlength,							// #534 float(string sample) soundlength = #534; (DP_SND_GETSOUNDTIME)
-NULL,									// #535
-NULL,									// #536
-NULL,									// #537
-NULL,									// #538
+VM_buf_loadfile,                        // #535 float(string filename, float bufhandle) buf_loadfile (DP_QC_STRINGBUFFERS_EXT_WIP)
+VM_buf_writefile,                       // #536 float(float filehandle, float bufhandle, float startpos, float numstrings) buf_writefile (DP_QC_STRINGBUFFERS_EXT_WIP)
+VM_bufstr_find,                         // #537 float(float bufhandle, string match, float matchrule, float startpos) bufstr_find (DP_QC_STRINGBUFFERS_EXT_WIP)
+VM_matchpattern,                        // #538 float(string s, string pattern, float matchrule) matchpattern (DP_QC_STRINGBUFFERS_EXT_WIP)
 NULL,									// #539
 NULL,									// #540
 NULL,									// #541
@@ -1511,17 +1538,21 @@ VM_M_crypto_getidfp,					// #634 string(string addr) crypto_getidfp
 VM_M_crypto_getencryptlevel,				// #635 string(string addr) crypto_getencryptlevel
 VM_M_crypto_getmykeyfp,					// #636 string(float addr) crypto_getmykeyfp
 VM_M_crypto_getmyidfp,					// #637 string(float addr) crypto_getmyidfp
+NULL,							// #638
+VM_digest_hex,						// #639
+NULL,							// #640
+VM_M_crypto_getmyidstatus,				// #641 float(float i) crypto_getmyidstatus
 NULL
 };
 
 const int vm_m_numbuiltins = sizeof(vm_m_builtins) / sizeof(prvm_builtin_t);
 
-void VM_M_Cmd_Init(void)
+void MVM_init_cmd(prvm_prog_t *prog)
 {
 	r_refdef_scene_t *scene;
 
-	VM_Cmd_Init();
-	VM_Polygons_Reset();
+	VM_Cmd_Init(prog);
+	VM_Polygons_Reset(prog);
 
 	scene = R_GetScenePointer( RST_MENU );
 
@@ -1536,11 +1567,11 @@ void VM_M_Cmd_Init(void)
 	scene->ambient = 32.0f;
 }
 
-void VM_M_Cmd_Reset(void)
+void MVM_reset_cmd(prvm_prog_t *prog)
 {
 	// note: the menu's render entities are automatically freed when the prog's pool is freed
 
 	//VM_Cmd_Init();
-	VM_Cmd_Reset();
-	VM_Polygons_Reset();
+	VM_Cmd_Reset(prog);
+	VM_Polygons_Reset(prog);
 }

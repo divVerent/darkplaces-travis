@@ -5,8 +5,8 @@ extern cvar_t sv_autodemo_perclient_discardable;
 
 void SV_StartDemoRecording(client_t *client, const char *filename, int forcetrack)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	char name[MAX_QPATH];
-	prvm_eval_t *val;
 
 	if(client->sv_demo_file != NULL)
 		return; // we already have a demo
@@ -17,8 +17,7 @@ void SV_StartDemoRecording(client_t *client, const char *filename, int forcetrac
 	Con_Printf("Recording demo for # %d (%s) to %s\n", PRVM_NUM_FOR_EDICT(client->edict), client->netaddress, name);
 
 	// Reset discardable flag for every new demo.
-	if ((val = PRVM_EDICTFIELDVALUE(client->edict, prog->fieldoffsets.discardabledemo)))
-		val->_float = 0;
+	PRVM_serveredictfloat(client->edict, discardabledemo) = 0;
 
 	client->sv_demo_file = FS_OpenRealFile(name, "wb", false);
 	if(!client->sv_demo_file)
@@ -32,6 +31,7 @@ void SV_StartDemoRecording(client_t *client, const char *filename, int forcetrac
 
 void SV_WriteDemoMessage(client_t *client, sizebuf_t *sendbuffer, qboolean clienttoserver)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	int len, i;
 	float f;
 	int temp;
@@ -46,7 +46,7 @@ void SV_WriteDemoMessage(client_t *client, sizebuf_t *sendbuffer, qboolean clien
 	FS_Write(client->sv_demo_file, &len, 4);
 	for(i = 0; i < 3; ++i)
 	{
-		f = LittleFloat(client->edict->fields.server->v_angle[i]);
+		f = LittleFloat(PRVM_serveredictvector(client->edict, v_angle)[i]);
 		FS_Write(client->sv_demo_file, &f, 4);
 	}
 	FS_Write(client->sv_demo_file, sendbuffer->data, sendbuffer->cursize);
@@ -54,9 +54,9 @@ void SV_WriteDemoMessage(client_t *client, sizebuf_t *sendbuffer, qboolean clien
 
 void SV_StopDemoRecording(client_t *client)
 {
+	prvm_prog_t *prog = SVVM_prog;
 	sizebuf_t buf;
 	unsigned char bufdata[64];
-	prvm_eval_t *val;
 
 	if(client->sv_demo_file == NULL)
 		return;
@@ -67,7 +67,7 @@ void SV_StopDemoRecording(client_t *client)
 	MSG_WriteByte(&buf, svc_disconnect);
 	SV_WriteDemoMessage(client, &buf, false);
 
-	if (sv_autodemo_perclient_discardable.integer && (val = PRVM_EDICTFIELDVALUE(client->edict, prog->fieldoffsets.discardabledemo)) && val->_float)
+	if (sv_autodemo_perclient_discardable.integer && PRVM_serveredictfloat(client->edict, discardabledemo))
 	{
 		FS_RemoveOnClose(client->sv_demo_file);
 		Con_Printf("Stopped recording discardable demo for # %d (%s)\n", PRVM_NUM_FOR_EDICT(client->edict), client->netaddress);

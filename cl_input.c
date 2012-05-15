@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "csprogs.h"
+#include "thread.h"
 
 /*
 ===============================================================================
@@ -61,7 +62,7 @@ int			in_impulse;
 
 
 
-void KeyDown (kbutton_t *b)
+static void KeyDown (kbutton_t *b)
 {
 	int k;
 	const char *c;
@@ -90,7 +91,7 @@ void KeyDown (kbutton_t *b)
 	b->state |= 1 + 2;	// down + impulse down
 }
 
-void KeyUp (kbutton_t *b)
+static void KeyUp (kbutton_t *b)
 {
 	int k;
 	const char *c;
@@ -120,86 +121,86 @@ void KeyUp (kbutton_t *b)
 	b->state |= 4; 		// impulse up
 }
 
-void IN_KLookDown (void) {KeyDown(&in_klook);}
-void IN_KLookUp (void) {KeyUp(&in_klook);}
-void IN_MLookDown (void) {KeyDown(&in_mlook);}
-void IN_MLookUp (void)
+static void IN_KLookDown (void) {KeyDown(&in_klook);}
+static void IN_KLookUp (void) {KeyUp(&in_klook);}
+static void IN_MLookDown (void) {KeyDown(&in_mlook);}
+static void IN_MLookUp (void)
 {
 	KeyUp(&in_mlook);
 	if ( !(in_mlook.state&1) && lookspring.value)
 		V_StartPitchDrift();
 }
-void IN_UpDown(void) {KeyDown(&in_up);}
-void IN_UpUp(void) {KeyUp(&in_up);}
-void IN_DownDown(void) {KeyDown(&in_down);}
-void IN_DownUp(void) {KeyUp(&in_down);}
-void IN_LeftDown(void) {KeyDown(&in_left);}
-void IN_LeftUp(void) {KeyUp(&in_left);}
-void IN_RightDown(void) {KeyDown(&in_right);}
-void IN_RightUp(void) {KeyUp(&in_right);}
-void IN_ForwardDown(void) {KeyDown(&in_forward);}
-void IN_ForwardUp(void) {KeyUp(&in_forward);}
-void IN_BackDown(void) {KeyDown(&in_back);}
-void IN_BackUp(void) {KeyUp(&in_back);}
-void IN_LookupDown(void) {KeyDown(&in_lookup);}
-void IN_LookupUp(void) {KeyUp(&in_lookup);}
-void IN_LookdownDown(void) {KeyDown(&in_lookdown);}
-void IN_LookdownUp(void) {KeyUp(&in_lookdown);}
-void IN_MoveleftDown(void) {KeyDown(&in_moveleft);}
-void IN_MoveleftUp(void) {KeyUp(&in_moveleft);}
-void IN_MoverightDown(void) {KeyDown(&in_moveright);}
-void IN_MoverightUp(void) {KeyUp(&in_moveright);}
+static void IN_UpDown(void) {KeyDown(&in_up);}
+static void IN_UpUp(void) {KeyUp(&in_up);}
+static void IN_DownDown(void) {KeyDown(&in_down);}
+static void IN_DownUp(void) {KeyUp(&in_down);}
+static void IN_LeftDown(void) {KeyDown(&in_left);}
+static void IN_LeftUp(void) {KeyUp(&in_left);}
+static void IN_RightDown(void) {KeyDown(&in_right);}
+static void IN_RightUp(void) {KeyUp(&in_right);}
+static void IN_ForwardDown(void) {KeyDown(&in_forward);}
+static void IN_ForwardUp(void) {KeyUp(&in_forward);}
+static void IN_BackDown(void) {KeyDown(&in_back);}
+static void IN_BackUp(void) {KeyUp(&in_back);}
+static void IN_LookupDown(void) {KeyDown(&in_lookup);}
+static void IN_LookupUp(void) {KeyUp(&in_lookup);}
+static void IN_LookdownDown(void) {KeyDown(&in_lookdown);}
+static void IN_LookdownUp(void) {KeyUp(&in_lookdown);}
+static void IN_MoveleftDown(void) {KeyDown(&in_moveleft);}
+static void IN_MoveleftUp(void) {KeyUp(&in_moveleft);}
+static void IN_MoverightDown(void) {KeyDown(&in_moveright);}
+static void IN_MoverightUp(void) {KeyUp(&in_moveright);}
 
-void IN_SpeedDown(void) {KeyDown(&in_speed);}
-void IN_SpeedUp(void) {KeyUp(&in_speed);}
-void IN_StrafeDown(void) {KeyDown(&in_strafe);}
-void IN_StrafeUp(void) {KeyUp(&in_strafe);}
+static void IN_SpeedDown(void) {KeyDown(&in_speed);}
+static void IN_SpeedUp(void) {KeyUp(&in_speed);}
+static void IN_StrafeDown(void) {KeyDown(&in_strafe);}
+static void IN_StrafeUp(void) {KeyUp(&in_strafe);}
 
-void IN_AttackDown(void) {KeyDown(&in_attack);}
-void IN_AttackUp(void) {KeyUp(&in_attack);}
+static void IN_AttackDown(void) {KeyDown(&in_attack);}
+static void IN_AttackUp(void) {KeyUp(&in_attack);}
 
-void IN_UseDown(void) {KeyDown(&in_use);}
-void IN_UseUp(void) {KeyUp(&in_use);}
+static void IN_UseDown(void) {KeyDown(&in_use);}
+static void IN_UseUp(void) {KeyUp(&in_use);}
 
 // LordHavoc: added 6 new buttons
-void IN_Button3Down(void) {KeyDown(&in_button3);}
-void IN_Button3Up(void) {KeyUp(&in_button3);}
-void IN_Button4Down(void) {KeyDown(&in_button4);}
-void IN_Button4Up(void) {KeyUp(&in_button4);}
-void IN_Button5Down(void) {KeyDown(&in_button5);}
-void IN_Button5Up(void) {KeyUp(&in_button5);}
-void IN_Button6Down(void) {KeyDown(&in_button6);}
-void IN_Button6Up(void) {KeyUp(&in_button6);}
-void IN_Button7Down(void) {KeyDown(&in_button7);}
-void IN_Button7Up(void) {KeyUp(&in_button7);}
-void IN_Button8Down(void) {KeyDown(&in_button8);}
-void IN_Button8Up(void) {KeyUp(&in_button8);}
+static void IN_Button3Down(void) {KeyDown(&in_button3);}
+static void IN_Button3Up(void) {KeyUp(&in_button3);}
+static void IN_Button4Down(void) {KeyDown(&in_button4);}
+static void IN_Button4Up(void) {KeyUp(&in_button4);}
+static void IN_Button5Down(void) {KeyDown(&in_button5);}
+static void IN_Button5Up(void) {KeyUp(&in_button5);}
+static void IN_Button6Down(void) {KeyDown(&in_button6);}
+static void IN_Button6Up(void) {KeyUp(&in_button6);}
+static void IN_Button7Down(void) {KeyDown(&in_button7);}
+static void IN_Button7Up(void) {KeyUp(&in_button7);}
+static void IN_Button8Down(void) {KeyDown(&in_button8);}
+static void IN_Button8Up(void) {KeyUp(&in_button8);}
 
-void IN_Button9Down(void) {KeyDown(&in_button9);}
-void IN_Button9Up(void) {KeyUp(&in_button9);}
-void IN_Button10Down(void) {KeyDown(&in_button10);}
-void IN_Button10Up(void) {KeyUp(&in_button10);}
-void IN_Button11Down(void) {KeyDown(&in_button11);}
-void IN_Button11Up(void) {KeyUp(&in_button11);}
-void IN_Button12Down(void) {KeyDown(&in_button12);}
-void IN_Button12Up(void) {KeyUp(&in_button12);}
-void IN_Button13Down(void) {KeyDown(&in_button13);}
-void IN_Button13Up(void) {KeyUp(&in_button13);}
-void IN_Button14Down(void) {KeyDown(&in_button14);}
-void IN_Button14Up(void) {KeyUp(&in_button14);}
-void IN_Button15Down(void) {KeyDown(&in_button15);}
-void IN_Button15Up(void) {KeyUp(&in_button15);}
-void IN_Button16Down(void) {KeyDown(&in_button16);}
-void IN_Button16Up(void) {KeyUp(&in_button16);}
+static void IN_Button9Down(void) {KeyDown(&in_button9);}
+static void IN_Button9Up(void) {KeyUp(&in_button9);}
+static void IN_Button10Down(void) {KeyDown(&in_button10);}
+static void IN_Button10Up(void) {KeyUp(&in_button10);}
+static void IN_Button11Down(void) {KeyDown(&in_button11);}
+static void IN_Button11Up(void) {KeyUp(&in_button11);}
+static void IN_Button12Down(void) {KeyDown(&in_button12);}
+static void IN_Button12Up(void) {KeyUp(&in_button12);}
+static void IN_Button13Down(void) {KeyDown(&in_button13);}
+static void IN_Button13Up(void) {KeyUp(&in_button13);}
+static void IN_Button14Down(void) {KeyDown(&in_button14);}
+static void IN_Button14Up(void) {KeyUp(&in_button14);}
+static void IN_Button15Down(void) {KeyDown(&in_button15);}
+static void IN_Button15Up(void) {KeyUp(&in_button15);}
+static void IN_Button16Down(void) {KeyDown(&in_button16);}
+static void IN_Button16Up(void) {KeyUp(&in_button16);}
 
-void IN_JumpDown (void) {KeyDown(&in_jump);}
-void IN_JumpUp (void) {KeyUp(&in_jump);}
+static void IN_JumpDown (void) {KeyDown(&in_jump);}
+static void IN_JumpUp (void) {KeyUp(&in_jump);}
 
-void IN_Impulse (void) {in_impulse=atoi(Cmd_Argv(1));}
+static void IN_Impulse (void) {in_impulse=atoi(Cmd_Argv(1));}
 
 in_bestweapon_info_t in_bestweapon_info[IN_BESTWEAPON_MAX];
 
-void IN_BestWeapon_Register(const char *name, int impulse, int weaponbit, int activeweaponcode, int ammostat, int ammomin)
+static void IN_BestWeapon_Register(const char *name, int impulse, int weaponbit, int activeweaponcode, int ammostat, int ammomin)
 {
 	int i;
 	for(i = 0; i < IN_BESTWEAPON_MAX && in_bestweapon_info[i].impulse; ++i)
@@ -240,7 +241,7 @@ void IN_BestWeapon_ResetData (void)
 	IN_BestWeapon_Register("h", 226, HIT_MJOLNIR, HIT_MJOLNIR, STAT_CELLS, 0); // hipnotic mjolnir hammer
 }
 
-void IN_BestWeapon_Register_f (void)
+static void IN_BestWeapon_Register_f (void)
 {
 	if(Cmd_Argc() == 7)
 	{
@@ -267,7 +268,7 @@ void IN_BestWeapon_Register_f (void)
 	}
 }
 
-void IN_BestWeapon (void)
+static void IN_BestWeapon (void)
 {
 	int i, n;
 	const char *t;
@@ -457,6 +458,8 @@ cvar_t cl_netimmediatebuttons = {CVAR_SAVE, "cl_netimmediatebuttons", "1", "send
 
 cvar_t cl_nodelta = {0, "cl_nodelta", "0", "disables delta compression of non-player entities in QW network protocol"};
 
+cvar_t cl_csqc_generatemousemoveevents = {0, "cl_csqc_generatemousemoveevents", "1", "enables calls to CSQC_InputEvent with type 2, for compliance with EXT_CSQC spec"};
+
 extern cvar_t v_flipped;
 
 /*
@@ -466,7 +469,7 @@ CL_AdjustAngles
 Moves the local angle positions
 ================
 */
-void CL_AdjustAngles (void)
+static void CL_AdjustAngles (void)
 {
 	float	speed;
 	float	up, down;
@@ -562,6 +565,27 @@ void CL_Input (void)
 	// allow mice or other external controllers to add to the move
 	IN_Move ();
 
+	// send mouse move to csqc
+	if (cl.csqc_loaded && cl_csqc_generatemousemoveevents.integer)
+	{
+		if (cl.csqc_wantsmousemove)
+		{
+			// event type 3 is a DP_CSQC thing
+			static int oldwindowmouse[2];
+			if (oldwindowmouse[0] != in_windowmouse_x || oldwindowmouse[1] != in_windowmouse_y)
+			{
+				CL_VM_InputEvent(3, in_windowmouse_x * vid_conwidth.integer / vid.width, in_windowmouse_y * vid_conheight.integer / vid.height);
+				oldwindowmouse[0] = in_windowmouse_x;
+				oldwindowmouse[1] = in_windowmouse_y;
+			}
+		}
+		else
+		{
+			if (in_mouse_x || in_mouse_y)
+				CL_VM_InputEvent(2, in_mouse_x * vid_conwidth.integer / vid.width, in_mouse_y * vid_conheight.integer / vid.height);
+		}
+	}
+
 	// apply m_accelerate if it is on
 	if(m_accelerate.value > 1)
 	{
@@ -588,14 +612,7 @@ void CL_Input (void)
 		}
 		else
 		{
-			/*
-			f = log(averagespeed);
-			mi = log(mi);
-			ma = log(ma);
-			*/
 			f = averagespeed;
-			mi = mi;
-			ma = ma;
 			f = (f - mi) / (ma - mi) * (m_accelerate.value - 1) + 1;
 		}
 
@@ -680,7 +697,6 @@ void CL_Input (void)
 		{
 			// digital direction, analog amount
 			vec_t wishvel_x, wishvel_y;
-			f *= max(cl_sidespeed.value, max(cl_forwardspeed.value, cl_backspeed.value));
 			wishvel_x = fabs(cl.cmd.forwardmove);
 			wishvel_y = fabs(cl.cmd.sidemove);
 			if(wishvel_x != 0 && wishvel_y != 0 && wishvel_x != wishvel_y)
@@ -739,7 +755,7 @@ void CL_Input (void)
 
 #include "cl_collision.h"
 
-void CL_UpdatePrydonCursor(void)
+static void CL_UpdatePrydonCursor(void)
 {
 	vec3_t temp;
 
@@ -789,40 +805,6 @@ void CL_UpdatePrydonCursor(void)
 		cl.cmd.cursor_fraction = CL_SelectTraceLine(cl.cmd.cursor_start, cl.cmd.cursor_end, cl.cmd.cursor_impact, cl.cmd.cursor_normal, &cl.cmd.cursor_entitynumber, (chase_active.integer || cl.intermission) ? &cl.entities[cl.playerentity].render : NULL);
 }
 
-typedef enum waterlevel_e
-{
-	WATERLEVEL_NONE,
-	WATERLEVEL_WETFEET,
-	WATERLEVEL_SWIMMING,
-	WATERLEVEL_SUBMERGED
-}
-waterlevel_t;
-
-typedef struct cl_clientmovement_state_s
-{
-	// position
-	vec3_t origin;
-	vec3_t velocity;
-	// current bounding box (different if crouched vs standing)
-	vec3_t mins;
-	vec3_t maxs;
-	// currently on the ground
-	qboolean onground;
-	// currently crouching
-	qboolean crouched;
-	// what kind of water (SUPERCONTENTS_LAVA for instance)
-	int watertype;
-	// how deep
-	waterlevel_t waterlevel;
-	// weird hacks when jumping out of water
-	// (this is in seconds and counts down to 0)
-	float waterjumptime;
-
-	// user command
-	usercmd_t cmd;
-}
-cl_clientmovement_state_t;
-
 #define NUMOFFSETS 27
 static vec3_t offsets[NUMOFFSETS] =
 {
@@ -847,14 +829,14 @@ static vec3_t offsets[NUMOFFSETS] =
 	{-0.125,  0.125, -0.125}, { 0.125,  0.125, -0.125},
 };
 
-qboolean CL_ClientMovement_Unstick(cl_clientmovement_state_t *s)
+static qboolean CL_ClientMovement_Unstick(cl_clientmovement_state_t *s)
 {
 	int i;
 	vec3_t neworigin;
 	for (i = 0;i < NUMOFFSETS;i++)
 	{
 		VectorAdd(offsets[i], s->origin, neworigin);
-		if (!CL_TraceBox(neworigin, cl.playercrouchmins, cl.playercrouchmaxs, neworigin, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false).startsolid)
+		if (!CL_TraceBox(neworigin, cl.playercrouchmins, cl.playercrouchmaxs, neworigin, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true).startsolid)
 		{
 			VectorCopy(neworigin, s->origin);
 			return true;
@@ -864,8 +846,9 @@ qboolean CL_ClientMovement_Unstick(cl_clientmovement_state_t *s)
 	return false;
 }
 
-void CL_ClientMovement_UpdateStatus(cl_clientmovement_state_t *s)
+static void CL_ClientMovement_UpdateStatus(cl_clientmovement_state_t *s)
 {
+	vec_t f;
 	vec3_t origin1, origin2;
 	trace_t trace;
 
@@ -885,7 +868,7 @@ void CL_ClientMovement_UpdateStatus(cl_clientmovement_state_t *s)
 		// low ceiling first
 		if (s->crouched)
 		{
-			trace = CL_TraceBox(s->origin, cl.playerstandmins, cl.playerstandmaxs, s->origin, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false);
+			trace = CL_TraceBox(s->origin, cl.playerstandmins, cl.playerstandmaxs, s->origin, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true);
 			if (!trace.startsolid)
 				s->crouched = false;
 		}
@@ -904,22 +887,32 @@ void CL_ClientMovement_UpdateStatus(cl_clientmovement_state_t *s)
 	// set onground
 	VectorSet(origin1, s->origin[0], s->origin[1], s->origin[2] + 1);
 	VectorSet(origin2, s->origin[0], s->origin[1], s->origin[2] - 1); // -2 causes clientside doublejump bug at above 150fps, raising that to 300fps :)
-	trace = CL_TraceBox(origin1, s->mins, s->maxs, origin2, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false);
-	s->onground = trace.fraction < 1 && trace.plane.normal[2] > 0.7;
+	trace = CL_TraceBox(origin1, s->mins, s->maxs, origin2, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true);
+	if(trace.fraction < 1 && trace.plane.normal[2] > 0.7)
+	{
+		s->onground = true;
+
+		// this code actually "predicts" an impact; so let's clip velocity first
+		f = DotProduct(s->velocity, trace.plane.normal);
+		if(f < 0) // only if moving downwards actually
+			VectorMA(s->velocity, -f, trace.plane.normal, s->velocity);
+	}
+	else
+		s->onground = false;
 
 	// set watertype/waterlevel
 	VectorSet(origin1, s->origin[0], s->origin[1], s->origin[2] + s->mins[2] + 1);
 	s->waterlevel = WATERLEVEL_NONE;
-	s->watertype = CL_TracePoint(origin1, MOVE_NOMONSTERS, NULL, 0, true, false, NULL, false).startsupercontents & SUPERCONTENTS_LIQUIDSMASK;
+	s->watertype = CL_TracePoint(origin1, MOVE_NOMONSTERS, s->self, 0, true, false, NULL, false).startsupercontents & SUPERCONTENTS_LIQUIDSMASK;
 	if (s->watertype)
 	{
 		s->waterlevel = WATERLEVEL_WETFEET;
 		origin1[2] = s->origin[2] + (s->mins[2] + s->maxs[2]) * 0.5f;
-		if (CL_TracePoint(origin1, MOVE_NOMONSTERS, NULL, 0, true, false, NULL, false).startsupercontents & SUPERCONTENTS_LIQUIDSMASK)
+		if (CL_TracePoint(origin1, MOVE_NOMONSTERS, s->self, 0, true, false, NULL, false).startsupercontents & SUPERCONTENTS_LIQUIDSMASK)
 		{
 			s->waterlevel = WATERLEVEL_SWIMMING;
 			origin1[2] = s->origin[2] + 22;
-			if (CL_TracePoint(origin1, MOVE_NOMONSTERS, NULL, 0, true, false, NULL, false).startsupercontents & SUPERCONTENTS_LIQUIDSMASK)
+			if (CL_TracePoint(origin1, MOVE_NOMONSTERS, s->self, 0, true, false, NULL, false).startsupercontents & SUPERCONTENTS_LIQUIDSMASK)
 				s->waterlevel = WATERLEVEL_SUBMERGED;
 		}
 	}
@@ -929,7 +922,7 @@ void CL_ClientMovement_UpdateStatus(cl_clientmovement_state_t *s)
 		s->waterjumptime = 0;
 }
 
-void CL_ClientMovement_Move(cl_clientmovement_state_t *s)
+static void CL_ClientMovement_Move(cl_clientmovement_state_t *s)
 {
 	int bump;
 	double t;
@@ -946,20 +939,20 @@ void CL_ClientMovement_Move(cl_clientmovement_state_t *s)
 	for (bump = 0, t = s->cmd.frametime;bump < 8 && VectorLength2(s->velocity) > 0;bump++)
 	{
 		VectorMA(s->origin, t, s->velocity, neworigin);
-		trace = CL_TraceBox(s->origin, s->mins, s->maxs, neworigin, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false);
+		trace = CL_TraceBox(s->origin, s->mins, s->maxs, neworigin, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true);
 		if (trace.fraction < 1 && trace.plane.normal[2] == 0)
 		{
 			// may be a step or wall, try stepping up
 			// first move forward at a higher level
 			VectorSet(currentorigin2, s->origin[0], s->origin[1], s->origin[2] + cl.movevars_stepheight);
 			VectorSet(neworigin2, neworigin[0], neworigin[1], s->origin[2] + cl.movevars_stepheight);
-			trace2 = CL_TraceBox(currentorigin2, s->mins, s->maxs, neworigin2, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false);
+			trace2 = CL_TraceBox(currentorigin2, s->mins, s->maxs, neworigin2, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true);
 			if (!trace2.startsolid)
 			{
 				// then move down from there
 				VectorCopy(trace2.endpos, currentorigin2);
 				VectorSet(neworigin2, trace2.endpos[0], trace2.endpos[1], s->origin[2]);
-				trace3 = CL_TraceBox(currentorigin2, s->mins, s->maxs, neworigin2, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false);
+				trace3 = CL_TraceBox(currentorigin2, s->mins, s->maxs, neworigin2, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true);
 				//Con_Printf("%f %f %f %f : %f %f %f %f : %f %f %f %f\n", trace.fraction, trace.endpos[0], trace.endpos[1], trace.endpos[2], trace2.fraction, trace2.endpos[0], trace2.endpos[1], trace2.endpos[2], trace3.fraction, trace3.endpos[0], trace3.endpos[1], trace3.endpos[2]);
 				// accept the new trace if it made some progress
 				if (fabs(trace3.endpos[0] - trace.endpos[0]) >= 0.03125 || fabs(trace3.endpos[1] - trace.endpos[1]) >= 0.03125)
@@ -978,8 +971,12 @@ void CL_ClientMovement_Move(cl_clientmovement_state_t *s)
 		if (trace.fraction == 1)
 			break;
 
-		//if (trace.plane.normal[2] > 0.7)
-		//	s->onground = true;
+		// this is only really needed for nogravityonground combined with gravityunaffectedbyticrate
+		// <LordHavoc> I'm pretty sure I commented it out solely because it seemed redundant
+		// this got commented out in a change that supposedly makes the code match QW better
+		// so if this is broken, maybe put it in an if(cls.protocol != PROTOCOL_QUAKEWORLD) block
+		if (trace.plane.normal[2] > 0.7)
+			s->onground = true;
 
 		t -= t * trace.fraction;
 
@@ -991,7 +988,7 @@ void CL_ClientMovement_Move(cl_clientmovement_state_t *s)
 }
 
 
-void CL_ClientMovement_Physics_Swim(cl_clientmovement_state_t *s)
+static void CL_ClientMovement_Physics_Swim(cl_clientmovement_state_t *s)
 {
 	vec_t wishspeed;
 	vec_t f;
@@ -1009,10 +1006,10 @@ void CL_ClientMovement_Physics_Swim(cl_clientmovement_state_t *s)
 		AngleVectors(yawangles, forward, NULL, NULL);
 		VectorMA(s->origin, 24, forward, spot);
 		spot[2] += 8;
-		if (CL_TracePoint(spot, MOVE_NOMONSTERS, NULL, 0, true, false, NULL, false).startsolid)
+		if (CL_TracePoint(spot, MOVE_NOMONSTERS, s->self, 0, true, false, NULL, false).startsolid)
 		{
 			spot[2] += 24;
-			if (!CL_TracePoint(spot, MOVE_NOMONSTERS, NULL, 0, true, false, NULL, false).startsolid)
+			if (!CL_TracePoint(spot, MOVE_NOMONSTERS, s->self, 0, true, false, NULL, false).startsolid)
 			{
 				VectorScale(forward, 50, s->velocity);
 				s->velocity[2] = 310;
@@ -1118,7 +1115,7 @@ static vec_t CL_GeomLerp(vec_t a, vec_t lerp, vec_t b)
 	return a * pow(fabs(b / a), lerp);
 }
 
-void CL_ClientMovement_Physics_CPM_PM_Aircontrol(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed)
+static void CL_ClientMovement_Physics_CPM_PM_Aircontrol(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed)
 {
 	vec_t zspeed, speed, dot, k;
 
@@ -1153,7 +1150,7 @@ void CL_ClientMovement_Physics_CPM_PM_Aircontrol(cl_clientmovement_state_t *s, v
 	s->velocity[2] = zspeed;
 }
 
-float CL_ClientMovement_Physics_AdjustAirAccelQW(float accelqw, float factor)
+static float CL_ClientMovement_Physics_AdjustAirAccelQW(float accelqw, float factor)
 {
 	return
 		(accelqw < 0 ? -1 : +1)
@@ -1161,7 +1158,7 @@ float CL_ClientMovement_Physics_AdjustAirAccelQW(float accelqw, float factor)
 		bound(0.000001, 1 - (1 - fabs(accelqw)) * factor, 1);
 }
 
-void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed, vec_t wishspeed0, vec_t accel, vec_t accelqw, vec_t sidefric, vec_t speedlimit)
+static void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed, vec_t wishspeed0, vec_t accel, vec_t accelqw, vec_t stretchfactor, vec_t sidefric, vec_t speedlimit)
 {
 	vec_t vel_straight;
 	vec_t vel_z;
@@ -1170,10 +1167,16 @@ void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_
 	vec3_t vel_xy;
 	vec_t vel_xy_current;
 	vec_t vel_xy_backward, vel_xy_forward;
-	qboolean speedclamp;
+	vec_t speedclamp;
 
-	speedclamp = (accelqw < 0);
-	if(speedclamp)
+	if(stretchfactor > 0)
+		speedclamp = stretchfactor;
+	else if(accelqw < 0)
+		speedclamp = 1;
+	else
+		speedclamp = -1; // no clamping
+
+	if(accelqw < 0)
 		accelqw = -accelqw;
 
 	if(cl.moveflags & MOVEFLAG_Q2AIRACCELERATE)
@@ -1220,20 +1223,22 @@ void CL_ClientMovement_Physics_PM_Accelerate(cl_clientmovement_state_t *s, vec3_
 
 	VectorMA(vel_perpend, vel_straight, wishdir, s->velocity);
 
-	if(speedclamp)
+	if(speedclamp >= 0)
 	{
-		vel_xy_current = min(VectorLength(s->velocity), vel_xy_forward);
-		if(vel_xy_current > 0) // prevent division by zero
+		vec_t vel_xy_preclamp;
+		vel_xy_preclamp = VectorLength(s->velocity);
+		if(vel_xy_preclamp > 0) // prevent division by zero
 		{
-			VectorNormalize(s->velocity);
-			VectorScale(s->velocity, vel_xy_current, s->velocity);
+			vel_xy_current += (vel_xy_forward - vel_xy_current) * speedclamp;
+			if(vel_xy_current < vel_xy_preclamp)
+				VectorScale(s->velocity, (vel_xy_current / vel_xy_preclamp), s->velocity);
 		}
 	}
 
 	s->velocity[2] += vel_z;
 }
 
-void CL_ClientMovement_Physics_PM_AirAccelerate(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed)
+static void CL_ClientMovement_Physics_PM_AirAccelerate(cl_clientmovement_state_t *s, vec3_t wishdir, vec_t wishspeed)
 {
     vec3_t curvel, wishvel, acceldir, curdir;
     float addspeed, accelspeed, curspeed;
@@ -1284,7 +1289,7 @@ void CL_ClientMovement_Physics_PM_AirAccelerate(cl_clientmovement_state_t *s, ve
     VectorMA( s->velocity, accelspeed, acceldir, s->velocity );
 }
 
-void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
+static void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 {
 	vec_t friction;
 	vec_t wishspeed;
@@ -1304,7 +1309,7 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 	// released at least once since the last jump
 	if (s->cmd.jump)
 	{
-		if (s->onground && (s->cmd.canjump || !cl_movement_track_canjump.integer)) // FIXME remove this cvar again when canjump logic actually works, or maybe keep it for mods that allow "pogo-ing"
+		if (s->onground && (s->cmd.canjump || !cl_movement_track_canjump.integer))
 		{
 			s->velocity[2] += cl.movevars_jumpvelocity;
 			s->onground = false;
@@ -1347,9 +1352,9 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 				VectorSet(neworigin2, s->origin[0] + s->velocity[0]*(16/f), s->origin[1] + s->velocity[1]*(16/f), s->origin[2] + s->mins[2]);
 				VectorSet(neworigin3, neworigin2[0], neworigin2[1], neworigin2[2] - 34);
 				if (cls.protocol == PROTOCOL_QUAKEWORLD)
-					trace = CL_TraceBox(neworigin2, s->mins, s->maxs, neworigin3, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false);
+					trace = CL_TraceBox(neworigin2, s->mins, s->maxs, neworigin3, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true);
 				else
-					trace = CL_TraceLine(neworigin2, neworigin3, MOVE_NORMAL, NULL, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, false, false);
+					trace = CL_TraceLine(neworigin2, neworigin3, MOVE_NORMAL, s->self, SUPERCONTENTS_SOLID | SUPERCONTENTS_BODY | SUPERCONTENTS_PLAYERCLIP, true, true, NULL, true, false);
 				if (trace.fraction == 1 && !trace.startsolid)
 					friction *= cl.movevars_edgefriction;
 			}
@@ -1364,20 +1369,23 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 			accelspeed = min(cl.movevars_accelerate * s->cmd.frametime * wishspeed, addspeed);
 			VectorMA(s->velocity, accelspeed, wishdir, s->velocity);
 		}
-		if(cl.moveflags & MOVEFLAG_NOGRAVITYONGROUND)
-			gravity = 0;
-		else
-			gravity = cl.movevars_gravity * cl.movevars_entgravity * s->cmd.frametime;
-		if(cl.moveflags & MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE)
-			s->velocity[2] -= gravity * 0.5f;
-		else
-			s->velocity[2] -= gravity;
+		gravity = cl.movevars_gravity * cl.movevars_entgravity * s->cmd.frametime;
+		if(!(cl.moveflags & MOVEFLAG_NOGRAVITYONGROUND))
+		{
+			if(cl.moveflags & MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE)
+				s->velocity[2] -= gravity * 0.5f;
+			else
+				s->velocity[2] -= gravity;
+		}
 		if (cls.protocol == PROTOCOL_QUAKEWORLD)
 			s->velocity[2] = 0;
 		if (VectorLength2(s->velocity))
 			CL_ClientMovement_Move(s);
-		if(cl.moveflags & MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE)
-			s->velocity[2] -= gravity * 0.5f;
+		if(!(cl.moveflags & MOVEFLAG_NOGRAVITYONGROUND) || !s->onground)
+		{
+			if(cl.moveflags & MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE)
+				s->velocity[2] -= gravity * 0.5f;
+		}
 	}
 	else
 	{
@@ -1422,7 +1430,7 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 			if(cl.movevars_warsowbunny_turnaccel && accelerating && s->cmd.sidemove == 0 && s->cmd.forwardmove != 0)
 				CL_ClientMovement_Physics_PM_AirAccelerate(s, wishdir, wishspeed2);
 			else
-				CL_ClientMovement_Physics_PM_Accelerate(s, wishdir, wishspeed, wishspeed0, accel, accelqw, cl.movevars_airaccel_sideways_friction / cl.movevars_maxairspeed, cl.movevars_airspeedlimit_nonqw);
+				CL_ClientMovement_Physics_PM_Accelerate(s, wishdir, wishspeed, wishspeed0, accel, accelqw, cl.movevars_airaccel_qw_stretchfactor, cl.movevars_airaccel_sideways_friction / cl.movevars_maxairspeed, cl.movevars_airspeedlimit_nonqw);
 
 			if(cl.movevars_aircontrol)
 				CL_ClientMovement_Physics_CPM_PM_Aircontrol(s, wishdir, wishspeed2);
@@ -1433,12 +1441,15 @@ void CL_ClientMovement_Physics_Walk(cl_clientmovement_state_t *s)
 		else
 			s->velocity[2] -= gravity;
 		CL_ClientMovement_Move(s);
-		if(cl.moveflags & MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE)
-			s->velocity[2] -= gravity * 0.5f;
+		if(!(cl.moveflags & MOVEFLAG_NOGRAVITYONGROUND) || !s->onground)
+		{
+			if(cl.moveflags & MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE)
+				s->velocity[2] -= gravity * 0.5f;
+		}
 	}
 }
 
-void CL_ClientMovement_PlayerMove(cl_clientmovement_state_t *s)
+static void CL_ClientMovement_PlayerMove(cl_clientmovement_state_t *s)
 {
 	//Con_Printf(" %f", frametime);
 	if (!s->cmd.jump)
@@ -1476,6 +1487,7 @@ void CL_UpdateMoveVars(void)
 		cl.movevars_maxairspeed = cl.statsf[STAT_MOVEVARS_MAXAIRSPEED];
 		cl.movevars_stepheight = cl.statsf[STAT_MOVEVARS_STEPHEIGHT];
 		cl.movevars_airaccel_qw = cl.statsf[STAT_MOVEVARS_AIRACCEL_QW];
+		cl.movevars_airaccel_qw_stretchfactor = cl.statsf[STAT_MOVEVARS_AIRACCEL_QW_STRETCHFACTOR];
 		cl.movevars_airaccel_sideways_friction = cl.statsf[STAT_MOVEVARS_AIRACCEL_SIDEWAYS_FRICTION];
 		cl.movevars_friction = cl.statsf[STAT_MOVEVARS_FRICTION];
 		cl.movevars_wallfriction = cl.statsf[STAT_MOVEVARS_WALLFRICTION];
@@ -1515,6 +1527,7 @@ void CL_UpdateMoveVars(void)
 		cl.movevars_maxairspeed = cl_movement_maxairspeed.value;
 		cl.movevars_stepheight = cl_movement_stepheight.value;
 		cl.movevars_airaccel_qw = cl_movement_airaccel_qw.value;
+		cl.movevars_airaccel_qw_stretchfactor = 0;
 		cl.movevars_airaccel_sideways_friction = cl_movement_airaccel_sideways_friction.value;
 		cl.movevars_airstopaccelerate = 0;
 		cl.movevars_airstrafeaccelerate = 0;
@@ -1541,11 +1554,34 @@ void CL_UpdateMoveVars(void)
 		cl.movevars_aircontrol_power = 2; // CPMA default
 }
 
+void CL_ClientMovement_PlayerMove_Frame(cl_clientmovement_state_t *s)
+{
+	// if a move is more than 50ms, do it as two moves (matching qwsv)
+	//Con_Printf("%i ", s.cmd.msec);
+	if(s->cmd.frametime > 0.0005)
+	{
+		if (s->cmd.frametime > 0.05)
+		{
+			s->cmd.frametime /= 2;
+			CL_ClientMovement_PlayerMove(s);
+		}
+		CL_ClientMovement_PlayerMove(s);
+	}
+	else
+	{
+		// we REALLY need this handling to happen, even if the move is not executed
+		if (!s->cmd.jump)
+			s->cmd.canjump = true;
+	}
+}
+
 void CL_ClientMovement_Replay(void)
 {
 	int i;
 	double totalmovemsec;
 	cl_clientmovement_state_t s;
+
+	VectorCopy(cl.mvelocity[0], cl.movement_velocity);
 
 	if (cl.movement_predicted && !cl.movement_replay)
 		return;
@@ -1583,18 +1619,10 @@ void CL_ClientMovement_Replay(void)
 			s.cmd = cl.movecmd[i];
 			if (i < CL_MAX_USERCMDS - 1)
 				s.cmd.canjump = cl.movecmd[i+1].canjump;
-			// if a move is more than 50ms, do it as two moves (matching qwsv)
-			//Con_Printf("%i ", s.cmd.msec);
-			if(s.cmd.frametime > 0.0005)
-			{
-				if (s.cmd.frametime > 0.05)
-				{
-					s.cmd.frametime /= 2;
-					CL_ClientMovement_PlayerMove(&s);
-				}
-				CL_ClientMovement_PlayerMove(&s);
-				cl.movecmd[i].canjump = s.cmd.canjump;
-			}
+
+			CL_ClientMovement_PlayerMove_Frame(&s);
+
+			cl.movecmd[i].canjump = s.cmd.canjump;
 		}
 		//Con_Printf("\n");
 		CL_ClientMovement_UpdateStatus(&s);
@@ -1605,9 +1633,7 @@ void CL_ClientMovement_Replay(void)
 		s.cmd = cl.movecmd[0];
 	}
 
-	if (cls.demoplayback) // for bob, speedometer
-		VectorCopy(cl.mvelocity[0], cl.movement_velocity);
-	else
+	if (!cls.demoplayback) // for bob, speedometer
 	{
 		cl.movement_replay = false;
 		// update the interpolation target position and velocity
@@ -1635,18 +1661,9 @@ void CL_ClientMovement_Replay(void)
 		if (s.onground)
 			cl.onground = true;
 	}
-
-	// react to onground state changes (for gun bob)
-	if (cl.onground)
-	{
-		if (!cl.oldonground)
-			cl.hitgroundtime = cl.movecmd[0].time;
-		cl.lastongroundtime = cl.movecmd[0].time;
-	}
-	cl.oldonground = cl.onground;
 }
 
-void QW_MSG_WriteDeltaUsercmd(sizebuf_t *buf, usercmd_t *from, usercmd_t *to)
+static void QW_MSG_WriteDeltaUsercmd(sizebuf_t *buf, usercmd_t *from, usercmd_t *to)
 {
 	int bits;
 
@@ -2111,7 +2128,9 @@ void CL_SendMove(void)
 	{
 		Con_Print("CL_SendMove: lost server connection\n");
 		CL_Disconnect();
+		SV_LockThreadMutex();
 		Host_ShutdownServer();
+		SV_UnlockThreadMutex();
 	}
 }
 
@@ -2231,5 +2250,7 @@ void CL_InitInput (void)
 	Cvar_RegisterVariable(&cl_netimmediatebuttons);
 
 	Cvar_RegisterVariable(&cl_nodelta);
+
+	Cvar_RegisterVariable(&cl_csqc_generatemousemoveevents);
 }
 

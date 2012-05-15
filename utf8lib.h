@@ -38,13 +38,15 @@ size_t u8_prevbyte(const char*, size_t);
 Uchar  u8_getchar_utf8_enabled(const char*, const char**);
 Uchar  u8_getnchar_utf8_enabled(const char*, const char**, size_t);
 int    u8_fromchar(Uchar, char*, size_t);
+size_t u8_mbstowcs(Uchar *, const char *, size_t);
 size_t u8_wcstombs(char*, const Uchar*, size_t);
 size_t u8_COM_StringLengthNoColors(const char *s, size_t size_s, qboolean *valid);
 
 // returns a static buffer, use this for inlining
-char  *u8_encodech(Uchar ch, size_t*);
+char  *u8_encodech(Uchar ch, size_t*, char*buf16);
 
 size_t u8_strpad(char *out, size_t outsize, const char *in, qboolean leftalign, size_t minwidth, size_t maxwidth);
+size_t u8_strpad_colorcodes(char *out, size_t outsize, const char *in, qboolean leftalign, size_t minwidth, size_t maxwidth);
 
 /* Careful: if we disable utf8 but not freetype, we wish to see freetype chars
  * for normal letters. So use E000+x for special chars, but leave the freetype stuff for the
@@ -58,5 +60,8 @@ extern Uchar u8_quake2utf8map[256];
 #define u8_getnchar(c,e,n) (utf8_enable.integer ? u8_getnchar_utf8_enabled(c,e,n) : ((n) <= 0 ? ((*(e) = c), 0) : (u8_quake2utf8map[(unsigned char)(*(e) = (c) + 1)[-1]])))
 #define u8_getnchar_noendptr(c,n) (utf8_enable.integer ? u8_getnchar_utf8_enabled(c,NULL,n) : ((n) <= 0 ? 0  : (u8_quake2utf8map[(unsigned char)*(c)])))
 #define u8_getnchar_check(c,e,n) ((e) ? u8_getchar((c),(e),(n)) : u8_getchar_noendptr((c),(n)))
+
+Uchar u8_toupper(Uchar ch);
+Uchar u8_tolower(Uchar ch);
 
 #endif // UTF8LIB_H__

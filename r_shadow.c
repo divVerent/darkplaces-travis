@@ -146,7 +146,7 @@ demonstrated by the game Doom3.
 extern LPDIRECT3DDEVICE9 vid_d3d9dev;
 #endif
 
-extern void R_Shadow_EditLights_Init(void);
+static void R_Shadow_EditLights_Init(void);
 
 typedef enum r_shadow_rendermode_e
 {
@@ -196,6 +196,7 @@ int r_shadow_shadowmapdepthbits;
 int r_shadow_shadowmapmaxsize;
 qboolean r_shadow_shadowmapvsdct;
 qboolean r_shadow_shadowmapsampler;
+qboolean r_shadow_shadowmapshadowsampler;
 int r_shadow_shadowmappcf;
 int r_shadow_shadowmapborder;
 matrix4x4_t r_shadow_shadowmapmatrix;
@@ -244,8 +245,8 @@ rtexture_t *r_shadow_attenuationgradienttexture;
 rtexture_t *r_shadow_attenuation2dtexture;
 rtexture_t *r_shadow_attenuation3dtexture;
 skinframe_t *r_shadow_lightcorona;
-rtexture_t *r_shadow_shadowmap2dtexture;
-rtexture_t *r_shadow_shadowmap2dcolortexture;
+rtexture_t *r_shadow_shadowmap2ddepthbuffer;
+rtexture_t *r_shadow_shadowmap2ddepthtexture;
 rtexture_t *r_shadow_shadowmapvsdcttexture;
 int r_shadow_shadowmapsize; // changes for each light based on distance
 int r_shadow_shadowmaplod; // changes for each light based on distance
@@ -255,11 +256,15 @@ GLuint r_shadow_prepasslightingdiffusespecularfbo;
 GLuint r_shadow_prepasslightingdiffusefbo;
 int r_shadow_prepass_width;
 int r_shadow_prepass_height;
-rtexture_t *r_shadow_prepassgeometrydepthtexture;
-rtexture_t *r_shadow_prepassgeometrydepthcolortexture;
+rtexture_t *r_shadow_prepassgeometrydepthbuffer;
 rtexture_t *r_shadow_prepassgeometrynormalmaptexture;
 rtexture_t *r_shadow_prepasslightingdiffusetexture;
 rtexture_t *r_shadow_prepasslightingspeculartexture;
+
+// keep track of the provided framebuffer info
+static int r_shadow_fb_fbo;
+static rtexture_t *r_shadow_fb_depthtexture;
+static rtexture_t *r_shadow_fb_colortexture;
 
 // lights are reloaded when this changes
 char r_shadow_mapname[MAX_QPATH];
@@ -267,14 +272,10 @@ char r_shadow_mapname[MAX_QPATH];
 // used only for light filters (cubemaps)
 rtexturepool_t *r_shadow_filters_texturepool;
 
-static const GLenum r_shadow_prepasslightingdrawbuffers[2] = {GL_COLOR_ATTACHMENT0_EXT, GL_COLOR_ATTACHMENT1_EXT};
-
 cvar_t r_shadow_bumpscale_basetexture = {0, "r_shadow_bumpscale_basetexture", "0", "generate fake bumpmaps from diffuse textures at this bumpyness, try 4 to match tenebrae, higher values increase depth, requires r_restart to take effect"};
 cvar_t r_shadow_bumpscale_bumpmap = {0, "r_shadow_bumpscale_bumpmap", "4", "what magnitude to interpret _bump.tga textures as, higher values increase depth, requires r_restart to take effect"};
 cvar_t r_shadow_debuglight = {0, "r_shadow_debuglight", "-1", "renders only one light, for level design purposes or debugging"};
 cvar_t r_shadow_deferred = {CVAR_SAVE, "r_shadow_deferred", "0", "uses image-based lighting instead of geometry-based lighting, the method used renders a depth image and a normalmap image, renders lights into separate diffuse and specular images, and then combines this into the normal rendering, requires r_shadow_shadowmapping"};
-cvar_t r_shadow_deferred_8bitrange = {CVAR_SAVE, "r_shadow_deferred_8bitrange", "4", "dynamic range of image-based lighting when using 32bit color (does not apply to fp)"};
-//cvar_t r_shadow_deferred_fp = {CVAR_SAVE, "r_shadow_deferred_fp", "0", "use 16bit (1) or 32bit (2) floating point for accumulation of image-based lighting"};
 cvar_t r_shadow_usebihculling = {0, "r_shadow_usebihculling", "1", "use BIH (Bounding Interval Hierarchy) for culling lit surfaces instead of BSP (Binary Space Partitioning)"};
 cvar_t r_shadow_usenormalmap = {CVAR_SAVE, "r_shadow_usenormalmap", "1", "enables use of directional shading on lights"};
 cvar_t r_shadow_gloss = {CVAR_SAVE, "r_shadow_gloss", "1", "0 disables gloss (specularity) rendering, 1 uses gloss if textures are found, 2 forces a flat metallic specular effect on everything without textures (similar to tenebrae)"};
@@ -303,6 +304,7 @@ cvar_t r_shadow_realtime_world_compileportalculling = {0, "r_shadow_realtime_wor
 cvar_t r_shadow_scissor = {0, "r_shadow_scissor", "1", "use scissor optimization of light rendering (restricts rendering to the portion of the screen affected by the light)"};
 cvar_t r_shadow_shadowmapping = {CVAR_SAVE, "r_shadow_shadowmapping", "1", "enables use of shadowmapping (depth texture sampling) instead of stencil shadow volumes, requires gl_fbo 1"};
 cvar_t r_shadow_shadowmapping_filterquality = {CVAR_SAVE, "r_shadow_shadowmapping_filterquality", "-1", "shadowmap filter modes: -1 = auto-select, 0 = no filtering, 1 = bilinear, 2 = bilinear 2x2 blur (fast), 3 = 3x3 blur (moderate), 4 = 4x4 blur (slow)"};
+cvar_t r_shadow_shadowmapping_useshadowsampler = {CVAR_SAVE, "r_shadow_shadowmapping_useshadowsampler", "1", "whether to use sampler2DShadow if available"};
 cvar_t r_shadow_shadowmapping_depthbits = {CVAR_SAVE, "r_shadow_shadowmapping_depthbits", "24", "requested minimum shadowmap texture depth bits"};
 cvar_t r_shadow_shadowmapping_vsdct = {CVAR_SAVE, "r_shadow_shadowmapping_vsdct", "1", "enables use of virtual shadow depth cube texture"};
 cvar_t r_shadow_shadowmapping_minsize = {CVAR_SAVE, "r_shadow_shadowmapping_minsize", "32", "shadowmap size limit"};
@@ -320,25 +322,23 @@ cvar_t r_shadow_polygonfactor = {0, "r_shadow_polygonfactor", "0", "how much to 
 cvar_t r_shadow_polygonoffset = {0, "r_shadow_polygonoffset", "1", "how much to push shadow volumes into the distance when rendering, to reduce chances of zfighting artifacts (should not be less than 0)"};
 cvar_t r_shadow_texture3d = {0, "r_shadow_texture3d", "1", "use 3D voxel textures for spherical attenuation rather than cylindrical (does not affect OpenGL 2.0 render path)"};
 cvar_t r_shadow_bouncegrid = {CVAR_SAVE, "r_shadow_bouncegrid", "0", "perform particle tracing for indirect lighting (Global Illumination / radiosity) using a 3D texture covering the scene, only active on levels with realtime lights active (r_shadow_realtime_world is usually required for these)"};
-cvar_t r_shadow_bouncegrid_airstepmax = {CVAR_SAVE, "r_shadow_bouncegrid_airstepmax", "1024", "maximum number of photon accumulation contributions for one photon"};
-cvar_t r_shadow_bouncegrid_airstepsize = {CVAR_SAVE, "r_shadow_bouncegrid_airstepsize", "64", "maximum spacing of photon accumulation through the air"};
 cvar_t r_shadow_bouncegrid_bounceanglediffuse = {CVAR_SAVE, "r_shadow_bouncegrid_bounceanglediffuse", "0", "use random bounce direction rather than true reflection, makes some corner areas dark"};
 cvar_t r_shadow_bouncegrid_directionalshading = {CVAR_SAVE, "r_shadow_bouncegrid_directionalshading", "0", "use diffuse shading rather than ambient, 3D texture becomes 8x as many pixels to hold the additional data"};
 cvar_t r_shadow_bouncegrid_dlightparticlemultiplier = {CVAR_SAVE, "r_shadow_bouncegrid_dlightparticlemultiplier", "0", "if set to a high value like 16 this can make dlights look great, but 0 is recommended for performance reasons"};
 cvar_t r_shadow_bouncegrid_hitmodels = {CVAR_SAVE, "r_shadow_bouncegrid_hitmodels", "0", "enables hitting character model geometry (SLOW)"};
 cvar_t r_shadow_bouncegrid_includedirectlighting = {CVAR_SAVE, "r_shadow_bouncegrid_includedirectlighting", "0", "allows direct lighting to be recorded, not just indirect (gives an effect somewhat like r_shadow_realtime_world_lightmaps)"};
 cvar_t r_shadow_bouncegrid_intensity = {CVAR_SAVE, "r_shadow_bouncegrid_intensity", "4", "overall brightness of bouncegrid texture"};
-cvar_t r_shadow_bouncegrid_lightradiusscale = {CVAR_SAVE, "r_shadow_bouncegrid_lightradiusscale", "10", "particles stop at this fraction of light radius (can be more than 1)"};
-cvar_t r_shadow_bouncegrid_maxbounce = {CVAR_SAVE, "r_shadow_bouncegrid_maxbounce", "5", "maximum number of bounces for a particle (minimum is 1)"};
-cvar_t r_shadow_bouncegrid_particlebounceintensity = {CVAR_SAVE, "r_shadow_bouncegrid_particlebounceintensity", "4", "amount of energy carried over after each bounce, this is a multiplier of texture color and the result is clamped to 1 or less, to prevent adding energy on each bounce"};
+cvar_t r_shadow_bouncegrid_lightradiusscale = {CVAR_SAVE, "r_shadow_bouncegrid_lightradiusscale", "4", "particles stop at this fraction of light radius (can be more than 1)"};
+cvar_t r_shadow_bouncegrid_maxbounce = {CVAR_SAVE, "r_shadow_bouncegrid_maxbounce", "2", "maximum number of bounces for a particle (minimum is 0)"};
+cvar_t r_shadow_bouncegrid_particlebounceintensity = {CVAR_SAVE, "r_shadow_bouncegrid_particlebounceintensity", "1", "amount of energy carried over after each bounce, this is a multiplier of texture color and the result is clamped to 1 or less, to prevent adding energy on each bounce"};
 cvar_t r_shadow_bouncegrid_particleintensity = {CVAR_SAVE, "r_shadow_bouncegrid_particleintensity", "1", "brightness of particles contributing to bouncegrid texture"};
 cvar_t r_shadow_bouncegrid_photons = {CVAR_SAVE, "r_shadow_bouncegrid_photons", "2000", "total photons to shoot per update, divided proportionately between lights"};
-cvar_t r_shadow_bouncegrid_spacingx = {CVAR_SAVE, "r_shadow_bouncegrid_spacingx", "64", "unit size of bouncegrid pixel on X axis"};
-cvar_t r_shadow_bouncegrid_spacingy = {CVAR_SAVE, "r_shadow_bouncegrid_spacingy", "64", "unit size of bouncegrid pixel on Y axis"};
-cvar_t r_shadow_bouncegrid_spacingz = {CVAR_SAVE, "r_shadow_bouncegrid_spacingz", "64", "unit size of bouncegrid pixel on Z axis"};
+cvar_t r_shadow_bouncegrid_spacing = {CVAR_SAVE, "r_shadow_bouncegrid_spacing", "64", "unit size of bouncegrid pixel"};
 cvar_t r_shadow_bouncegrid_stablerandom = {CVAR_SAVE, "r_shadow_bouncegrid_stablerandom", "1", "make particle distribution consistent from frame to frame"};
 cvar_t r_shadow_bouncegrid_static = {CVAR_SAVE, "r_shadow_bouncegrid_static", "1", "use static radiosity solution (high quality) rather than dynamic (splotchy)"};
 cvar_t r_shadow_bouncegrid_static_directionalshading = {CVAR_SAVE, "r_shadow_bouncegrid_static_directionalshading", "1", "whether to use directionalshading when in static mode"};
+cvar_t r_shadow_bouncegrid_static_lightradiusscale = {CVAR_SAVE, "r_shadow_bouncegrid_static_lightradiusscale", "10", "particles stop at this fraction of light radius (can be more than 1) when in static mode"};
+cvar_t r_shadow_bouncegrid_static_maxbounce = {CVAR_SAVE, "r_shadow_bouncegrid_static_maxbounce", "5", "maximum number of bounces for a particle (minimum is 0) in static mode"};
 cvar_t r_shadow_bouncegrid_static_photons = {CVAR_SAVE, "r_shadow_bouncegrid_static_photons", "25000", "photons value to use when in static mode"};
 cvar_t r_shadow_bouncegrid_updateinterval = {CVAR_SAVE, "r_shadow_bouncegrid_updateinterval", "0", "update bouncegrid texture once per this many seconds, useful values are 0, 0.05, or 1000000"};
 cvar_t r_shadow_bouncegrid_x = {CVAR_SAVE, "r_shadow_bouncegrid_x", "64", "maximum texture size of bouncegrid on X axis"};
@@ -356,6 +356,22 @@ cvar_t r_editlights_cursorpushback = {0, "r_editlights_cursorpushback", "0", "ho
 cvar_t r_editlights_cursorpushoff = {0, "r_editlights_cursorpushoff", "4", "how far to push the cursor off the impacted surface"};
 cvar_t r_editlights_cursorgrid = {0, "r_editlights_cursorgrid", "4", "snaps cursor to this grid size"};
 cvar_t r_editlights_quakelightsizescale = {CVAR_SAVE, "r_editlights_quakelightsizescale", "1", "changes size of light entities loaded from a map"};
+cvar_t r_editlights_drawproperties = {0, "r_editlights_drawproperties", "1", "draw properties of currently selected light"};
+cvar_t r_editlights_current_origin = {0, "r_editlights_current_origin", "0 0 0", "origin of selected light"};
+cvar_t r_editlights_current_angles = {0, "r_editlights_current_angles", "0 0 0", "angles of selected light"};
+cvar_t r_editlights_current_color = {0, "r_editlights_current_color", "1 1 1", "color of selected light"};
+cvar_t r_editlights_current_radius = {0, "r_editlights_current_radius", "0", "radius of selected light"};
+cvar_t r_editlights_current_corona = {0, "r_editlights_current_corona", "0", "corona intensity of selected light"};
+cvar_t r_editlights_current_coronasize = {0, "r_editlights_current_coronasize", "0", "corona size of selected light"};
+cvar_t r_editlights_current_style = {0, "r_editlights_current_style", "0", "style of selected light"};
+cvar_t r_editlights_current_shadows = {0, "r_editlights_current_shadows", "0", "shadows flag of selected light"};
+cvar_t r_editlights_current_cubemap = {0, "r_editlights_current_cubemap", "0", "cubemap of selected light"};
+cvar_t r_editlights_current_ambient = {0, "r_editlights_current_ambient", "0", "ambient intensity of selected light"};
+cvar_t r_editlights_current_diffuse = {0, "r_editlights_current_diffuse", "1", "diffuse intensity of selected light"};
+cvar_t r_editlights_current_specular = {0, "r_editlights_current_specular", "1", "specular intensity of selected light"};
+cvar_t r_editlights_current_normalmode = {0, "r_editlights_current_normalmode", "0", "normalmode flag of selected light"};
+cvar_t r_editlights_current_realtimemode = {0, "r_editlights_current_realtimemode", "0", "realtimemode flag of selected light"};
+
 
 typedef struct r_shadow_bouncegrid_settings_s
 {
@@ -372,8 +388,6 @@ typedef struct r_shadow_bouncegrid_settings_s
 	int photons;
 	float spacing[3];
 	int stablerandom;
-	float airstepmax;
-	float airstepsize;
 }
 r_shadow_bouncegrid_settings_t;
 
@@ -426,11 +440,12 @@ skinframe_t *r_editlights_sprcubemaplight;
 skinframe_t *r_editlights_sprcubemapnoshadowlight;
 skinframe_t *r_editlights_sprselection;
 
-void R_Shadow_SetShadowMode(void)
+static void R_Shadow_SetShadowMode(void)
 {
 	r_shadow_shadowmapmaxsize = bound(1, r_shadow_shadowmapping_maxsize.integer, (int)vid.maxtexturesize_2d / 4);
 	r_shadow_shadowmapvsdct = r_shadow_shadowmapping_vsdct.integer != 0 && vid.renderpath == RENDERPATH_GL20;
 	r_shadow_shadowmapfilterquality = r_shadow_shadowmapping_filterquality.integer;
+	r_shadow_shadowmapshadowsampler = r_shadow_shadowmapping_useshadowsampler.integer != 0;
 	r_shadow_shadowmapdepthbits = r_shadow_shadowmapping_depthbits.integer;
 	r_shadow_shadowmapborder = bound(0, r_shadow_shadowmapping_bordersize.integer, 16);
 	r_shadow_shadowmaplod = -1;
@@ -445,27 +460,29 @@ void R_Shadow_SetShadowMode(void)
 		case RENDERPATH_GL20:
 			if(r_shadow_shadowmapfilterquality < 0)
 			{
-				if(vid.support.amd_texture_texture4 || vid.support.arb_texture_gather)
+				if (!r_fb.usedepthtextures)
+					r_shadow_shadowmappcf = 1;
+				else if(vid.support.amd_texture_texture4 || vid.support.arb_texture_gather)
 					r_shadow_shadowmappcf = 1;
 				else if(strstr(gl_vendor, "NVIDIA") || strstr(gl_renderer, "Radeon HD")) 
 				{
-					r_shadow_shadowmapsampler = vid.support.arb_shadow;
+					r_shadow_shadowmapsampler = vid.support.arb_shadow && r_shadow_shadowmapshadowsampler;
 					r_shadow_shadowmappcf = 1;
 				}
-				else if(strstr(gl_vendor, "ATI")) 
+				else if((strstr(gl_vendor, "ATI") || strstr(gl_vendor, "Advanced Micro Devices")) && !strstr(gl_renderer, "Mesa") && !strstr(gl_version, "Mesa")) 
 					r_shadow_shadowmappcf = 1;
 				else 
-					r_shadow_shadowmapsampler = vid.support.arb_shadow;
+					r_shadow_shadowmapsampler = vid.support.arb_shadow && r_shadow_shadowmapshadowsampler;
 			}
 			else 
 			{
 				switch (r_shadow_shadowmapfilterquality)
 				{
 				case 1:
-					r_shadow_shadowmapsampler = vid.support.arb_shadow;
+					r_shadow_shadowmapsampler = vid.support.arb_shadow && r_shadow_shadowmapshadowsampler;
 					break;
 				case 2:
-					r_shadow_shadowmapsampler = vid.support.arb_shadow;
+					r_shadow_shadowmapsampler = vid.support.arb_shadow && r_shadow_shadowmapshadowsampler;
 					r_shadow_shadowmappcf = 1;
 					break;
 				case 3:
@@ -476,6 +493,8 @@ void R_Shadow_SetShadowMode(void)
 					break;
 				}
 			}
+			if (!r_fb.usedepthtextures)
+				r_shadow_shadowmapsampler = false;
 			r_shadow_shadowmode = R_SHADOW_SHADOWMODE_SHADOWMAP2D;
 			break;
 		case RENDERPATH_D3D9:
@@ -493,6 +512,9 @@ void R_Shadow_SetShadowMode(void)
 			break;
 		}
 	}
+
+	if(R_CompileShader_CheckStaticParms())
+		R_GLSL_Restart_f();
 }
 
 qboolean R_Shadow_ShadowMappingEnabled(void)
@@ -506,7 +528,7 @@ qboolean R_Shadow_ShadowMappingEnabled(void)
 	}
 }
 
-void R_Shadow_FreeShadowMaps(void)
+static void R_Shadow_FreeShadowMaps(void)
 {
 	R_Shadow_SetShadowMode();
 
@@ -514,20 +536,20 @@ void R_Shadow_FreeShadowMaps(void)
 
 	r_shadow_fbo2d = 0;
 
-	if (r_shadow_shadowmap2dtexture)
-		R_FreeTexture(r_shadow_shadowmap2dtexture);
-	r_shadow_shadowmap2dtexture = NULL;
+	if (r_shadow_shadowmap2ddepthtexture)
+		R_FreeTexture(r_shadow_shadowmap2ddepthtexture);
+	r_shadow_shadowmap2ddepthtexture = NULL;
 
-	if (r_shadow_shadowmap2dcolortexture)
-		R_FreeTexture(r_shadow_shadowmap2dcolortexture);
-	r_shadow_shadowmap2dcolortexture = NULL;
+	if (r_shadow_shadowmap2ddepthbuffer)
+		R_FreeTexture(r_shadow_shadowmap2ddepthbuffer);
+	r_shadow_shadowmap2ddepthbuffer = NULL;
 
 	if (r_shadow_shadowmapvsdcttexture)
 		R_FreeTexture(r_shadow_shadowmapvsdcttexture);
 	r_shadow_shadowmapvsdcttexture = NULL;
 }
 
-void r_shadow_start(void)
+static void r_shadow_start(void)
 {
 	// allocate vertex processing arrays
 	r_shadow_bouncegridpixels = NULL;
@@ -539,8 +561,8 @@ void r_shadow_start(void)
 	r_shadow_attenuation2dtexture = NULL;
 	r_shadow_attenuation3dtexture = NULL;
 	r_shadow_shadowmode = R_SHADOW_SHADOWMODE_STENCIL;
-	r_shadow_shadowmap2dtexture = NULL;
-	r_shadow_shadowmap2dcolortexture = NULL;
+	r_shadow_shadowmap2ddepthtexture = NULL;
+	r_shadow_shadowmap2ddepthbuffer = NULL;
 	r_shadow_shadowmapvsdcttexture = NULL;
 	r_shadow_shadowmapmaxsize = 0;
 	r_shadow_shadowmapsize = 0;
@@ -593,7 +615,7 @@ void r_shadow_start(void)
 }
 
 static void R_Shadow_FreeDeferred(void);
-void r_shadow_shutdown(void)
+static void r_shadow_shutdown(void)
 {
 	CHECKGLERROR
 	R_Shadow_UncompileWorldLights();
@@ -676,7 +698,7 @@ void r_shadow_shutdown(void)
 		Mem_Free(r_shadow_buffer_lighttrispvs);
 }
 
-void r_shadow_newmap(void)
+static void r_shadow_newmap(void)
 {
 	if (r_shadow_bouncegridtexture) R_FreeTexture(r_shadow_bouncegridtexture);r_shadow_bouncegridtexture = NULL;
 	if (r_shadow_lightcorona)                 R_SkinFrame_MarkUsed(r_shadow_lightcorona);
@@ -698,8 +720,6 @@ void R_Shadow_Init(void)
 	Cvar_RegisterVariable(&r_shadow_usenormalmap);
 	Cvar_RegisterVariable(&r_shadow_debuglight);
 	Cvar_RegisterVariable(&r_shadow_deferred);
-	Cvar_RegisterVariable(&r_shadow_deferred_8bitrange);
-//	Cvar_RegisterVariable(&r_shadow_deferred_fp);
 	Cvar_RegisterVariable(&r_shadow_gloss);
 	Cvar_RegisterVariable(&r_shadow_gloss2intensity);
 	Cvar_RegisterVariable(&r_shadow_glossintensity);
@@ -727,6 +747,7 @@ void R_Shadow_Init(void)
 	Cvar_RegisterVariable(&r_shadow_shadowmapping);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_vsdct);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_filterquality);
+	Cvar_RegisterVariable(&r_shadow_shadowmapping_useshadowsampler);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_depthbits);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_precision);
 	Cvar_RegisterVariable(&r_shadow_shadowmapping_maxsize);
@@ -743,8 +764,6 @@ void R_Shadow_Init(void)
 	Cvar_RegisterVariable(&r_shadow_polygonoffset);
 	Cvar_RegisterVariable(&r_shadow_texture3d);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid);
-	Cvar_RegisterVariable(&r_shadow_bouncegrid_airstepmax);
-	Cvar_RegisterVariable(&r_shadow_bouncegrid_airstepsize);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_bounceanglediffuse);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_directionalshading);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_dlightparticlemultiplier);
@@ -756,12 +775,12 @@ void R_Shadow_Init(void)
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_particlebounceintensity);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_particleintensity);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_photons);
-	Cvar_RegisterVariable(&r_shadow_bouncegrid_spacingx);
-	Cvar_RegisterVariable(&r_shadow_bouncegrid_spacingy);
-	Cvar_RegisterVariable(&r_shadow_bouncegrid_spacingz);
+	Cvar_RegisterVariable(&r_shadow_bouncegrid_spacing);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_stablerandom);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_static);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_static_directionalshading);
+	Cvar_RegisterVariable(&r_shadow_bouncegrid_static_lightradiusscale);
+	Cvar_RegisterVariable(&r_shadow_bouncegrid_static_maxbounce);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_static_photons);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_updateinterval);
 	Cvar_RegisterVariable(&r_shadow_bouncegrid_x);
@@ -825,7 +844,7 @@ matrix4x4_t matrix_attenuationz =
 	}
 };
 
-void R_Shadow_ResizeShadowArrays(int numvertices, int numtriangles, int vertscale, int triscale)
+static void R_Shadow_ResizeShadowArrays(int numvertices, int numtriangles, int vertscale, int triscale)
 {
 	numvertices = ((numvertices + 255) & ~255) * vertscale;
 	numtriangles = ((numtriangles + 255) & ~255) * triscale;
@@ -1300,7 +1319,7 @@ void R_Shadow_MarkVolumeFromBox(int firsttriangle, int numtris, const float *inv
 	}
 }
 
-qboolean R_Shadow_UseZPass(vec3_t mins, vec3_t maxs)
+static qboolean R_Shadow_UseZPass(vec3_t mins, vec3_t maxs)
 {
 #if 1
 	return false;
@@ -1455,7 +1474,7 @@ int R_Shadow_CalcTriangleSideMask(const vec3_t p1, const vec3_t p2, const vec3_t
 	return mask;
 }
 
-int R_Shadow_CalcBBoxSideMask(const vec3_t mins, const vec3_t maxs, const matrix4x4_t *worldtolight, const matrix4x4_t *radiustolight, float bias)
+static int R_Shadow_CalcBBoxSideMask(const vec3_t mins, const vec3_t maxs, const matrix4x4_t *worldtolight, const matrix4x4_t *radiustolight, float bias)
 {
 	vec3_t center, radius, lightcenter, lightradius, pmin, pmax;
 	float dp1, dn1, ap1, an1, dp2, dn2, ap2, an2;
@@ -1524,18 +1543,19 @@ int R_Shadow_CalcSphereSideMask(const vec3_t p, float radius, float bias)
     return mask;
 }
 
-int R_Shadow_CullFrustumSides(rtlight_t *rtlight, float size, float border)
+static int R_Shadow_CullFrustumSides(rtlight_t *rtlight, float size, float border)
 {
 	int i;
-	vec3_t p, n;
+	vec3_t o, p, n;
 	int sides = 0x3F, masks[6] = { 3<<4, 3<<4, 3<<0, 3<<0, 3<<2, 3<<2 };
 	float scale = (size - 2*border)/size, len;
 	float bias = border / (float)(size - border), dp, dn, ap, an;
 	// check if cone enclosing side would cross frustum plane 
 	scale = 2 / (scale*scale + 2);
+	Matrix4x4_OriginFromMatrix(&rtlight->matrix_lighttoworld, o);
 	for (i = 0;i < 5;i++)
 	{
-		if (PlaneDiff(rtlight->shadoworigin, &r_refdef.view.frustum[i]) > -0.03125)
+		if (PlaneDiff(o, &r_refdef.view.frustum[i]) > -0.03125)
 			continue;
 		Matrix4x4_Transform3x3(&rtlight->matrix_worldtolight, r_refdef.view.frustum[i].normal, n);
 		len = scale*VectorLength2(n);
@@ -1543,10 +1563,10 @@ int R_Shadow_CullFrustumSides(rtlight_t *rtlight, float size, float border)
 		if(n[1]*n[1] > len) sides &= n[1] < 0 ? ~(1<<2) : ~(2 << 2);
 		if(n[2]*n[2] > len) sides &= n[2] < 0 ? ~(1<<4) : ~(2 << 4);
 	}
-	if (PlaneDiff(rtlight->shadoworigin, &r_refdef.view.frustum[4]) >= r_refdef.farclip - r_refdef.nearclip + 0.03125)
+	if (PlaneDiff(o, &r_refdef.view.frustum[4]) >= r_refdef.farclip - r_refdef.nearclip + 0.03125)
 	{
         Matrix4x4_Transform3x3(&rtlight->matrix_worldtolight, r_refdef.view.frustum[4].normal, n);
-        len = scale*VectorLength(n);
+        len = scale*VectorLength2(n);
 		if(n[0]*n[0] > len) sides &= n[0] >= 0 ? ~(1<<0) : ~(2 << 0);
 		if(n[1]*n[1] > len) sides &= n[1] >= 0 ? ~(1<<2) : ~(2 << 2);
 		if(n[2]*n[2] > len) sides &= n[2] >= 0 ? ~(1<<4) : ~(2 << 4);
@@ -1958,7 +1978,7 @@ void R_Shadow_RenderMode_Begin(void)
 	GL_DepthMask(false);
 	GL_Color(0, 0, 0, 1);
 	GL_Scissor(r_refdef.view.viewport.x, r_refdef.view.viewport.y, r_refdef.view.viewport.width, r_refdef.view.viewport.height);
-
+	
 	r_shadow_rendermode = R_SHADOW_RENDERMODE_NONE;
 
 	if (gl_ext_separatestencil.integer && vid.support.ati_separate_stencil)
@@ -2019,10 +2039,10 @@ void R_Shadow_RenderMode_ActiveLight(const rtlight_t *rtlight)
 
 void R_Shadow_RenderMode_Reset(void)
 {
-	R_Mesh_SetMainRenderTargets();
+	R_Mesh_ResetTextureState();
+	R_Mesh_SetRenderTargets(r_shadow_fb_fbo, r_shadow_fb_depthtexture, r_shadow_fb_colortexture, NULL, NULL, NULL);
 	R_SetViewport(&r_refdef.view.viewport);
 	GL_Scissor(r_shadow_lightscissor[0], r_shadow_lightscissor[1], r_shadow_lightscissor[2], r_shadow_lightscissor[3]);
-	R_Mesh_ResetTextureState();
 	GL_DepthRange(0, 1);
 	GL_DepthTest(true);
 	GL_DepthMask(false);
@@ -2034,7 +2054,7 @@ void R_Shadow_RenderMode_Reset(void)
 	GL_Color(1, 1, 1, 1);
 	GL_ColorMask(r_refdef.view.colormask[0], r_refdef.view.colormask[1], r_refdef.view.colormask[2], 1);
 	GL_BlendFunc(GL_ONE, GL_ZERO);
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic_NoTexture(false, false);
 	r_shadow_usingshadowmap2d = false;
 	r_shadow_usingshadowmaportho = false;
 	R_SetStencil(false, 255, GL_KEEP, GL_KEEP, GL_KEEP, GL_ALWAYS, 128, 255);
@@ -2056,7 +2076,7 @@ void R_Shadow_RenderMode_StencilShadowVolumes(qboolean zpass)
 	GL_ColorMask(0, 0, 0, 0);
 	GL_PolygonOffset(r_refdef.shadowpolygonfactor, r_refdef.shadowpolygonoffset);CHECKGLERROR
 	GL_CullFace(GL_NONE);
-	R_SetupShader_DepthOrShadow();
+	R_SetupShader_DepthOrShadow(false, false);
 	r_shadow_rendermode = mode;
 	switch(mode)
 	{
@@ -2098,49 +2118,31 @@ static void R_Shadow_MakeShadowMap(int side, int size)
 	switch (r_shadow_shadowmode)
 	{
 	case R_SHADOW_SHADOWMODE_SHADOWMAP2D:
-		if (r_shadow_shadowmap2dtexture) return;
-		r_shadow_shadowmap2dtexture = R_LoadTextureShadowMap2D(r_shadow_texturepool, "shadowmap", size*2, size*(vid.support.arb_texture_non_power_of_two ? 3 : 4), r_shadow_shadowmapdepthbits, r_shadow_shadowmapsampler);
-		r_shadow_shadowmap2dcolortexture = NULL;
-		switch(vid.renderpath)
+		if (r_shadow_shadowmap2ddepthtexture) return;
+		if (r_fb.usedepthtextures)
 		{
-#ifdef SUPPORTD3D
-		case RENDERPATH_D3D9:
-			r_shadow_shadowmap2dcolortexture = R_LoadTexture2D(r_shadow_texturepool, "shadowmaprendertarget", size*2, size*(vid.support.arb_texture_non_power_of_two ? 3 : 4), NULL, TEXTYPE_BGRA, TEXF_RENDERTARGET | TEXF_FORCENEAREST | TEXF_CLAMP | TEXF_ALPHA, -1, NULL);
-			r_shadow_fbo2d = R_Mesh_CreateFramebufferObject(r_shadow_shadowmap2dtexture, r_shadow_shadowmap2dcolortexture, NULL, NULL, NULL);
-			break;
-#endif
-		default:
-			r_shadow_fbo2d = R_Mesh_CreateFramebufferObject(r_shadow_shadowmap2dtexture, NULL, NULL, NULL, NULL);
-			break;
+			r_shadow_shadowmap2ddepthtexture = R_LoadTextureShadowMap2D(r_shadow_texturepool, "shadowmap", size*2, size*(vid.support.arb_texture_non_power_of_two ? 3 : 4), r_shadow_shadowmapdepthbits >= 24 ? (r_shadow_shadowmapsampler ? TEXTYPE_SHADOWMAP24_COMP : TEXTYPE_SHADOWMAP24_RAW) : (r_shadow_shadowmapsampler ? TEXTYPE_SHADOWMAP16_COMP : TEXTYPE_SHADOWMAP16_RAW), r_shadow_shadowmapsampler);
+			r_shadow_shadowmap2ddepthbuffer = NULL;
+			r_shadow_fbo2d = R_Mesh_CreateFramebufferObject(r_shadow_shadowmap2ddepthtexture, NULL, NULL, NULL, NULL);
+		}
+		else
+		{
+			r_shadow_shadowmap2ddepthtexture = R_LoadTexture2D(r_shadow_texturepool, "shadowmaprendertarget", size*2, size*(vid.support.arb_texture_non_power_of_two ? 3 : 4), NULL, TEXTYPE_COLORBUFFER, TEXF_RENDERTARGET | TEXF_FORCENEAREST | TEXF_CLAMP | TEXF_ALPHA, -1, NULL);
+			r_shadow_shadowmap2ddepthbuffer = R_LoadTextureRenderBuffer(r_shadow_texturepool, "shadowmap", size*2, size*(vid.support.arb_texture_non_power_of_two ? 3 : 4), r_shadow_shadowmapdepthbits >= 24 ? TEXTYPE_DEPTHBUFFER24 : TEXTYPE_DEPTHBUFFER16);
+			r_shadow_fbo2d = R_Mesh_CreateFramebufferObject(r_shadow_shadowmap2ddepthbuffer, r_shadow_shadowmap2ddepthtexture, NULL, NULL, NULL);
 		}
 		break;
 	default:
 		return;
 	}
-
-	// render depth into the fbo, do not render color at all
-	// validate the fbo now
-	if (qglDrawBuffer)
-	{
-		int status;
-		qglDrawBuffer(GL_NONE);CHECKGLERROR
-		qglReadBuffer(GL_NONE);CHECKGLERROR
-		status = qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);CHECKGLERROR
-		if (status != GL_FRAMEBUFFER_COMPLETE_EXT && (r_shadow_shadowmapping.integer || r_shadow_deferred.integer))
-		{
-			Con_Printf("R_Shadow_MakeShadowMap: glCheckFramebufferStatusEXT returned %i\n", status);
-			Cvar_SetValueQuick(&r_shadow_shadowmapping, 0);
-			Cvar_SetValueQuick(&r_shadow_deferred, 0);
-		}
-	}
 }
 
-void R_Shadow_RenderMode_ShadowMap(int side, int clear, int size)
+static void R_Shadow_RenderMode_ShadowMap(int side, int clear, int size)
 {
 	float nearclip, farclip, bias;
 	r_viewport_t viewport;
 	int flipped;
-	GLuint fbo = 0;
+	GLuint fbo2d = 0;
 	float clearcolor[4];
 	nearclip = r_shadow_shadowmapping_nearclip.value / rsurface.rtlight->radius;
 	farclip = 1.0f;
@@ -2158,17 +2160,20 @@ void R_Shadow_RenderMode_ShadowMap(int side, int clear, int size)
 	// complex unrolled cube approach (more flexible)
 	if (r_shadow_shadowmapvsdct && !r_shadow_shadowmapvsdcttexture)
 		R_Shadow_MakeVSDCT();
-	if (!r_shadow_shadowmap2dtexture)
+	if (!r_shadow_shadowmap2ddepthtexture)
 		R_Shadow_MakeShadowMap(side, r_shadow_shadowmapmaxsize);
-	if (r_shadow_shadowmap2dtexture) fbo = r_shadow_fbo2d;
-	r_shadow_shadowmap_texturescale[0] = 1.0f / R_TextureWidth(r_shadow_shadowmap2dtexture);
-	r_shadow_shadowmap_texturescale[1] = 1.0f / R_TextureHeight(r_shadow_shadowmap2dtexture);
+	fbo2d = r_shadow_fbo2d;
+	r_shadow_shadowmap_texturescale[0] = 1.0f / R_TextureWidth(r_shadow_shadowmap2ddepthtexture);
+	r_shadow_shadowmap_texturescale[1] = 1.0f / R_TextureHeight(r_shadow_shadowmap2ddepthtexture);
 	r_shadow_rendermode = R_SHADOW_RENDERMODE_SHADOWMAP2D;
 
 	R_Mesh_ResetTextureState();
 	R_Shadow_RenderMode_Reset();
-	R_Mesh_SetRenderTargets(fbo, r_shadow_shadowmap2dtexture, r_shadow_shadowmap2dcolortexture, NULL, NULL, NULL);
-	R_SetupShader_DepthOrShadow();
+	if (r_shadow_shadowmap2ddepthbuffer)
+		R_Mesh_SetRenderTargets(fbo2d, r_shadow_shadowmap2ddepthbuffer, r_shadow_shadowmap2ddepthtexture, NULL, NULL, NULL);
+	else
+		R_Mesh_SetRenderTargets(fbo2d, r_shadow_shadowmap2ddepthtexture, NULL, NULL, NULL, NULL);
+	R_SetupShader_DepthOrShadow(true, r_shadow_shadowmap2ddepthbuffer != NULL);
 	GL_PolygonOffset(r_shadow_shadowmapping_polygonfactor.value, r_shadow_shadowmapping_polygonoffset.value);
 	GL_DepthMask(true);
 	GL_DepthTest(true);
@@ -2178,6 +2183,17 @@ init_done:
 	flipped = (side & 1) ^ (side >> 2);
 	r_refdef.view.cullface_front = flipped ? r_shadow_cullface_back : r_shadow_cullface_front;
 	r_refdef.view.cullface_back = flipped ? r_shadow_cullface_front : r_shadow_cullface_back;
+	if (r_shadow_shadowmap2ddepthbuffer)
+	{
+		// completely different meaning than in depthtexture approach
+		r_shadow_shadowmap_parameters[1] = 0;
+		r_shadow_shadowmap_parameters[3] = -bias;
+	}
+	Vector4Set(clearcolor, 1,1,1,1);
+	if (r_shadow_shadowmap2ddepthbuffer)
+		GL_ColorMask(1,1,1,1);
+	else
+		GL_ColorMask(0,0,0,0);
 	switch(vid.renderpath)
 	{
 	case RENDERPATH_GL11:
@@ -2196,33 +2212,30 @@ init_done:
 			int y1 = clear & 0x03 ? 0 : (clear & 0xC ? size : 2 * size);
 			int y2 = clear & 0x30 ? 3 * size : (clear & 0xC ? 2 * size : size);
 			GL_Scissor(x1, y1, x2 - x1, y2 - y1);
-			GL_Clear(GL_DEPTH_BUFFER_BIT, NULL, 1.0f, 0);
+			if (clear)
+			{
+				if (r_shadow_shadowmap2ddepthbuffer)
+					GL_Clear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT, clearcolor, 1.0f, 0);
+				else
+					GL_Clear(GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
+			}
 		}
 		GL_Scissor(viewport.x, viewport.y, viewport.width, viewport.height);
 		break;
 	case RENDERPATH_D3D9:
 	case RENDERPATH_D3D10:
 	case RENDERPATH_D3D11:
-		Vector4Set(clearcolor, 1,1,1,1);
-		// completely different meaning than in OpenGL path
-		r_shadow_shadowmap_parameters[1] = 0;
-		r_shadow_shadowmap_parameters[3] = -bias;
 		// we invert the cull mode because we flip the projection matrix
 		// NOTE: this actually does nothing because the DrawShadowMap code sets it to doublesided...
 		GL_CullFace(r_refdef.view.cullface_front);
 		// D3D considers it an error to use a scissor larger than the viewport...  clear just this view
 		GL_Scissor(viewport.x, viewport.y, viewport.width, viewport.height);
-		if (r_shadow_shadowmapsampler)
+		if (clear)
 		{
-			GL_ColorMask(0,0,0,0);
-			if (clear)
-				GL_Clear(GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
-		}
-		else
-		{
-			GL_ColorMask(1,1,1,1);
-			if (clear)
+			if (r_shadow_shadowmap2ddepthbuffer)
 				GL_Clear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT, clearcolor, 1.0f, 0);
+			else
+				GL_Clear(GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
 		}
 		break;
 	}
@@ -2231,7 +2244,6 @@ init_done:
 void R_Shadow_RenderMode_Lighting(qboolean stenciltest, qboolean transparent, qboolean shadowmapping)
 {
 	R_Mesh_ResetTextureState();
-	R_Mesh_SetMainRenderTargets();
 	if (transparent)
 	{
 		r_shadow_lightscissor[0] = r_refdef.view.viewport.x;
@@ -2292,9 +2304,9 @@ void R_Shadow_RenderMode_DrawDeferredLight(qboolean stenciltest, qboolean shadow
 	// stencil is 128 (values other than this mean shadow)
 	R_SetStencil(stenciltest, 255, GL_KEEP, GL_KEEP, GL_KEEP, GL_EQUAL, 128, 255);
 	if (rsurface.rtlight->specularscale > 0 && r_shadow_gloss.integer > 0)
-		R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusespecularfbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
+		R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusespecularfbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
 	else
-		R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusefbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, NULL, NULL, NULL);
+		R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusefbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, NULL, NULL, NULL);
 
 	r_shadow_usingshadowmap2d = shadowmapping;
 
@@ -2313,7 +2325,7 @@ void R_Shadow_RenderMode_DrawDeferredLight(qboolean stenciltest, qboolean shadow
 	R_Mesh_Draw(0, 8, 0, 12, NULL, NULL, 0, bboxelements, NULL, 0);
 }
 
-static void R_Shadow_UpdateBounceGridTexture(void)
+void R_Shadow_UpdateBounceGridTexture(void)
 {
 #define MAXBOUNCEGRIDPARTICLESPERLIGHT 1048576
 	dlight_t *light;
@@ -2353,6 +2365,7 @@ static void R_Shadow_UpdateBounceGridTexture(void)
 	vec3_t lightcolor;
 	vec3_t steppos;
 	vec3_t stepdelta;
+	vec3_t cullmins, cullmaxs;
 	vec_t radius;
 	vec_t s;
 	vec_t lightintensity;
@@ -2444,21 +2457,19 @@ static void R_Shadow_UpdateBounceGridTexture(void)
 	// build up a complete collection of the desired settings, so that memcmp can be used to compare parameters
 	memset(&settings, 0, sizeof(settings));
 	settings.staticmode                    = r_shadow_bouncegrid_static.integer != 0;
-	settings.airstepmax                    = bound(1, r_shadow_bouncegrid_airstepmax.integer, 1048576);
-	settings.airstepsize                   = bound(1.0f, r_shadow_bouncegrid_airstepsize.value, 1024.0f);
 	settings.bounceanglediffuse            = r_shadow_bouncegrid_bounceanglediffuse.integer != 0;
 	settings.directionalshading            = (r_shadow_bouncegrid_static.integer != 0 ? r_shadow_bouncegrid_static_directionalshading.integer != 0 : r_shadow_bouncegrid_directionalshading.integer != 0) && allowdirectionalshading;
 	settings.dlightparticlemultiplier      = r_shadow_bouncegrid_dlightparticlemultiplier.value;
 	settings.hitmodels                     = r_shadow_bouncegrid_hitmodels.integer != 0;
-	settings.includedirectlighting         = r_shadow_bouncegrid_includedirectlighting.integer != 0;
-	settings.lightradiusscale              = r_shadow_bouncegrid_lightradiusscale.value;
-	settings.maxbounce                     = r_shadow_bouncegrid_maxbounce.integer;
+	settings.includedirectlighting         = r_shadow_bouncegrid_includedirectlighting.integer != 0 || r_shadow_bouncegrid.integer == 2;
+	settings.lightradiusscale              = (r_shadow_bouncegrid_static.integer != 0 ? r_shadow_bouncegrid_static_lightradiusscale.value : r_shadow_bouncegrid_lightradiusscale.value);
+	settings.maxbounce                     = (r_shadow_bouncegrid_static.integer != 0 ? r_shadow_bouncegrid_static_maxbounce.integer : r_shadow_bouncegrid_maxbounce.integer);
 	settings.particlebounceintensity       = r_shadow_bouncegrid_particlebounceintensity.value;
-	settings.particleintensity             = r_shadow_bouncegrid_particleintensity.value;
+	settings.particleintensity             = r_shadow_bouncegrid_particleintensity.value * 16384.0f * (settings.directionalshading ? 4.0f : 1.0f) / (r_shadow_bouncegrid_spacing.value * r_shadow_bouncegrid_spacing.value);
 	settings.photons                       = r_shadow_bouncegrid_static.integer ? r_shadow_bouncegrid_static_photons.integer : r_shadow_bouncegrid_photons.integer;
-	settings.spacing[0]                    = r_shadow_bouncegrid_spacingx.value;
-	settings.spacing[1]                    = r_shadow_bouncegrid_spacingy.value;
-	settings.spacing[2]                    = r_shadow_bouncegrid_spacingz.value;
+	settings.spacing[0]                    = r_shadow_bouncegrid_spacing.value;
+	settings.spacing[1]                    = r_shadow_bouncegrid_spacing.value;
+	settings.spacing[2]                    = r_shadow_bouncegrid_spacing.value;
 	settings.stablerandom                  = r_shadow_bouncegrid_stablerandom.integer;
 
 	// bound the values for sanity
@@ -2600,95 +2611,89 @@ static void R_Shadow_UpdateBounceGridTexture(void)
 	photoncount = 0;
 	for (lightindex = 0;lightindex < range2;lightindex++)
 	{
-		if (settings.staticmode)
+		if (lightindex < range)
 		{
 			light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-			if (!light || !(light->flags & flag))
+			if (!light)
 				continue;
 			rtlight = &light->rtlight;
-			// when static, we skip styled lights because they tend to change...
-			if (rtlight->style > 0)
+			VectorClear(rtlight->photoncolor);
+			rtlight->photons = 0;
+			if (!(light->flags & flag))
 				continue;
-			VectorScale(rtlight->color, (rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale) * (rtlight->style >= 0 ? r_refdef.scene.rtlightstylevalue[rtlight->style] : 1), lightcolor);
+			if (settings.staticmode)
+			{
+				// when static, we skip styled lights because they tend to change...
+				if (rtlight->style > 0 && r_shadow_bouncegrid.integer != 2)
+					continue;
+			}
 		}
 		else
 		{
-			if (lightindex < range)
-			{
-				light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-				rtlight = &light->rtlight;
-			}
-			else
-				rtlight = r_refdef.scene.lights[lightindex - range];
-			// draw only visible lights (major speedup)
-			if (!rtlight->draw)
-				continue;
-			VectorScale(rtlight->currentcolor, rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale, lightcolor);
+			rtlight = r_refdef.scene.lights[lightindex - range];
+			VectorClear(rtlight->photoncolor);
+			rtlight->photons = 0;
 		}
-		if (!VectorLength2(lightcolor))
+		// draw only visible lights (major speedup)
+		radius = rtlight->radius * settings.lightradiusscale;
+		cullmins[0] = rtlight->shadoworigin[0] - radius;
+		cullmins[1] = rtlight->shadoworigin[1] - radius;
+		cullmins[2] = rtlight->shadoworigin[2] - radius;
+		cullmaxs[0] = rtlight->shadoworigin[0] + radius;
+		cullmaxs[1] = rtlight->shadoworigin[1] + radius;
+		cullmaxs[2] = rtlight->shadoworigin[2] + radius;
+		if (R_CullBox(cullmins, cullmaxs))
 			continue;
+		if (r_refdef.scene.worldmodel
+		 && r_refdef.scene.worldmodel->brush.BoxTouchingVisibleLeafs
+		 && !r_refdef.scene.worldmodel->brush.BoxTouchingVisibleLeafs(r_refdef.scene.worldmodel, r_refdef.viewcache.world_leafvisible, cullmins, cullmaxs))
+			continue;
+		w = r_shadow_lightintensityscale.value * (rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale);
+		if (w * VectorLength2(rtlight->color) == 0.0f)
+			continue;
+		w *= (rtlight->style >= 0 ? r_refdef.scene.rtlightstylevalue[rtlight->style] : 1);
+		VectorScale(rtlight->color, w, rtlight->photoncolor);
+		//if (!VectorLength2(rtlight->photoncolor))
+		//	continue;
 		// shoot particles from this light
 		// use a calculation for the number of particles that will not
 		// vary with lightstyle, otherwise we get randomized particle
 		// distribution, the seeded random is only consistent for a
 		// consistent number of particles on this light...
-		radius = rtlight->radius * settings.lightradiusscale;
 		s = rtlight->radius;
 		lightintensity = VectorLength(rtlight->color) * (rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale);
 		if (lightindex >= range)
 			lightintensity *= settings.dlightparticlemultiplier;
-		photoncount += max(0.0f, lightintensity * s * s);
+		rtlight->photons = max(0.0f, lightintensity * s * s);
+		photoncount += rtlight->photons;
 	}
 	photonscaling = (float)settings.photons / max(1, photoncount);
 	photonresidual = 0.0f;
 	for (lightindex = 0;lightindex < range2;lightindex++)
 	{
-		if (settings.staticmode)
+		if (lightindex < range)
 		{
 			light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-			if (!light || !(light->flags & flag))
+			if (!light)
 				continue;
 			rtlight = &light->rtlight;
-			// when static, we skip styled lights because they tend to change...
-			if (rtlight->style > 0)
-				continue;
-			VectorScale(rtlight->color, (rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale) * (rtlight->style >= 0 ? r_refdef.scene.rtlightstylevalue[rtlight->style] : 1), lightcolor);
 		}
 		else
-		{
-			if (lightindex < range)
-			{
-				light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-				rtlight = &light->rtlight;
-			}
-			else
-				rtlight = r_refdef.scene.lights[lightindex - range];
-			// draw only visible lights (major speedup)
-			if (!rtlight->draw)
-				continue;
-			VectorScale(rtlight->currentcolor, rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale, lightcolor);
-		}
-		if (!VectorLength2(lightcolor))
+			rtlight = r_refdef.scene.lights[lightindex - range];
+		// skip a light with no photons
+		if (rtlight->photons == 0.0f)
 			continue;
-		// shoot particles from this light
-		// use a calculation for the number of particles that will not
-		// vary with lightstyle, otherwise we get randomized particle
-		// distribution, the seeded random is only consistent for a
-		// consistent number of particles on this light...
-		radius = rtlight->radius * settings.lightradiusscale;
-		s = rtlight->radius;
-		lightintensity = VectorLength(rtlight->color) * (rtlight->ambientscale + rtlight->diffusescale + rtlight->specularscale);
-		if (lightindex >= range)
-			lightintensity *= settings.dlightparticlemultiplier;
-		photonresidual += lightintensity * s * s * photonscaling;
+		// skip a light with no photon color)
+		if (VectorLength2(rtlight->photoncolor) == 0.0f)
+			continue;
+		photonresidual += rtlight->photons * photonscaling;
 		shootparticles = (int)bound(0, photonresidual, MAXBOUNCEGRIDPARTICLESPERLIGHT);
 		if (!shootparticles)
 			continue;
 		photonresidual -= shootparticles;
+		radius = rtlight->radius * settings.lightradiusscale;
 		s = settings.particleintensity / shootparticles;
-		VectorScale(lightcolor, s, baseshotcolor);
-		if (VectorLength2(baseshotcolor) == 0.0f)
-			break;
+		VectorScale(rtlight->photoncolor, s, baseshotcolor);
 		r_refdef.stats.bouncegrid_lights++;
 		r_refdef.stats.bouncegrid_particles += shootparticles;
 		for (shotparticles = 0;shotparticles < shootparticles;shotparticles++)
@@ -2708,9 +2713,15 @@ static void R_Shadow_UpdateBounceGridTexture(void)
 				//r_refdef.scene.worldmodel->TraceLineAgainstSurfaces(r_refdef.scene.worldmodel, NULL, NULL, &cliptrace, clipstart, clipend, hitsupercontentsmask);
 				//r_refdef.scene.worldmodel->TraceLine(r_refdef.scene.worldmodel, NULL, NULL, &cliptrace2, clipstart, clipend, hitsupercontentsmask);
 				if (settings.staticmode)
-					Collision_ClipLineToWorld(&cliptrace, cl.worldmodel, clipstart, clipend, hitsupercontentsmask, true);
+				{
+					// static mode fires a LOT of rays but none of them are identical, so they are not cached
+					cliptrace = CL_TraceLine(clipstart, clipend, settings.staticmode ? MOVE_WORLDONLY : (settings.hitmodels ? MOVE_HITMODEL : MOVE_NOMONSTERS), NULL, hitsupercontentsmask, true, false, NULL, true, true);
+				}
 				else
-					cliptrace = CL_TraceLine(clipstart, clipend, settings.hitmodels ? MOVE_HITMODEL : MOVE_NOMONSTERS, NULL, hitsupercontentsmask, true, false, NULL, true, true);
+				{
+					// dynamic mode fires many rays and most will match the cache from the previous frame
+					cliptrace = CL_Cache_TraceLineSurfaces(clipstart, clipend, settings.staticmode ? MOVE_WORLDONLY : (settings.hitmodels ? MOVE_HITMODEL : MOVE_NOMONSTERS), hitsupercontentsmask);
+				}
 				if (bouncecount > 0 || settings.includedirectlighting)
 				{
 					// calculate second order spherical harmonics values (average, slopeX, slopeY, slopeZ)
@@ -2757,20 +2768,18 @@ static void R_Shadow_UpdateBounceGridTexture(void)
 					}
 					// calculate the number of steps we need to traverse this distance
 					VectorSubtract(cliptrace.endpos, clipstart, stepdelta);
-					numsteps = (int)(VectorLength(stepdelta) / settings.airstepsize);
-					numsteps = bound(1, numsteps, settings.airstepmax);
+					numsteps = (int)(VectorLength(stepdelta) * ispacing[0]);
+					numsteps = bound(1, numsteps, 1024);
 					w = 1.0f / numsteps;
 					VectorScale(stepdelta, w, stepdelta);
 					VectorMA(clipstart, 0.5f, stepdelta, steppos);
-					if (settings.airstepmax == 1)
-						VectorCopy(cliptrace.endpos, steppos);
 					for (step = 0;step < numsteps;step++)
 					{
 						r_refdef.stats.bouncegrid_splats++;
 						// figure out which texture pixel this is in
-						texlerp[1][0] = ((steppos[0] - mins[0]) * ispacing[0]);
-						texlerp[1][1] = ((steppos[1] - mins[1]) * ispacing[1]);
-						texlerp[1][2] = ((steppos[2] - mins[2]) * ispacing[2]);
+						texlerp[1][0] = ((steppos[0] - mins[0]) * ispacing[0]) - 0.5f;
+						texlerp[1][1] = ((steppos[1] - mins[1]) * ispacing[1]) - 0.5f;
+						texlerp[1][2] = ((steppos[2] - mins[2]) * ispacing[2]) - 0.5f;
 						tex[0] = (int)floor(texlerp[1][0]);
 						tex[1] = (int)floor(texlerp[1][1]);
 						tex[2] = (int)floor(texlerp[1][2]);
@@ -2968,7 +2977,7 @@ int bboxedges[12][2] =
 
 qboolean R_Shadow_ScissorForBBox(const float *mins, const float *maxs)
 {
-	if (!r_shadow_scissor.integer || r_shadow_usingdeferredprepass)
+	if (!r_shadow_scissor.integer || r_shadow_usingdeferredprepass || r_trippy.integer)
 	{
 		r_shadow_lightscissor[0] = r_refdef.view.viewport.x;
 		r_shadow_lightscissor[1] = r_refdef.view.viewport.y;
@@ -3167,12 +3176,8 @@ static void R_Shadow_RenderLighting_VisibleLighting(int texturenumsurfaces, cons
 static void R_Shadow_RenderLighting_Light_GLSL(int texturenumsurfaces, const msurface_t **texturesurfacelist, const vec3_t lightcolor, float ambientscale, float diffusescale, float specularscale)
 {
 	// ARB2 GLSL shader path (GFFX5200, Radeon 9500)
-	R_SetupShader_Surface(lightcolor, false, ambientscale, diffusescale, specularscale, RSURFPASS_RTLIGHT, texturenumsurfaces, texturesurfacelist, NULL);
-	if (rsurface.texture->currentmaterialflags & MATERIALFLAG_ALPHATEST)
-		GL_DepthFunc(GL_EQUAL);
+	R_SetupShader_Surface(lightcolor, false, ambientscale, diffusescale, specularscale, RSURFPASS_RTLIGHT, texturenumsurfaces, texturesurfacelist, NULL, false);
 	RSurf_DrawBatch();
-	if (rsurface.texture->currentmaterialflags & MATERIALFLAG_ALPHATEST)
-		GL_DepthFunc(GL_LEQUAL);
 }
 
 static void R_Shadow_RenderLighting_Light_Vertex_Pass(int firstvertex, int numvertices, int numtriangles, const int *element3i, vec3_t diffusecolor2, vec3_t ambientcolor2)
@@ -3186,8 +3191,8 @@ static void R_Shadow_RenderLighting_Light_Vertex_Pass(int firstvertex, int numve
 	int *newe;
 	const int *e;
 	float *c;
-	int maxtriangles = 4096;
-	static int newelements[4096*3];
+	int maxtriangles = 1024;
+	int newelements[1024*3];
 	R_Shadow_RenderLighting_Light_Vertex_Shading(firstvertex, numvertices, diffusecolor2, ambientcolor2);
 	for (renders = 0;renders < 4;renders++)
 	{
@@ -3340,8 +3345,8 @@ void R_Shadow_RenderLighting(int texturenumsurfaces, const msurface_t **textures
 	qboolean negated;
 	float lightcolor[3];
 	VectorCopy(rsurface.rtlight->currentcolor, lightcolor);
-	ambientscale = rsurface.rtlight->ambientscale;
-	diffusescale = rsurface.rtlight->diffusescale;
+	ambientscale = rsurface.rtlight->ambientscale + rsurface.texture->rtlightambient;
+	diffusescale = rsurface.rtlight->diffusescale * max(0, 1.0 - rsurface.texture->rtlightambient);
 	specularscale = rsurface.rtlight->specularscale * rsurface.texture->specularscale;
 	if (!r_shadow_usenormalmap.integer)
 	{
@@ -3355,30 +3360,7 @@ void R_Shadow_RenderLighting(int texturenumsurfaces, const msurface_t **textures
 	if(negated)
 	{
 		VectorNegate(lightcolor, lightcolor);
-		switch(vid.renderpath)
-		{
-		case RENDERPATH_GL11:
-		case RENDERPATH_GL13:
-		case RENDERPATH_GL20:
-		case RENDERPATH_GLES1:
-		case RENDERPATH_GLES2:
-			qglBlendEquationEXT(GL_FUNC_REVERSE_SUBTRACT_EXT);
-			break;
-		case RENDERPATH_D3D9:
-#ifdef SUPPORTD3D
-			IDirect3DDevice9_SetRenderState(vid_d3d9dev, D3DRS_BLENDOP, D3DBLENDOP_SUBTRACT);
-#endif
-			break;
-		case RENDERPATH_D3D10:
-			Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-			break;
-		case RENDERPATH_D3D11:
-			Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-			break;
-		case RENDERPATH_SOFT:
-			DPSOFTRAST_BlendSubtract(true);
-			break;
-		}
+		GL_BlendEquationSubtract(true);
 	}
 	RSurf_SetupDepthAndCulling();
 	switch (r_shadow_rendermode)
@@ -3401,32 +3383,7 @@ void R_Shadow_RenderLighting(int texturenumsurfaces, const msurface_t **textures
 		break;
 	}
 	if(negated)
-	{
-		switch(vid.renderpath)
-		{
-		case RENDERPATH_GL11:
-		case RENDERPATH_GL13:
-		case RENDERPATH_GL20:
-		case RENDERPATH_GLES1:
-		case RENDERPATH_GLES2:
-			qglBlendEquationEXT(GL_FUNC_ADD_EXT);
-			break;
-		case RENDERPATH_D3D9:
-#ifdef SUPPORTD3D
-			IDirect3DDevice9_SetRenderState(vid_d3d9dev, D3DRS_BLENDOP, D3DBLENDOP_ADD);
-#endif
-			break;
-		case RENDERPATH_D3D10:
-			Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-			break;
-		case RENDERPATH_D3D11:
-			Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-			break;
-		case RENDERPATH_SOFT:
-			DPSOFTRAST_BlendSubtract(false);
-			break;
-		}
-	}
+		GL_BlendEquationSubtract(false);
 }
 
 void R_RTLight_Update(rtlight_t *rtlight, int isstatic, matrix4x4_t *matrix, vec3_t color, int style, const char *cubemapname, int shadow, vec_t corona, vec_t coronasizescale, vec_t ambientscale, vec_t diffusescale, vec_t specularscale, int flags)
@@ -3623,7 +3580,7 @@ void R_Shadow_UncompileWorldLights(void)
 	}
 }
 
-void R_Shadow_ComputeShadowCasterCullingPlanes(rtlight_t *rtlight)
+static void R_Shadow_ComputeShadowCasterCullingPlanes(rtlight_t *rtlight)
 {
 	int i, j;
 	mplane_t plane;
@@ -3631,6 +3588,9 @@ void R_Shadow_ComputeShadowCasterCullingPlanes(rtlight_t *rtlight)
 	// see rtlight->cached_frustumplanes definition for how much this array
 	// can hold
 	rtlight->cached_numfrustumplanes = 0;
+
+	if (r_trippy.integer)
+		return;
 
 	// haven't implemented a culling path for ortho rendering
 	if (!r_refdef.view.useperspective)
@@ -3789,7 +3749,7 @@ void R_Shadow_ComputeShadowCasterCullingPlanes(rtlight_t *rtlight)
 #endif
 }
 
-void R_Shadow_DrawWorldShadow_ShadowMap(int numsurfaces, int *surfacelist, const unsigned char *trispvs, const unsigned char *surfacesides)
+static void R_Shadow_DrawWorldShadow_ShadowMap(int numsurfaces, int *surfacelist, const unsigned char *trispvs, const unsigned char *surfacesides)
 {
 	shadowmesh_t *mesh;
 
@@ -3819,7 +3779,7 @@ void R_Shadow_DrawWorldShadow_ShadowMap(int numsurfaces, int *surfacelist, const
 	rsurface.entity = NULL; // used only by R_GetCurrentTexture and RSurf_ActiveWorldEntity/RSurf_ActiveModelEntity
 }
 
-void R_Shadow_DrawWorldShadow_ShadowVolume(int numsurfaces, int *surfacelist, const unsigned char *trispvs)
+static void R_Shadow_DrawWorldShadow_ShadowVolume(int numsurfaces, int *surfacelist, const unsigned char *trispvs)
 {
 	qboolean zpass = false;
 	shadowmesh_t *mesh;
@@ -3894,7 +3854,7 @@ void R_Shadow_DrawWorldShadow_ShadowVolume(int numsurfaces, int *surfacelist, co
 	rsurface.entity = NULL; // used only by R_GetCurrentTexture and RSurf_ActiveWorldEntity/RSurf_ActiveModelEntity
 }
 
-void R_Shadow_DrawEntityShadow(entity_render_t *ent)
+static void R_Shadow_DrawEntityShadow(entity_render_t *ent)
 {
 	vec3_t relativeshadoworigin, relativeshadowmins, relativeshadowmaxs;
 	vec_t relativeshadowradius;
@@ -3930,7 +3890,7 @@ void R_Shadow_SetupEntityLight(const entity_render_t *ent)
 	Matrix4x4_Transform(&ent->inversematrix, rsurface.rtlight->shadoworigin, rsurface.entitylightorigin);
 }
 
-void R_Shadow_DrawWorldLight(int numsurfaces, int *surfacelist, const unsigned char *lighttrispvs)
+static void R_Shadow_DrawWorldLight(int numsurfaces, int *surfacelist, const unsigned char *lighttrispvs)
 {
 	if (!r_refdef.scene.worldmodel->DrawLight)
 		return;
@@ -3947,7 +3907,7 @@ void R_Shadow_DrawWorldLight(int numsurfaces, int *surfacelist, const unsigned c
 	rsurface.entity = NULL; // used only by R_GetCurrentTexture and RSurf_ActiveWorldEntity/RSurf_ActiveModelEntity
 }
 
-void R_Shadow_DrawEntityLight(entity_render_t *ent)
+static void R_Shadow_DrawEntityLight(entity_render_t *ent)
 {
 	dp_model_t *model = ent->model;
 	if (!model->DrawLight)
@@ -3960,7 +3920,7 @@ void R_Shadow_DrawEntityLight(entity_render_t *ent)
 	rsurface.entity = NULL; // used only by R_GetCurrentTexture and RSurf_ActiveWorldEntity/RSurf_ActiveModelEntity
 }
 
-void R_Shadow_PrepareLight(rtlight_t *rtlight)
+static void R_Shadow_PrepareLight(rtlight_t *rtlight)
 {
 	int i;
 	float f;
@@ -3981,6 +3941,18 @@ void R_Shadow_PrepareLight(rtlight_t *rtlight)
 	qboolean nolight;
 
 	rtlight->draw = false;
+	rtlight->cached_numlightentities               = 0;
+	rtlight->cached_numlightentities_noselfshadow  = 0;
+	rtlight->cached_numshadowentities              = 0;
+	rtlight->cached_numshadowentities_noselfshadow = 0;
+	rtlight->cached_numsurfaces                    = 0;
+	rtlight->cached_lightentities                  = NULL;
+	rtlight->cached_lightentities_noselfshadow     = NULL;
+	rtlight->cached_shadowentities                 = NULL;
+	rtlight->cached_shadowentities_noselfshadow    = NULL;
+	rtlight->cached_shadowtrispvs                  = NULL;
+	rtlight->cached_lighttrispvs                   = NULL;
+	rtlight->cached_surfacelist                    = NULL;
 
 	// skip lights that don't light because of ambientscale+diffusescale+specularscale being 0 (corona only lights)
 	// skip lights that are basically invisible (color 0 0 0)
@@ -4027,6 +3999,10 @@ void R_Shadow_PrepareLight(rtlight_t *rtlight)
 	VectorCopy(rtlight->cullmaxs, rtlight->cached_cullmaxs);
 
 	R_Shadow_ComputeShadowCasterCullingPlanes(rtlight);
+
+	// don't allow lights to be drawn if using r_shadow_bouncegrid 2, except if we're using static bouncegrid where dynamic lights still need to draw
+	if (r_shadow_bouncegrid.integer == 2 && (rtlight->isstatic || !r_shadow_bouncegrid_static.integer))
+		return;
 
 	if (rtlight->compiled && r_shadow_realtime_world_compile.integer)
 	{
@@ -4194,7 +4170,7 @@ void R_Shadow_PrepareLight(rtlight_t *rtlight)
 	}
 }
 
-void R_Shadow_DrawLight(rtlight_t *rtlight)
+static void R_Shadow_DrawLight(rtlight_t *rtlight)
 {
 	int i;
 	int numsurfaces;
@@ -4443,13 +4419,9 @@ static void R_Shadow_FreeDeferred(void)
 	R_Mesh_DestroyFramebufferObject(r_shadow_prepasslightingdiffusefbo);
 	r_shadow_prepasslightingdiffusefbo = 0;
 
-	if (r_shadow_prepassgeometrydepthtexture)
-		R_FreeTexture(r_shadow_prepassgeometrydepthtexture);
-	r_shadow_prepassgeometrydepthtexture = NULL;
-
-	if (r_shadow_prepassgeometrydepthcolortexture)
-		R_FreeTexture(r_shadow_prepassgeometrydepthcolortexture);
-	r_shadow_prepassgeometrydepthcolortexture = NULL;
+	if (r_shadow_prepassgeometrydepthbuffer)
+		R_FreeTexture(r_shadow_prepassgeometrydepthbuffer);
+	r_shadow_prepassgeometrydepthbuffer = NULL;
 
 	if (r_shadow_prepassgeometrynormalmaptexture)
 		R_FreeTexture(r_shadow_prepassgeometrynormalmaptexture);
@@ -4481,7 +4453,7 @@ void R_Shadow_DrawPrepass(void)
 	GL_BlendFunc(GL_ONE, GL_ZERO);
 	GL_Color(1,1,1,1);
 	GL_DepthTest(true);
-	R_Mesh_SetRenderTargets(r_shadow_prepassgeometryfbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepassgeometrynormalmaptexture, r_shadow_prepassgeometrydepthcolortexture, NULL, NULL);
+	R_Mesh_SetRenderTargets(r_shadow_prepassgeometryfbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepassgeometrynormalmaptexture, NULL, NULL, NULL);
 	Vector4Set(clearcolor, 0.5f,0.5f,0.5f,1.0f);
 	GL_Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
 	if (r_timereport_active)
@@ -4508,7 +4480,7 @@ void R_Shadow_DrawPrepass(void)
 	GL_ColorMask(1,1,1,1);
 	GL_Color(1,1,1,1);
 	GL_DepthTest(true);
-	R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusespecularfbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
+	R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusespecularfbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
 	Vector4Set(clearcolor, 0, 0, 0, 0);
 	GL_Clear(GL_COLOR_BUFFER_BIT, clearcolor, 1.0f, 0);
 	if (r_timereport_active)
@@ -4539,8 +4511,6 @@ void R_Shadow_DrawPrepass(void)
 			if (r_refdef.scene.lights[lnum]->draw)
 				R_Shadow_DrawLight(r_refdef.scene.lights[lnum]);
 
-	R_Mesh_SetMainRenderTargets();
-
 	R_Shadow_RenderMode_End();
 
 	if (r_timereport_active)
@@ -4548,7 +4518,7 @@ void R_Shadow_DrawPrepass(void)
 }
 
 void R_Shadow_DrawLightSprites(void);
-void R_Shadow_PrepareLights(void)
+void R_Shadow_PrepareLights(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture)
 {
 	int flag;
 	int lnum;
@@ -4556,15 +4526,19 @@ void R_Shadow_PrepareLights(void)
 	dlight_t *light;
 	size_t range;
 	float f;
-	GLenum status;
 
 	if (r_shadow_shadowmapmaxsize != bound(1, r_shadow_shadowmapping_maxsize.integer, (int)vid.maxtexturesize_2d / 4) ||
 		(r_shadow_shadowmode != R_SHADOW_SHADOWMODE_STENCIL) != (r_shadow_shadowmapping.integer || r_shadow_deferred.integer) ||
 		r_shadow_shadowmapvsdct != (r_shadow_shadowmapping_vsdct.integer != 0 && vid.renderpath == RENDERPATH_GL20) || 
 		r_shadow_shadowmapfilterquality != r_shadow_shadowmapping_filterquality.integer || 
+		r_shadow_shadowmapshadowsampler != (vid.support.arb_shadow && r_shadow_shadowmapping_useshadowsampler.integer) || 
 		r_shadow_shadowmapdepthbits != r_shadow_shadowmapping_depthbits.integer || 
 		r_shadow_shadowmapborder != bound(0, r_shadow_shadowmapping_bordersize.integer, 16))
 		R_Shadow_FreeShadowMaps();
+
+	r_shadow_fb_fbo = fbo;
+	r_shadow_fb_depthtexture = depthtexture;
+	r_shadow_fb_colortexture = colortexture;
 
 	r_shadow_usingshadowmaportho = false;
 
@@ -4575,7 +4549,7 @@ void R_Shadow_PrepareLights(void)
 	case RENDERPATH_D3D10:
 	case RENDERPATH_D3D11:
 	case RENDERPATH_SOFT:
-	case RENDERPATH_GLES2:
+#ifndef USE_GLES2
 		if (!r_shadow_deferred.integer || r_shadow_shadowmode == R_SHADOW_SHADOWMODE_STENCIL || !vid.support.ext_framebuffer_object || vid.maxdrawbuffers < 2)
 		{
 			r_shadow_usingdeferredprepass = false;
@@ -4592,78 +4566,36 @@ void R_Shadow_PrepareLights(void)
 			r_shadow_usingdeferredprepass = true;
 			r_shadow_prepass_width = vid.width;
 			r_shadow_prepass_height = vid.height;
-			r_shadow_prepassgeometrydepthtexture = R_LoadTextureShadowMap2D(r_shadow_texturepool, "prepassgeometrydepthmap", vid.width, vid.height, 24, false);
-			switch (vid.renderpath)
-			{
-			case RENDERPATH_D3D9:
-				r_shadow_prepassgeometrydepthcolortexture = R_LoadTexture2D(r_shadow_texturepool, "prepassgeometrydepthcolormap", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
-				break;
-			default:
-				break;
-			}
-			r_shadow_prepassgeometrynormalmaptexture = R_LoadTexture2D(r_shadow_texturepool, "prepassgeometrynormalmap", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
-			r_shadow_prepasslightingdiffusetexture = R_LoadTexture2D(r_shadow_texturepool, "prepasslightingdiffuse", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
-			r_shadow_prepasslightingspeculartexture = R_LoadTexture2D(r_shadow_texturepool, "prepasslightingspecular", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
+			r_shadow_prepassgeometrydepthbuffer = R_LoadTextureRenderBuffer(r_shadow_texturepool, "prepassgeometrydepthbuffer", vid.width, vid.height, TEXTYPE_DEPTHBUFFER24);
+			r_shadow_prepassgeometrynormalmaptexture = R_LoadTexture2D(r_shadow_texturepool, "prepassgeometrynormalmap", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER32F, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
+			r_shadow_prepasslightingdiffusetexture = R_LoadTexture2D(r_shadow_texturepool, "prepasslightingdiffuse", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER16F, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
+			r_shadow_prepasslightingspeculartexture = R_LoadTexture2D(r_shadow_texturepool, "prepasslightingspecular", vid.width, vid.height, NULL, TEXTYPE_COLORBUFFER16F, TEXF_RENDERTARGET | TEXF_CLAMP | TEXF_ALPHA | TEXF_FORCENEAREST, -1, NULL);
 
 			// set up the geometry pass fbo (depth + normalmap)
-			r_shadow_prepassgeometryfbo = R_Mesh_CreateFramebufferObject(r_shadow_prepassgeometrydepthtexture, r_shadow_prepassgeometrynormalmaptexture, NULL, NULL, NULL);
-			R_Mesh_SetRenderTargets(r_shadow_prepassgeometryfbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepassgeometrynormalmaptexture, r_shadow_prepassgeometrydepthcolortexture, NULL, NULL);
-			// render depth into one texture and normalmap into the other
-			if (qglDrawBuffersARB)
-			{
-				qglDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);CHECKGLERROR
-				qglReadBuffer(GL_NONE);CHECKGLERROR
-				status = qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);CHECKGLERROR
-				if (status != GL_FRAMEBUFFER_COMPLETE_EXT)
-				{
-					Con_Printf("R_PrepareRTLights: glCheckFramebufferStatusEXT returned %i\n", status);
-					Cvar_SetValueQuick(&r_shadow_deferred, 0);
-					r_shadow_usingdeferredprepass = false;
-				}
-			}
+			r_shadow_prepassgeometryfbo = R_Mesh_CreateFramebufferObject(r_shadow_prepassgeometrydepthbuffer, r_shadow_prepassgeometrynormalmaptexture, NULL, NULL, NULL);
+			R_Mesh_SetRenderTargets(r_shadow_prepassgeometryfbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepassgeometrynormalmaptexture, NULL, NULL, NULL);
+			// render depth into a renderbuffer and other important properties into the normalmap texture
 
 			// set up the lighting pass fbo (diffuse + specular)
-			r_shadow_prepasslightingdiffusespecularfbo = R_Mesh_CreateFramebufferObject(r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
-			R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusespecularfbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
+			r_shadow_prepasslightingdiffusespecularfbo = R_Mesh_CreateFramebufferObject(r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
+			R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusespecularfbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, r_shadow_prepasslightingspeculartexture, NULL, NULL);
 			// render diffuse into one texture and specular into another,
 			// with depth and normalmap bound as textures,
 			// with depth bound as attachment as well
-			if (qglDrawBuffersARB)
-			{
-				qglDrawBuffersARB(2, r_shadow_prepasslightingdrawbuffers);CHECKGLERROR
-				qglReadBuffer(GL_NONE);CHECKGLERROR
-				status = qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);CHECKGLERROR
-				if (status != GL_FRAMEBUFFER_COMPLETE_EXT)
-				{
-					Con_Printf("R_PrepareRTLights: glCheckFramebufferStatusEXT returned %i\n", status);
-					Cvar_SetValueQuick(&r_shadow_deferred, 0);
-					r_shadow_usingdeferredprepass = false;
-				}
-			}
 
 			// set up the lighting pass fbo (diffuse)
-			r_shadow_prepasslightingdiffusefbo = R_Mesh_CreateFramebufferObject(r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, NULL, NULL, NULL);
-			R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusefbo, r_shadow_prepassgeometrydepthtexture, r_shadow_prepasslightingdiffusetexture, NULL, NULL, NULL);
+			r_shadow_prepasslightingdiffusefbo = R_Mesh_CreateFramebufferObject(r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, NULL, NULL, NULL);
+			R_Mesh_SetRenderTargets(r_shadow_prepasslightingdiffusefbo, r_shadow_prepassgeometrydepthbuffer, r_shadow_prepasslightingdiffusetexture, NULL, NULL, NULL);
 			// render diffuse into one texture,
 			// with depth and normalmap bound as textures,
 			// with depth bound as attachment as well
-			if (qglDrawBuffersARB)
-			{
-				qglDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);CHECKGLERROR
-				qglReadBuffer(GL_NONE);CHECKGLERROR
-				status = qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);CHECKGLERROR
-				if (status != GL_FRAMEBUFFER_COMPLETE_EXT)
-				{
-					Con_Printf("R_PrepareRTLights: glCheckFramebufferStatusEXT returned %i\n", status);
-					Cvar_SetValueQuick(&r_shadow_deferred, 0);
-					r_shadow_usingdeferredprepass = false;
-				}
-			}
 		}
+#endif
 		break;
 	case RENDERPATH_GL11:
 	case RENDERPATH_GL13:
 	case RENDERPATH_GLES1:
+	case RENDERPATH_GLES2:
 		r_shadow_usingdeferredprepass = false;
 		break;
 	}
@@ -4675,7 +4607,7 @@ void R_Shadow_PrepareLights(void)
 	{
 		lightindex = r_shadow_debuglight.integer;
 		light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-		if (light && (light->flags & flag))
+		if (light)
 			R_Shadow_PrepareLight(&light->rtlight);
 	}
 	else
@@ -4705,8 +4637,6 @@ void R_Shadow_PrepareLights(void)
 
 	if (r_editlights.integer)
 		R_Shadow_DrawLightSprites();
-
-	R_Shadow_UpdateBounceGridTexture();
 }
 
 void R_Shadow_DrawLights(void)
@@ -4724,7 +4654,7 @@ void R_Shadow_DrawLights(void)
 	{
 		lightindex = r_shadow_debuglight.integer;
 		light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
-		if (light && (light->flags & flag))
+		if (light)
 			R_Shadow_DrawLight(&light->rtlight);
 	}
 	else
@@ -4744,23 +4674,11 @@ void R_Shadow_DrawLights(void)
 	R_Shadow_RenderMode_End();
 }
 
-extern const float r_screenvertex3f[12];
-extern void R_SetupView(qboolean allowwaterclippingplane);
-extern void R_ResetViewRendering3D(void);
-extern void R_ResetViewRendering2D(void);
-extern cvar_t r_shadows;
-extern cvar_t r_shadows_darken;
-extern cvar_t r_shadows_drawafterrtlighting;
-extern cvar_t r_shadows_castfrombmodels;
-extern cvar_t r_shadows_throwdistance;
-extern cvar_t r_shadows_throwdirection;
-extern cvar_t r_shadows_focus;
-extern cvar_t r_shadows_shadowmapscale;
-
 void R_Shadow_PrepareModelShadows(void)
 {
 	int i;
 	float scale, size, radius, dot1, dot2;
+	prvm_vec3_t prvmshadowdir, prvmshadowfocus;
 	vec3_t shadowdir, shadowforward, shadowright, shadoworigin, shadowfocus, shadowmins, shadowmaxs;
 	entity_render_t *ent;
 
@@ -4789,7 +4707,8 @@ void R_Shadow_PrepareModelShadows(void)
 	scale = r_shadow_shadowmapping_precision.value * r_shadows_shadowmapscale.value;
 	radius = 0.5f * size / scale;
 
-	Math_atov(r_shadows_throwdirection.string, shadowdir);
+	Math_atov(r_shadows_throwdirection.string, prvmshadowdir);
+	VectorCopy(prvmshadowdir, shadowdir);
 	VectorNormalize(shadowdir);
 	dot1 = DotProduct(r_refdef.view.forward, shadowdir);
 	dot2 = DotProduct(r_refdef.view.up, shadowdir);
@@ -4799,7 +4718,8 @@ void R_Shadow_PrepareModelShadows(void)
 		VectorMA(r_refdef.view.up, -dot2, shadowdir, shadowforward);
 	VectorNormalize(shadowforward);
 	CrossProduct(shadowdir, shadowforward, shadowright);
-	Math_atov(r_shadows_focus.string, shadowfocus);
+	Math_atov(r_shadows_focus.string, prvmshadowfocus);
+	VectorCopy(prvmshadowfocus, shadowfocus);
 	VectorM(shadowfocus[0], r_refdef.view.right, shadoworigin);
 	VectorMA(shadoworigin, shadowfocus[1], r_refdef.view.up, shadoworigin);
 	VectorMA(shadoworigin, -shadowfocus[2], r_refdef.view.forward, shadoworigin);
@@ -4826,7 +4746,7 @@ void R_Shadow_PrepareModelShadows(void)
 	}
 }
 
-void R_DrawModelShadowMaps(void)
+void R_DrawModelShadowMaps(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture)
 {
 	int i;
 	float relativethrowdistance, scale, size, radius, nearclip, farclip, bias, dot1, dot2;
@@ -4835,10 +4755,11 @@ void R_DrawModelShadowMaps(void)
 	vec3_t relativelightdirection, relativeforward, relativeright;
 	vec3_t relativeshadowmins, relativeshadowmaxs;
 	vec3_t shadowdir, shadowforward, shadowright, shadoworigin, shadowfocus;
+	prvm_vec3_t prvmshadowdir, prvmshadowfocus;
 	float m[12];
 	matrix4x4_t shadowmatrix, cameramatrix, mvpmatrix, invmvpmatrix, scalematrix, texmatrix;
 	r_viewport_t viewport;
-	GLuint fbo = 0;
+	GLuint shadowfbo = 0;
 	float clearcolor[4];
 
 	if (!r_refdef.scene.numentities)
@@ -4852,18 +4773,22 @@ void R_DrawModelShadowMaps(void)
 		return;
 	}
 
-	R_ResetViewRendering3D();
+	r_shadow_fb_fbo = fbo;
+	r_shadow_fb_depthtexture = depthtexture;
+	r_shadow_fb_colortexture = colortexture;
+
+	R_ResetViewRendering3D(fbo, depthtexture, colortexture);
 	R_Shadow_RenderMode_Begin();
 	R_Shadow_RenderMode_ActiveLight(NULL);
 
 	switch (r_shadow_shadowmode)
 	{
 	case R_SHADOW_SHADOWMODE_SHADOWMAP2D:
-		if (!r_shadow_shadowmap2dtexture)
+		if (!r_shadow_shadowmap2ddepthtexture)
 			R_Shadow_MakeShadowMap(0, r_shadow_shadowmapmaxsize);
-		fbo = r_shadow_fbo2d;
-		r_shadow_shadowmap_texturescale[0] = 1.0f / R_TextureWidth(r_shadow_shadowmap2dtexture);
-		r_shadow_shadowmap_texturescale[1] = 1.0f / R_TextureHeight(r_shadow_shadowmap2dtexture);
+		shadowfbo = r_shadow_fbo2d;
+		r_shadow_shadowmap_texturescale[0] = 1.0f / R_TextureWidth(r_shadow_shadowmap2ddepthtexture);
+		r_shadow_shadowmap_texturescale[1] = 1.0f / R_TextureHeight(r_shadow_shadowmap2ddepthtexture);
 		r_shadow_rendermode = R_SHADOW_RENDERMODE_SHADOWMAP2D;
 		break;
 	default:
@@ -4882,9 +4807,11 @@ void R_DrawModelShadowMaps(void)
 	r_shadow_shadowmap_parameters[2] = 1.0;
 	r_shadow_shadowmap_parameters[3] = bound(0.0f, 1.0f - r_shadows_darken.value, 1.0f);
 
-	Math_atov(r_shadows_throwdirection.string, shadowdir);
+	Math_atov(r_shadows_throwdirection.string, prvmshadowdir);
+	VectorCopy(prvmshadowdir, shadowdir);
 	VectorNormalize(shadowdir);
-	Math_atov(r_shadows_focus.string, shadowfocus);
+	Math_atov(r_shadows_focus.string, prvmshadowfocus);
+	VectorCopy(prvmshadowfocus, shadowfocus);
 	VectorM(shadowfocus[0], r_refdef.view.right, shadoworigin);
 	VectorMA(shadoworigin, shadowfocus[1], r_refdef.view.up, shadoworigin);
 	VectorMA(shadoworigin, -shadowfocus[2], r_refdef.view.forward, shadoworigin);
@@ -4911,8 +4838,11 @@ void R_DrawModelShadowMaps(void)
 
 	VectorMA(shadoworigin, (1.0f - fabs(dot1)) * radius, shadowforward, shadoworigin);
 
-	R_Mesh_SetRenderTargets(fbo, r_shadow_shadowmap2dtexture, r_shadow_shadowmap2dcolortexture, NULL, NULL, NULL);
-	R_SetupShader_DepthOrShadow();
+	if (r_shadow_shadowmap2ddepthbuffer)
+		R_Mesh_SetRenderTargets(shadowfbo, r_shadow_shadowmap2ddepthbuffer, r_shadow_shadowmap2ddepthtexture, NULL, NULL, NULL);
+	else
+		R_Mesh_SetRenderTargets(shadowfbo, r_shadow_shadowmap2ddepthtexture, NULL, NULL, NULL, NULL);
+	R_SetupShader_DepthOrShadow(true, r_shadow_shadowmap2ddepthbuffer != NULL);
 	GL_PolygonOffset(r_shadow_shadowmapping_polygonfactor.value, r_shadow_shadowmapping_polygonoffset.value);
 	GL_DepthMask(true);
 	GL_DepthTest(true);
@@ -4921,7 +4851,7 @@ void R_DrawModelShadowMaps(void)
 	Vector4Set(clearcolor, 1,1,1,1);
 	// in D3D9 we have to render to a color texture shadowmap
 	// in GL we render directly to a depth texture only
-	if (r_shadow_shadowmap2dtexture)
+	if (r_shadow_shadowmap2ddepthbuffer)
 		GL_Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
 	else
 		GL_Clear(GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
@@ -4932,8 +4862,8 @@ void R_DrawModelShadowMaps(void)
 
 #if 0
 	// debugging
-	R_Mesh_SetMainRenderTargets();
-	R_SetupShader_ShowDepth();
+	R_Mesh_SetRenderTargets(r_shadow_fb_fbo, r_shadow_fb_depthtexture, r_shadow_fb_colortexture, NULL, NULL, NULL);
+	R_SetupShader_ShowDepth(true);
 	GL_ColorMask(1,1,1,1);
 	GL_Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, clearcolor, 1.0f, 0);
 #endif
@@ -5021,7 +4951,7 @@ void R_DrawModelShadowMaps(void)
 	}
 }
 
-void R_DrawModelShadows(void)
+void R_DrawModelShadows(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture)
 {
 	int i;
 	float relativethrowdistance;
@@ -5030,11 +4960,16 @@ void R_DrawModelShadows(void)
 	vec3_t relativelightdirection;
 	vec3_t relativeshadowmins, relativeshadowmaxs;
 	vec3_t tmp, shadowdir;
+	prvm_vec3_t prvmshadowdir;
 
 	if (!r_refdef.scene.numentities || !vid.stencil || (r_shadow_shadowmode != R_SHADOW_SHADOWMODE_STENCIL && r_shadows.integer != 1))
 		return;
 
-	R_ResetViewRendering3D();
+	r_shadow_fb_fbo = fbo;
+	r_shadow_fb_depthtexture = depthtexture;
+	r_shadow_fb_colortexture = colortexture;
+
+	R_ResetViewRendering3D(fbo, depthtexture, colortexture);
 	//GL_Scissor(r_refdef.view.viewport.x, r_refdef.view.viewport.y, r_refdef.view.viewport.width, r_refdef.view.viewport.height);
 	//GL_Scissor(r_refdef.view.x, vid.height - r_refdef.view.height - r_refdef.view.y, r_refdef.view.width, r_refdef.view.height);
 	R_Shadow_RenderMode_Begin();
@@ -5048,7 +4983,8 @@ void R_DrawModelShadows(void)
 	// get shadow dir
 	if (r_shadows.integer == 2)
 	{
-		Math_atov(r_shadows_throwdirection.string, shadowdir);
+		Math_atov(r_shadows_throwdirection.string, prvmshadowdir);
+		VectorCopy(prvmshadowdir, shadowdir);
 		VectorNormalize(shadowdir);
 	}
 
@@ -5119,7 +5055,7 @@ void R_DrawModelShadows(void)
 	//GL_ScissorTest(true);
 	//R_EntityMatrix(&identitymatrix);
 	//R_Mesh_ResetTextureState();
-	R_ResetViewRendering2D();
+	R_ResetViewRendering2D(fbo, depthtexture, colortexture);
 
 	// set up a darkening blend on shadowed areas
 	GL_BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5134,7 +5070,7 @@ void R_DrawModelShadows(void)
 
 	// apply the blend to the shadowed areas
 	R_Mesh_PrepareVertices_Generic_Arrays(4, r_screenvertex3f, NULL, NULL);
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic_NoTexture(false, true);
 	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 
 	// restore the viewport
@@ -5144,7 +5080,7 @@ void R_DrawModelShadows(void)
 	//R_Shadow_RenderMode_End();
 }
 
-void R_BeginCoronaQuery(rtlight_t *rtlight, float scale, qboolean usequery)
+static void R_BeginCoronaQuery(rtlight_t *rtlight, float scale, qboolean usequery)
 {
 	float zdist;
 	vec3_t centerorigin;
@@ -5169,6 +5105,7 @@ void R_BeginCoronaQuery(rtlight_t *rtlight, float scale, qboolean usequery)
 		case RENDERPATH_GL20:
 		case RENDERPATH_GLES1:
 		case RENDERPATH_GLES2:
+#ifdef GL_SAMPLES_PASSED_ARB
 			CHECKGLERROR
 			// NOTE: GL_DEPTH_TEST must be enabled or ATI won't count samples, so use GL_DepthFunc instead
 			qglBeginQueryARB(GL_SAMPLES_PASSED_ARB, rtlight->corona_queryindex_allpixels);
@@ -5184,6 +5121,7 @@ void R_BeginCoronaQuery(rtlight_t *rtlight, float scale, qboolean usequery)
 			R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 			qglEndQueryARB(GL_SAMPLES_PASSED_ARB);
 			CHECKGLERROR
+#endif
 			break;
 		case RENDERPATH_D3D9:
 			Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
@@ -5204,7 +5142,7 @@ void R_BeginCoronaQuery(rtlight_t *rtlight, float scale, qboolean usequery)
 
 static float spritetexcoord2f[4*2] = {0, 1, 0, 0, 1, 0, 1, 1};
 
-void R_DrawCorona(rtlight_t *rtlight, float cscale, float scale)
+static void R_DrawCorona(rtlight_t *rtlight, float cscale, float scale)
 {
 	vec3_t color;
 	GLint allpixels = 0, visiblepixels = 0;
@@ -5218,10 +5156,12 @@ void R_DrawCorona(rtlight_t *rtlight, float cscale, float scale)
 		case RENDERPATH_GL20:
 		case RENDERPATH_GLES1:
 		case RENDERPATH_GLES2:
+#ifdef GL_SAMPLES_PASSED_ARB
 			CHECKGLERROR
 			qglGetQueryObjectivARB(rtlight->corona_queryindex_visiblepixels, GL_QUERY_RESULT_ARB, &visiblepixels);
 			qglGetQueryObjectivARB(rtlight->corona_queryindex_allpixels, GL_QUERY_RESULT_ARB, &allpixels);
 			CHECKGLERROR
+#endif
 			break;
 		case RENDERPATH_D3D9:
 			Con_DPrintf("FIXME D3D9 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
@@ -5256,61 +5196,13 @@ void R_DrawCorona(rtlight_t *rtlight, float cscale, float scale)
 		if(negated)
 		{
 			VectorNegate(color, color);
-			switch(vid.renderpath)
-			{
-			case RENDERPATH_GL11:
-			case RENDERPATH_GL13:
-			case RENDERPATH_GL20:
-			case RENDERPATH_GLES1:
-			case RENDERPATH_GLES2:
-				qglBlendEquationEXT(GL_FUNC_REVERSE_SUBTRACT_EXT);
-				break;
-			case RENDERPATH_D3D9:
-#ifdef SUPPORTD3D
-				IDirect3DDevice9_SetRenderState(vid_d3d9dev, D3DRS_BLENDOP, D3DBLENDOP_SUBTRACT);
-#endif
-				break;
-			case RENDERPATH_D3D10:
-				Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-				break;
-			case RENDERPATH_D3D11:
-				Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-				break;
-			case RENDERPATH_SOFT:
-				DPSOFTRAST_BlendSubtract(true);
-				break;
-			}
+			GL_BlendEquationSubtract(true);
 		}
 		R_CalcSprite_Vertex3f(vertex3f, rtlight->shadoworigin, r_refdef.view.right, r_refdef.view.up, scale, -scale, -scale, scale);
 		RSurf_ActiveCustomEntity(&identitymatrix, &identitymatrix, RENDER_NODEPTHTEST, 0, color[0], color[1], color[2], 1, 4, vertex3f, spritetexcoord2f, NULL, NULL, NULL, NULL, 2, polygonelement3i, polygonelement3s, false, false);
 		R_DrawCustomSurface(r_shadow_lightcorona, &identitymatrix, MATERIALFLAG_ADD | MATERIALFLAG_BLENDED | MATERIALFLAG_FULLBRIGHT | MATERIALFLAG_NOCULLFACE, 0, 4, 0, 2, false, false);
 		if(negated)
-		{
-			switch(vid.renderpath)
-			{
-			case RENDERPATH_GL11:
-			case RENDERPATH_GL13:
-			case RENDERPATH_GL20:
-			case RENDERPATH_GLES1:
-			case RENDERPATH_GLES2:
-				qglBlendEquationEXT(GL_FUNC_ADD_EXT);
-				break;
-			case RENDERPATH_D3D9:
-#ifdef SUPPORTD3D
-				IDirect3DDevice9_SetRenderState(vid_d3d9dev, D3DRS_BLENDOP, D3DBLENDOP_ADD);
-#endif
-				break;
-			case RENDERPATH_D3D10:
-				Con_DPrintf("FIXME D3D10 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-				break;
-			case RENDERPATH_D3D11:
-				Con_DPrintf("FIXME D3D11 %s:%i %s\n", __FILE__, __LINE__, __FUNCTION__);
-				break;
-			case RENDERPATH_SOFT:
-				DPSOFTRAST_BlendSubtract(false);
-				break;
-			}
-		}
+			GL_BlendEquationSubtract(false);
 	}
 }
 
@@ -5324,7 +5216,7 @@ void R_Shadow_DrawCoronas(void)
 	size_t range;
 	if (r_coronas.value < (1.0f / 256.0f) && !gl_flashblend.integer)
 		return;
-	if (r_waterstate.renderingscene)
+	if (r_fb.water.renderingscene)
 		return;
 	flag = r_refdef.scene.rtworld ? LIGHTFLAG_REALTIMEMODE : LIGHTFLAG_NORMALMODE;
 	R_EntityMatrix(&identitymatrix);
@@ -5343,6 +5235,7 @@ void R_Shadow_DrawCoronas(void)
 	case RENDERPATH_GLES1:
 	case RENDERPATH_GLES2:
 		usequery = vid.support.arb_occlusion_query && r_coronas_occlusionquery.integer;
+#ifdef GL_SAMPLES_PASSED_ARB
 		if (usequery)
 		{
 			GL_ColorMask(0,0,0,0);
@@ -5364,8 +5257,9 @@ void R_Shadow_DrawCoronas(void)
 			GL_PolygonOffset(0, 0);
 			GL_DepthTest(true);
 			R_Mesh_ResetTextureState();
-			R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+			R_SetupShader_Generic_NoTexture(false, false);
 		}
+#endif
 		break;
 	case RENDERPATH_D3D9:
 		usequery = false;
@@ -5439,12 +5333,12 @@ void R_Shadow_DrawCoronas(void)
 
 
 
-dlight_t *R_Shadow_NewWorldLight(void)
+static dlight_t *R_Shadow_NewWorldLight(void)
 {
 	return (dlight_t *)Mem_ExpandableArray_AllocRecord(&r_shadow_worldlightsarray);
 }
 
-void R_Shadow_UpdateWorldLight(dlight_t *light, vec3_t origin, vec3_t angles, vec3_t color, vec_t radius, vec_t corona, int style, int shadowenable, const char *cubemapname, vec_t coronasizescale, vec_t ambientscale, vec_t diffusescale, vec_t specularscale, int flags)
+static void R_Shadow_UpdateWorldLight(dlight_t *light, vec3_t origin, vec3_t angles, vec3_t color, vec_t radius, vec_t corona, int style, int shadowenable, const char *cubemapname, vec_t coronasizescale, vec_t ambientscale, vec_t diffusescale, vec_t specularscale, int flags)
 {
 	matrix4x4_t matrix;
 	// validate parameters
@@ -5485,7 +5379,7 @@ void R_Shadow_UpdateWorldLight(dlight_t *light, vec3_t origin, vec3_t angles, ve
 	R_RTLight_Update(&light->rtlight, true, &matrix, light->color, light->style, light->cubemapname[0] ? light->cubemapname : NULL, light->shadow, light->corona, light->coronasizescale, light->ambientscale, light->diffusescale, light->specularscale, light->flags);
 }
 
-void R_Shadow_FreeWorldLight(dlight_t *light)
+static void R_Shadow_FreeWorldLight(dlight_t *light)
 {
 	if (r_shadow_selectedlight == light)
 		r_shadow_selectedlight = NULL;
@@ -5507,7 +5401,7 @@ void R_Shadow_ClearWorldLights(void)
 	r_shadow_selectedlight = NULL;
 }
 
-void R_Shadow_SelectLight(dlight_t *light)
+static void R_Shadow_SelectLight(dlight_t *light)
 {
 	if (r_shadow_selectedlight)
 		r_shadow_selectedlight->selected = false;
@@ -5516,7 +5410,7 @@ void R_Shadow_SelectLight(dlight_t *light)
 		r_shadow_selectedlight->selected = true;
 }
 
-void R_Shadow_DrawCursor_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
+static void R_Shadow_DrawCursor_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
 {
 	// this is never batched (there can be only one)
 	float vertex3f[12];
@@ -5525,7 +5419,7 @@ void R_Shadow_DrawCursor_TransparentCallback(const entity_render_t *ent, const r
 	R_DrawCustomSurface(r_editlights_sprcursor, &identitymatrix, MATERIALFLAG_NODEPTHTEST | MATERIALFLAG_ALPHA | MATERIALFLAG_BLENDED | MATERIALFLAG_FULLBRIGHT | MATERIALFLAG_NOCULLFACE, 0, 4, 0, 2, false, false);
 }
 
-void R_Shadow_DrawLightSprite_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
+static void R_Shadow_DrawLightSprite_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
 {
 	float intensity;
 	float s;
@@ -5578,10 +5472,10 @@ void R_Shadow_DrawLightSprites(void)
 	{
 		light = (dlight_t *) Mem_ExpandableArray_RecordAtIndex(&r_shadow_worldlightsarray, lightindex);
 		if (light)
-			R_MeshQueue_AddTransparent(light->origin, R_Shadow_DrawLightSprite_TransparentCallback, (entity_render_t *)light, 5, &light->rtlight);
+			R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, light->origin, R_Shadow_DrawLightSprite_TransparentCallback, (entity_render_t *)light, 5, &light->rtlight);
 	}
 	if (!r_editlights_lockcursor)
-		R_MeshQueue_AddTransparent(r_editlights_cursorlocation, R_Shadow_DrawCursor_TransparentCallback, NULL, 0, NULL);
+		R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, r_editlights_cursorlocation, R_Shadow_DrawCursor_TransparentCallback, NULL, 0, NULL);
 }
 
 int R_Shadow_GetRTLightInfo(unsigned int lightindex, float *origin, float *radius, float *color)
@@ -5604,7 +5498,7 @@ int R_Shadow_GetRTLightInfo(unsigned int lightindex, float *origin, float *radiu
 	return 1;
 }
 
-void R_Shadow_SelectLightInView(void)
+static void R_Shadow_SelectLightInView(void)
 {
 	float bestrating, rating, temp[3];
 	dlight_t *best;
@@ -5654,8 +5548,8 @@ void R_Shadow_LoadWorldLights(void)
 		n = 0;
 		while (*s)
 		{
-			t = s;
 			/*
+			t = s;
 			shadow = true;
 			for (;COM_Parse(t, true) && strcmp(
 			if (COM_Parse(t, true))
@@ -5859,6 +5753,7 @@ void R_Shadow_LoadWorldLightsFromMap_LightArghliteTyrlite(void)
 	const char *data;
 	float origin[3], angles[3], radius, color[3], light[4], fadescale, lightscale, originhack[3], overridecolor[3], vec[4];
 	char key[256], value[MAX_INPUTLINE];
+	char vabuf[1024];
 
 	if (cl.worldmodel == NULL)
 	{
@@ -5873,7 +5768,7 @@ void R_Shadow_LoadWorldLightsFromMap_LightArghliteTyrlite(void)
 		data = cl.worldmodel->brush.entities;
 	if (!data)
 		return;
-	for (entnum = 0;COM_ParseToken_Simple(&data, false, false) && com_token[0] == '{';entnum++)
+	for (entnum = 0;COM_ParseToken_Simple(&data, false, false, true) && com_token[0] == '{';entnum++)
 	{
 		type = LIGHTTYPE_MINUSX;
 		origin[0] = origin[1] = origin[2] = 0;
@@ -5891,7 +5786,7 @@ void R_Shadow_LoadWorldLightsFromMap_LightArghliteTyrlite(void)
 		islight = false;
 		while (1)
 		{
-			if (!COM_ParseToken_Simple(&data, false, false))
+			if (!COM_ParseToken_Simple(&data, false, false, true))
 				break; // error
 			if (com_token[0] == '}')
 				break; // end of entity
@@ -5901,7 +5796,7 @@ void R_Shadow_LoadWorldLightsFromMap_LightArghliteTyrlite(void)
 				strlcpy(key, com_token, sizeof(key));
 			while (key[strlen(key)-1] == ' ') // remove trailing spaces
 				key[strlen(key)-1] = 0;
-			if (!COM_ParseToken_Simple(&data, false, false))
+			if (!COM_ParseToken_Simple(&data, false, false, true))
 				break; // error
 			strlcpy(value, com_token, sizeof(value));
 
@@ -6062,14 +5957,14 @@ void R_Shadow_LoadWorldLightsFromMap_LightArghliteTyrlite(void)
 		}
 		VectorAdd(origin, originhack, origin);
 		if (radius >= 1)
-			R_Shadow_UpdateWorldLight(R_Shadow_NewWorldLight(), origin, angles, color, radius, (pflags & PFLAGS_CORONA) != 0, style, (pflags & PFLAGS_NOSHADOW) == 0, skin >= 16 ? va("cubemaps/%i", skin) : NULL, 0.25, 0, 1, 1, LIGHTFLAG_REALTIMEMODE);
+			R_Shadow_UpdateWorldLight(R_Shadow_NewWorldLight(), origin, angles, color, radius, (pflags & PFLAGS_CORONA) != 0, style, (pflags & PFLAGS_NOSHADOW) == 0, skin >= 16 ? va(vabuf, sizeof(vabuf), "cubemaps/%i", skin) : NULL, 0.25, 0, 1, 1, LIGHTFLAG_REALTIMEMODE);
 	}
 	if (entfiledata)
 		Mem_Free(entfiledata);
 }
 
 
-void R_Shadow_SetCursorLocationForView(void)
+static void R_Shadow_SetCursorLocationForView(void)
 {
 	vec_t dist, push;
 	vec3_t dest, endpos;
@@ -6106,7 +6001,7 @@ void R_Shadow_UpdateWorldLightSelection(void)
 		R_Shadow_SelectLight(NULL);
 }
 
-void R_Shadow_EditLights_Clear_f(void)
+static void R_Shadow_EditLights_Clear_f(void)
 {
 	R_Shadow_ClearWorldLights();
 }
@@ -6126,26 +6021,26 @@ void R_Shadow_EditLights_Reload_f(void)
 	}
 }
 
-void R_Shadow_EditLights_Save_f(void)
+static void R_Shadow_EditLights_Save_f(void)
 {
 	if (!cl.worldmodel)
 		return;
 	R_Shadow_SaveWorldLights();
 }
 
-void R_Shadow_EditLights_ImportLightEntitiesFromMap_f(void)
+static void R_Shadow_EditLights_ImportLightEntitiesFromMap_f(void)
 {
 	R_Shadow_ClearWorldLights();
 	R_Shadow_LoadWorldLightsFromMap_LightArghliteTyrlite();
 }
 
-void R_Shadow_EditLights_ImportLightsFile_f(void)
+static void R_Shadow_EditLights_ImportLightsFile_f(void)
 {
 	R_Shadow_ClearWorldLights();
 	R_Shadow_LoadLightsFile();
 }
 
-void R_Shadow_EditLights_Spawn_f(void)
+static void R_Shadow_EditLights_Spawn_f(void)
 {
 	vec3_t color;
 	if (!r_editlights.integer)
@@ -6162,7 +6057,7 @@ void R_Shadow_EditLights_Spawn_f(void)
 	R_Shadow_UpdateWorldLight(R_Shadow_NewWorldLight(), r_editlights_cursorlocation, vec3_origin, color, 200, 0, 0, true, NULL, 0.25, 0, 1, 1, LIGHTFLAG_REALTIMEMODE);
 }
 
-void R_Shadow_EditLights_Edit_f(void)
+static void R_Shadow_EditLights_Edit_f(void)
 {
 	vec3_t origin, angles, color;
 	vec_t radius, corona, coronasizescale, ambientscale, diffusescale, specularscale;
@@ -6488,7 +6383,7 @@ void R_Shadow_EditLights_Edit_f(void)
 	R_Shadow_UpdateWorldLight(r_shadow_selectedlight, origin, angles, color, radius, corona, style, shadows, cubemapname, coronasizescale, ambientscale, diffusescale, specularscale, flags);
 }
 
-void R_Shadow_EditLights_EditAll_f(void)
+static void R_Shadow_EditLights_EditAll_f(void)
 {
 	size_t lightindex;
 	dlight_t *light, *oldselected;
@@ -6520,9 +6415,36 @@ void R_Shadow_EditLights_DrawSelectedLightProperties(void)
 	int lightnumber, lightcount;
 	size_t lightindex, range;
 	dlight_t *light;
-	float x, y;
 	char temp[256];
+	float x, y;
+
 	if (!r_editlights.integer)
+		return;
+
+	// update cvars so QC can query them
+	if (r_shadow_selectedlight)
+	{
+		dpsnprintf(temp, sizeof(temp), "%f %f %f", r_shadow_selectedlight->origin[0], r_shadow_selectedlight->origin[1], r_shadow_selectedlight->origin[2]);
+		Cvar_SetQuick(&r_editlights_current_origin, temp);
+		dpsnprintf(temp, sizeof(temp), "%f %f %f", r_shadow_selectedlight->angles[0], r_shadow_selectedlight->angles[1], r_shadow_selectedlight->angles[2]);
+		Cvar_SetQuick(&r_editlights_current_angles, temp);
+		dpsnprintf(temp, sizeof(temp), "%f %f %f", r_shadow_selectedlight->color[0], r_shadow_selectedlight->color[1], r_shadow_selectedlight->color[2]);
+		Cvar_SetQuick(&r_editlights_current_color, temp);
+		Cvar_SetValueQuick(&r_editlights_current_radius, r_shadow_selectedlight->radius);
+		Cvar_SetValueQuick(&r_editlights_current_corona, r_shadow_selectedlight->corona);
+		Cvar_SetValueQuick(&r_editlights_current_coronasize, r_shadow_selectedlight->coronasizescale);
+		Cvar_SetValueQuick(&r_editlights_current_style, r_shadow_selectedlight->style);
+		Cvar_SetValueQuick(&r_editlights_current_shadows, r_shadow_selectedlight->shadow);
+		Cvar_SetQuick(&r_editlights_current_cubemap, r_shadow_selectedlight->cubemapname);
+		Cvar_SetValueQuick(&r_editlights_current_ambient, r_shadow_selectedlight->ambientscale);
+		Cvar_SetValueQuick(&r_editlights_current_diffuse, r_shadow_selectedlight->diffusescale);
+		Cvar_SetValueQuick(&r_editlights_current_specular, r_shadow_selectedlight->specularscale);
+		Cvar_SetValueQuick(&r_editlights_current_normalmode, (r_shadow_selectedlight->flags & LIGHTFLAG_NORMALMODE) ? 1 : 0);
+		Cvar_SetValueQuick(&r_editlights_current_realtimemode, (r_shadow_selectedlight->flags & LIGHTFLAG_REALTIMEMODE) ? 1 : 0);
+	}
+
+	// draw properties on screen
+	if (!r_editlights_drawproperties.integer)
 		return;
 	x = vid_conwidth.value - 240;
 	y = 5;
@@ -6561,7 +6483,7 @@ void R_Shadow_EditLights_DrawSelectedLightProperties(void)
 	dpsnprintf(temp, sizeof(temp), "RealTimeMode : %s\n", (r_shadow_selectedlight->flags & LIGHTFLAG_REALTIMEMODE) ? "yes" : "no");DrawQ_String(x, y, temp, 0, 8, 8, 1, 1, 1, 1, 0, NULL, true, FONT_DEFAULT);y += 8;
 }
 
-void R_Shadow_EditLights_ToggleShadow_f(void)
+static void R_Shadow_EditLights_ToggleShadow_f(void)
 {
 	if (!r_editlights.integer)
 	{
@@ -6576,7 +6498,7 @@ void R_Shadow_EditLights_ToggleShadow_f(void)
 	R_Shadow_UpdateWorldLight(r_shadow_selectedlight, r_shadow_selectedlight->origin, r_shadow_selectedlight->angles, r_shadow_selectedlight->color, r_shadow_selectedlight->radius, r_shadow_selectedlight->corona, r_shadow_selectedlight->style, !r_shadow_selectedlight->shadow, r_shadow_selectedlight->cubemapname, r_shadow_selectedlight->coronasizescale, r_shadow_selectedlight->ambientscale, r_shadow_selectedlight->diffusescale, r_shadow_selectedlight->specularscale, r_shadow_selectedlight->flags);
 }
 
-void R_Shadow_EditLights_ToggleCorona_f(void)
+static void R_Shadow_EditLights_ToggleCorona_f(void)
 {
 	if (!r_editlights.integer)
 	{
@@ -6591,7 +6513,7 @@ void R_Shadow_EditLights_ToggleCorona_f(void)
 	R_Shadow_UpdateWorldLight(r_shadow_selectedlight, r_shadow_selectedlight->origin, r_shadow_selectedlight->angles, r_shadow_selectedlight->color, r_shadow_selectedlight->radius, !r_shadow_selectedlight->corona, r_shadow_selectedlight->style, r_shadow_selectedlight->shadow, r_shadow_selectedlight->cubemapname, r_shadow_selectedlight->coronasizescale, r_shadow_selectedlight->ambientscale, r_shadow_selectedlight->diffusescale, r_shadow_selectedlight->specularscale, r_shadow_selectedlight->flags);
 }
 
-void R_Shadow_EditLights_Remove_f(void)
+static void R_Shadow_EditLights_Remove_f(void)
 {
 	if (!r_editlights.integer)
 	{
@@ -6607,7 +6529,7 @@ void R_Shadow_EditLights_Remove_f(void)
 	r_shadow_selectedlight = NULL;
 }
 
-void R_Shadow_EditLights_Help_f(void)
+static void R_Shadow_EditLights_Help_f(void)
 {
 	Con_Print(
 "Documentation on r_editlights system:\n"
@@ -6651,7 +6573,7 @@ void R_Shadow_EditLights_Help_f(void)
 "sizescale scale : multiply radius (size) of light (1 does nothing)\n"
 "originscale x y z : multiply origin of light (1 1 1 does nothing)\n"
 "style style : set lightstyle of light (flickering patterns, switches, etc)\n"
-"cubemap basename : set filter cubemap of light (not yet supported)\n"
+"cubemap basename : set filter cubemap of light\n"
 "shadows 1/0 : turn on/off shadows\n"
 "corona n : set corona intensity\n"
 "coronasize n : set corona size (0-1)\n"
@@ -6664,7 +6586,7 @@ void R_Shadow_EditLights_Help_f(void)
 	);
 }
 
-void R_Shadow_EditLights_CopyInfo_f(void)
+static void R_Shadow_EditLights_CopyInfo_f(void)
 {
 	if (!r_editlights.integer)
 	{
@@ -6693,7 +6615,7 @@ void R_Shadow_EditLights_CopyInfo_f(void)
 	r_shadow_bufferlight.flags = r_shadow_selectedlight->flags;
 }
 
-void R_Shadow_EditLights_PasteInfo_f(void)
+static void R_Shadow_EditLights_PasteInfo_f(void)
 {
 	if (!r_editlights.integer)
 	{
@@ -6708,7 +6630,7 @@ void R_Shadow_EditLights_PasteInfo_f(void)
 	R_Shadow_UpdateWorldLight(r_shadow_selectedlight, r_shadow_selectedlight->origin, r_shadow_bufferlight.angles, r_shadow_bufferlight.color, r_shadow_bufferlight.radius, r_shadow_bufferlight.corona, r_shadow_bufferlight.style, r_shadow_bufferlight.shadow, r_shadow_bufferlight.cubemapname, r_shadow_bufferlight.coronasizescale, r_shadow_bufferlight.ambientscale, r_shadow_bufferlight.diffusescale, r_shadow_bufferlight.specularscale, r_shadow_bufferlight.flags);
 }
 
-void R_Shadow_EditLights_Lock_f(void)
+static void R_Shadow_EditLights_Lock_f(void)
 {
 	if (!r_editlights.integer)
 	{
@@ -6728,7 +6650,7 @@ void R_Shadow_EditLights_Lock_f(void)
 	r_editlights_lockcursor = true;
 }
 
-void R_Shadow_EditLights_Init(void)
+static void R_Shadow_EditLights_Init(void)
 {
 	Cvar_RegisterVariable(&r_editlights);
 	Cvar_RegisterVariable(&r_editlights_cursordistance);
@@ -6736,6 +6658,21 @@ void R_Shadow_EditLights_Init(void)
 	Cvar_RegisterVariable(&r_editlights_cursorpushoff);
 	Cvar_RegisterVariable(&r_editlights_cursorgrid);
 	Cvar_RegisterVariable(&r_editlights_quakelightsizescale);
+	Cvar_RegisterVariable(&r_editlights_drawproperties);
+	Cvar_RegisterVariable(&r_editlights_current_origin);
+	Cvar_RegisterVariable(&r_editlights_current_angles);
+	Cvar_RegisterVariable(&r_editlights_current_color);
+	Cvar_RegisterVariable(&r_editlights_current_radius);
+	Cvar_RegisterVariable(&r_editlights_current_corona);
+	Cvar_RegisterVariable(&r_editlights_current_coronasize);
+	Cvar_RegisterVariable(&r_editlights_current_style);
+	Cvar_RegisterVariable(&r_editlights_current_shadows);
+	Cvar_RegisterVariable(&r_editlights_current_cubemap);
+	Cvar_RegisterVariable(&r_editlights_current_ambient);
+	Cvar_RegisterVariable(&r_editlights_current_diffuse);
+	Cvar_RegisterVariable(&r_editlights_current_specular);
+	Cvar_RegisterVariable(&r_editlights_current_normalmode);
+	Cvar_RegisterVariable(&r_editlights_current_realtimemode);
 	Cmd_AddCommand("r_editlights_help", R_Shadow_EditLights_Help_f, "prints documentation on console commands and variables in rtlight editing system");
 	Cmd_AddCommand("r_editlights_clear", R_Shadow_EditLights_Clear_f, "removes all world lights (let there be darkness!)");
 	Cmd_AddCommand("r_editlights_reload", R_Shadow_EditLights_Reload_f, "reloads rtlights file (or imports from .lights file or .ent file or the map itself)");
@@ -6763,7 +6700,7 @@ LIGHT SAMPLING
 =============================================================================
 */
 
-void R_LightPoint(vec3_t color, const vec3_t p, const int flags)
+void R_LightPoint(float *color, const vec3_t p, const int flags)
 {
 	int i, numlights, flag;
 	float f, relativepoint[3], dist, dist2, lightradius2;
@@ -6936,6 +6873,7 @@ void R_CompleteLightPoint(vec3_t ambient, vec3_t diffuse, vec3_t lightdir, const
 			intensity *= VectorLength(color);
 			VectorMA(sample + 12, intensity, relativepoint, sample + 12);
 		}
+		// FIXME: sample bouncegrid too!
 	}
 
 	if (flags & LP_DYNLIGHT)

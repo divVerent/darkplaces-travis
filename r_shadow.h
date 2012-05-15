@@ -78,7 +78,7 @@ void R_RTLight_Update(rtlight_t *rtlight, int isstatic, matrix4x4_t *matrix, vec
 void R_RTLight_Compile(rtlight_t *rtlight);
 void R_RTLight_Uncompile(rtlight_t *rtlight);
 
-void R_Shadow_PrepareLights(void);
+void R_Shadow_PrepareLights(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
 void R_Shadow_DrawPrepass(void);
 void R_Shadow_DrawLights(void);
 void R_Shadow_DrawCoronas(void);
@@ -101,7 +101,10 @@ void R_Shadow_PrepareModelShadows(void);
 #define LP_LIGHTMAP		1
 #define LP_RTWORLD		2
 #define LP_DYNLIGHT		4
-void R_LightPoint(vec3_t color, const vec3_t p, const int flags);
-void R_CompleteLightPoint(vec3_t ambientcolor, vec3_t diffusecolor, vec3_t diffusenormal, const vec3_t p, const int flags);
+void R_LightPoint(float *color, const vec3_t p, const int flags);
+void R_CompleteLightPoint(float *ambientcolor, float *diffusecolor, float *diffusenormal, const vec3_t p, const int flags);
+
+void R_DrawModelShadowMaps(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
+void R_DrawModelShadows(int fbo, rtexture_t *depthtexture, rtexture_t *colortexture);
 
 #endif

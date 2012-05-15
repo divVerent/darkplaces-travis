@@ -46,10 +46,12 @@ typedef struct world_physics_s
 	void *ode_world;
 	void *ode_space;
 	void *ode_contactgroup;
-	// number of constraint solver iterations to use (for dWorldStepFast)
+	// number of constraint solver iterations to use (for dWorldQuickStep)
 	int ode_iterations;
 	// actual step (server frametime / ode_iterations)
 	vec_t ode_step;
+	// time we need to simulate, for constantstep
+	vec_t ode_time;
 	// stats
 	int ode_numobjects; // total objects cound
 	int ode_activeovjects; // active objects count
@@ -59,12 +61,15 @@ typedef struct world_physics_s
 }
 world_physics_t;
 
+struct prvm_prog_s;
+
 typedef struct world_s
 {
 	// convenient fields
 	char filename[MAX_QPATH];
 	vec3_t mins;
 	vec3_t maxs;
+	struct prvm_prog_s *prog;
 
 	int areagrid_stats_calls;
 	int areagrid_stats_nodechecks;
@@ -95,7 +100,7 @@ void World_Init(void);
 void World_Shutdown(void);
 
 /// called after the world model has been loaded, before linking any entities
-void World_SetSize(world_t *world, const char *filename, const vec3_t mins, const vec3_t maxs);
+void World_SetSize(world_t *world, const char *filename, const vec3_t mins, const vec3_t maxs, struct prvm_prog_s *prog);
 /// unlinks all entities (used before reallocation of edicts)
 void World_UnlinkAll(world_t *world);
 
@@ -114,6 +119,15 @@ int World_EntitiesInBox(world_t *world, const vec3_t mins, const vec3_t maxs, in
 void World_Start(world_t *world);
 void World_End(world_t *world);
 
+// physics macros
+#ifndef ODE_STATIC
+# define ODE_DYNAMIC 1
+#endif
+
+#if defined(ODE_STATIC) || defined(ODE_DYNAMIC)
+# define USEODE 1
+#endif
+
 // update physics
 // this is called by SV_Physics
 void World_Physics_Frame(world_t *world, double frametime, double gravity);
@@ -121,7 +135,7 @@ void World_Physics_Frame(world_t *world, double frametime, double gravity);
 // change physics properties of entity
 struct prvm_edict_s;
 struct edict_odefunc_s;
-//void World_Physics_ApplyCmd(prvm_edict_s *ed, edict_odefunc_s *f);
+void World_Physics_ApplyCmd(struct prvm_edict_s *ed, struct edict_odefunc_s *f);
 
 // remove physics data from entity
 // this is called by entity removal

@@ -8,7 +8,7 @@
 int		image_width;
 int		image_height;
 
-void Image_CopyAlphaFromBlueBGRA(unsigned char *outpixels, const unsigned char *inpixels, int w, int h)
+static void Image_CopyAlphaFromBlueBGRA(unsigned char *outpixels, const unsigned char *inpixels, int w, int h)
 {
 	int i, n;
 	n = w * h;
@@ -189,7 +189,7 @@ typedef struct pcx_s
 LoadPCX
 ============
 */
-unsigned char* LoadPCX_BGRA (const unsigned char *f, int filesize, int *miplevel)
+static unsigned char* LoadPCX_BGRA (const unsigned char *f, int filesize, int *miplevel)
 {
 	pcx_t pcx;
 	unsigned char *a, *b, *image_buffer, *pbuf;
@@ -372,7 +372,7 @@ typedef struct _TargaHeader
 }
 TargaHeader;
 
-void PrintTargaHeader(TargaHeader *t)
+static void PrintTargaHeader(TargaHeader *t)
 {
 	Con_Printf("TargaHeader:\nuint8 id_length = %i;\nuint8 colormap_type = %i;\nuint8 image_type = %i;\nuint16 colormap_index = %i;\nuint16 colormap_length = %i;\nuint8 colormap_size = %i;\nuint16 x_origin = %i;\nuint16 y_origin = %i;\nuint16 width = %i;\nuint16 height = %i;\nuint8 pixel_size = %i;\nuint8 attributes = %i;\n", t->id_length, t->colormap_type, t->image_type, t->colormap_index, t->colormap_length, t->colormap_size, t->x_origin, t->y_origin, t->width, t->height, t->pixel_size, t->attributes);
 }
@@ -537,8 +537,6 @@ unsigned char *LoadTGA_BGRA (const unsigned char *f, int filesize, int *miplevel
 		row_inci = 0;
 	}
 
-	x = 0;
-	y = 0;
 	pix_inc = 1;
 	if ((targa_header.image_type & ~8) == 2)
 		pix_inc = (targa_header.pixel_size + 7) / 8;
@@ -746,7 +744,7 @@ typedef struct q2wal_s
 	int			value;
 } q2wal_t;
 
-unsigned char *LoadWAL_BGRA (const unsigned char *f, int filesize, int *miplevel)
+static unsigned char *LoadWAL_BGRA (const unsigned char *f, int filesize, int *miplevel)
 {
 	unsigned char *image_buffer;
 	const q2wal_t *inwal = (const q2wal_t *)f;
@@ -797,6 +795,7 @@ void Image_StripImageExtension (const char *in, char *out, size_t size_out)
 }
 
 static unsigned char image_linearfromsrgb[256];
+static unsigned char image_srgbfromlinear_lightmap[256];
 
 void Image_MakeLinearColorsFromsRGB(unsigned char *pout, const unsigned char *pin, int numpixels)
 {
@@ -804,12 +803,28 @@ void Image_MakeLinearColorsFromsRGB(unsigned char *pout, const unsigned char *pi
 	// this math from http://www.opengl.org/registry/specs/EXT/texture_sRGB.txt
 	if (!image_linearfromsrgb[255])
 		for (i = 0;i < 256;i++)
-			image_linearfromsrgb[i] = i < 11 ? (int)(i / 12.92f) : (int)(pow((i/256.0f + 0.055f)/1.0555f, 2.4f)*256.0f);
+			image_linearfromsrgb[i] = (unsigned char)floor(Image_LinearFloatFromsRGB(i) * 255.0f + 0.5f);
 	for (i = 0;i < numpixels;i++)
 	{
 		pout[i*4+0] = image_linearfromsrgb[pin[i*4+0]];
 		pout[i*4+1] = image_linearfromsrgb[pin[i*4+1]];
 		pout[i*4+2] = image_linearfromsrgb[pin[i*4+2]];
+		pout[i*4+3] = pin[i*4+3];
+	}
+}
+
+void Image_MakesRGBColorsFromLinear_Lightmap(unsigned char *pout, const unsigned char *pin, int numpixels)
+{
+	int i;
+	// this math from http://www.opengl.org/registry/specs/EXT/texture_sRGB.txt
+	if (!image_srgbfromlinear_lightmap[255])
+		for (i = 0;i < 256;i++)
+			image_srgbfromlinear_lightmap[i] = (unsigned char)floor(bound(0.0f, Image_sRGBFloatFromLinear_Lightmap(i), 1.0f) * 255.0f + 0.5f);
+	for (i = 0;i < numpixels;i++)
+	{
+		pout[i*4+0] = image_srgbfromlinear_lightmap[pin[i*4+0]];
+		pout[i*4+1] = image_srgbfromlinear_lightmap[pin[i*4+1]];
+		pout[i*4+2] = image_srgbfromlinear_lightmap[pin[i*4+2]];
 		pout[i*4+3] = pin[i*4+3];
 	}
 }
@@ -899,6 +914,7 @@ unsigned char *loadimagepixelsbgra (const char *filename, qboolean complain, qbo
 	imageformat_t *firstformat, *format;
 	unsigned char *f, *data = NULL, *data2 = NULL;
 	char basename[MAX_QPATH], name[MAX_QPATH], name2[MAX_QPATH], *c;
+	char vabuf[1024];
 	//if (developer_memorydebug.integer)
 	//	Mem_CheckSentinelsGlobal();
 	if (developer_texturelogging.integer)
@@ -942,17 +958,19 @@ unsigned char *loadimagepixelsbgra (const char *filename, qboolean complain, qbo
 			{
 				if(format->loadfunc == JPEG_LoadImage_BGRA) // jpeg can't do alpha, so let's simulate it by loading another jpeg
 				{
-					dpsnprintf (name2, sizeof(name2), format->formatstring, va("%s_alpha", basename));
+					dpsnprintf (name2, sizeof(name2), format->formatstring, va(vabuf, sizeof(vabuf), "%s_alpha", basename));
 					f = FS_LoadFile(name2, tempmempool, true, &filesize);
 					if(f)
 					{
 						int mymiplevel2 = miplevel ? *miplevel : 0;
 						data2 = format->loadfunc(f, (int)filesize, &mymiplevel2);
-						if(mymiplevel != mymiplevel2)
-							Host_Error("loadimagepixelsbgra: miplevels differ");
+						if(data2 && mymiplevel == mymiplevel2)
+							Image_CopyAlphaFromBlueBGRA(data, data2, image_width, image_height);
+						else
+							Con_Printf("loadimagepixelsrgba: corrupt or invalid alpha image %s_alpha\n", basename);
+						if(data2)
+							Mem_Free(data2);
 						Mem_Free(f);
-						Image_CopyAlphaFromBlueBGRA(data, data2, image_width, image_height);
-						Mem_Free(data2);
 					}
 				}
 				if (developer_loading.integer)
@@ -1288,7 +1306,7 @@ static void Image_Resample32LerpLine (const unsigned char *in, unsigned char *ou
 }
 
 #define LERPBYTE(i) r = resamplerow1[i];out[i] = (unsigned char) ((((resamplerow2[i] - r) * lerp) >> 16) + r)
-void Image_Resample32Lerp(const void *indata, int inwidth, int inheight, void *outdata, int outwidth, int outheight)
+static void Image_Resample32Lerp(const void *indata, int inwidth, int inheight, void *outdata, int outwidth, int outheight)
 {
 	int i, j, r, yi, oldy, f, fstep, lerp, endy = (inheight-1), inwidth4 = inwidth*4, outwidth4 = outwidth*4;
 	unsigned char *out;
@@ -1392,7 +1410,7 @@ void Image_Resample32Lerp(const void *indata, int inwidth, int inheight, void *o
 	resamplerow2 = NULL;
 }
 
-void Image_Resample32Nolerp(const void *indata, int inwidth, int inheight, void *outdata, int outwidth, int outheight)
+static void Image_Resample32Nolerp(const void *indata, int inwidth, int inheight, void *outdata, int outwidth, int outheight)
 {
 	int i, j;
 	unsigned frac, fracstep;

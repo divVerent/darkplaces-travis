@@ -58,7 +58,7 @@ void Protocol_Names(char *buffer, size_t buffersize);
 #define EF_SELECTABLE			16384		// LordHavoc: highlights when PRYDON_CLIENTCURSOR mouse is over it
 #define EF_DOUBLESIDED			32768		//[515]: disable cull face for this entity
 #define EF_NOSELFSHADOW			65536		// LordHavoc: does not cast a shadow on itself (or any other EF_NOSELFSHADOW entities)
-#define EF_UNUSED17				131072
+#define EF_DYNAMICMODELLIGHT			131072
 #define EF_UNUSED18				262144
 #define EF_UNUSED19				524288
 #define EF_RESTARTANIM_BIT		1048576     // div0: restart animation bit (like teleport bit, but lerps between end and start of the anim, and doesn't stop player lerping)
@@ -165,6 +165,7 @@ void Protocol_Names(char *buffer, size_t buffersize);
 #define	SND_LOOPING		(1<<2)		// a long
 #define	SND_LARGEENTITY	(1<<3)		// a short and a byte (instead of a short)
 #define	SND_LARGESOUND	(1<<4)		// a short (instead of a byte)
+#define	SND_SPEEDUSHORT4000	(1<<5)		// ushort speed*4000 (speed is usually 1.0, a value of 0.0 is the same as 1.0)
 
 
 // defaults for clientinfo messages
@@ -332,7 +333,8 @@ void Protocol_Names(char *buffer, size_t buffersize);
 #define RENDER_EXTERIORMODEL 8
 #define RENDER_LOWPRECISION 16 // send as low precision coordinates to save bandwidth
 #define RENDER_COLORMAPPED 32
-#define RENDER_NOCULL 64 // do not cull this entity with r_cullentities
+#define RENDER_WORLDOBJECT 64 // do not cull this entity with r_cullentities
+#define RENDER_COMPLEXANIMATION 128
 
 #define RENDER_SHADOW 65536 // cast shadow
 #define RENDER_LIGHT 131072 // receive light
@@ -342,6 +344,30 @@ void Protocol_Names(char *buffer, size_t buffersize);
 #define RENDER_NODEPTHTEST 1048576
 #define RENDER_ADDITIVE 2097152
 #define RENDER_DOUBLESIDED 4194304
+#define RENDER_CUSTOMIZEDMODELLIGHT 4096
+#define RENDER_DYNAMICMODELLIGHT 8388608 // origin dependent model light
+
+#define MAX_FRAMEGROUPBLENDS 4
+typedef struct framegroupblend_s
+{
+	// animation number and blend factor
+	// (for most models this is the frame number)
+	int frame;
+	float lerp;
+	// time frame began playing (for framegroup animations)
+	double start;
+}
+framegroupblend_t;
+
+struct matrix4x4_s;
+struct model_s;
+
+typedef struct skeleton_s
+{
+	const struct model_s *model;
+	struct matrix4x4_s *relativetransforms;
+}
+skeleton_t;
 
 typedef enum entity_state_active_e
 {
@@ -351,7 +377,7 @@ typedef enum entity_state_active_e
 }
 entity_state_active_t;
 
-// this is 96 bytes
+// this was 96 bytes, now 168 bytes (32bit) or 176 bytes (64bit)
 typedef struct entity_state_s
 {
 	// ! means this is not sent to client
@@ -370,6 +396,7 @@ typedef struct entity_state_s
 	unsigned short exteriormodelforclient; // ! not shown if first person viewing from this entity, shown in all other cases
 	unsigned short nodrawtoclient; // !
 	unsigned short drawonlytoclient; // !
+	unsigned short traileffectnum;
 	unsigned short light[4]; // color*256 (0.00 to 255.996), and radius*1
 	unsigned char active; // true if a valid state
 	unsigned char lightstyle;
@@ -385,6 +412,9 @@ typedef struct entity_state_s
 	unsigned char tagindex;
 	unsigned char colormod[3];
 	unsigned char glowmod[3];
+	// LordHavoc: very big data here :(
+	framegroupblend_t framegroupblend[4];
+	skeleton_t skeletonobject;
 }
 entity_state_t;
 
@@ -713,10 +743,15 @@ void EntityFrame4_CL_ReadFrame(void);
 
 // byte[3] = s->glowmod[0], s->glowmod[1], s->glowmod[2]
 #define E5_GLOWMOD (1<<24)
-// unused
-#define E5_UNUSED25 (1<<25)
-// unused
-#define E5_UNUSED26 (1<<26)
+// byte type=0 short frames[1] short times[1]
+// byte type=1 short frames[2] short times[2] byte lerps[2]
+// byte type=2 short frames[3] short times[3] byte lerps[3]
+// byte type=3 short frames[4] short times[4] byte lerps[4]
+// byte type=4 short modelindex byte numbones {short pose7s[7]}
+// see also RENDER_COMPLEXANIMATION
+#define E5_COMPLEXANIMATION (1<<25)
+// ushort traileffectnum
+#define E5_TRAILEFFECTNUM (1<<26)
 // unused
 #define E5_UNUSED27 (1<<27)
 // unused

@@ -39,10 +39,14 @@ typedef struct cachepic_s
 	rtexture_t *tex;
 	// used for hash lookups
 	struct cachepic_s *chain;
+	// flags - CACHEPICFLAG_NEWPIC for example
+	unsigned int flags;
 	// has alpha?
 	qboolean hasalpha;
 	// name of pic
 	char name[MAX_QPATH];
+	// allow to override/free the texture
+	qboolean allow_free_tex;
 }
 cachepic_t;
 
@@ -51,7 +55,10 @@ typedef enum cachepicflags_e
 	CACHEPICFLAG_NOTPERSISTENT = 1,
 	CACHEPICFLAG_QUIET = 2,
 	CACHEPICFLAG_NOCOMPRESSION = 4,
-	CACHEPICFLAG_NOCLAMP = 8
+	CACHEPICFLAG_NOCLAMP = 8,
+	CACHEPICFLAG_NEWPIC = 16, // disables matching texflags check, because a pic created with Draw_NewPic should not be subject to that
+	CACHEPICFLAG_MIPMAP = 32,
+	CACHEPICFLAG_NEAREST = 64 // force nearest filtering instead of linear
 }
 cachepicflags_t;
 
@@ -89,8 +96,10 @@ DRAWFLAG_2XMODULATE,
 DRAWFLAG_SCREEN,
 DRAWFLAG_NUMFLAGS,
 DRAWFLAG_MASK = 0xFF,   // ONLY R_BeginPolygon()
-DRAWFLAG_MIPMAP = 0x100 // ONLY R_BeginPolygon()
+DRAWFLAG_MIPMAP = 0x100, // ONLY R_BeginPolygon()
+DRAWFLAG_NOGAMMA = 0x200 // ONLY R_DrawQSuperPic()
 };
+#define DRAWFLAGS_BLEND 0xFF /* this matches all blending flags */
 
 typedef struct ft2_settings_s
 {
@@ -187,6 +196,8 @@ void DrawQ_LineLoop(drawqueuemesh_t *mesh, int flags);
 void DrawQ_Finish(void);
 void DrawQ_ProcessDrawFlag(int flags, qboolean alpha); // sets GL_DepthMask and GL_BlendFunc
 void DrawQ_RecalcView(void); // use this when changing r_refdef.view.* from e.g. csqc
+
+rtexture_t *Draw_GetPicTexture(cachepic_t *pic);
 
 void R_DrawGamma(void);
 

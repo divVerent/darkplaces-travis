@@ -15,13 +15,13 @@ typedef qboolean bool;
 #endif
 
 #define ALIGN_SIZE 16
-#define ATOMIC_SIZE 32
+#define ATOMIC_SIZE 4
 
 #ifdef SSE_POSSIBLE
 	#if defined(__APPLE__)
 		#include <libkern/OSAtomic.h>
 		#define ALIGN(var) var __attribute__((__aligned__(16)))
-		#define ATOMIC(var) var __attribute__((__aligned__(32)))
+		#define ATOMIC(var) var __attribute__((__aligned__(4)))
 		#define MEMORY_BARRIER (_mm_sfence())
 		#define ATOMIC_COUNTER volatile int32_t 
 		#define ATOMIC_INCREMENT(counter) (OSAtomicIncrement32Barrier(&(counter)))
@@ -29,7 +29,7 @@ typedef qboolean bool;
 		#define ATOMIC_ADD(counter, val) ((void)OSAtomicAdd32Barrier((val), &(counter)))
 	#elif defined(__GNUC__) && defined(WIN32)
 		#define ALIGN(var) var __attribute__((__aligned__(16)))
-		#define ATOMIC(var) var __attribute__((__aligned__(32)))
+		#define ATOMIC(var) var __attribute__((__aligned__(4)))
 		#define MEMORY_BARRIER (_mm_sfence())
 		//(__sync_synchronize())
 		#define ATOMIC_COUNTER volatile LONG
@@ -43,7 +43,7 @@ typedef qboolean bool;
 		#define ATOMIC_ADD(counter, val) ((void)InterlockedExchangeAdd((LONG *) &(counter), (val)))
 	#elif defined(__GNUC__)
 		#define ALIGN(var) var __attribute__((__aligned__(16)))
-		#define ATOMIC(var) var __attribute__((__aligned__(32)))
+		#define ATOMIC(var) var __attribute__((__aligned__(4)))
 		#define MEMORY_BARRIER (_mm_sfence())
 		//(__sync_synchronize())
 		#define ATOMIC_COUNTER volatile int
@@ -52,7 +52,7 @@ typedef qboolean bool;
 		#define ATOMIC_ADD(counter, val) ((void)__sync_fetch_and_add(&(counter), (val)))
 	#elif defined(_MSC_VER)
 		#define ALIGN(var) __declspec(align(16)) var
-		#define ATOMIC(var) __declspec(align(32)) var
+		#define ATOMIC(var) __declspec(align(4)) var
 		#define MEMORY_BARRIER (_mm_sfence())
 		//(MemoryBarrier())
 		#define ATOMIC_COUNTER volatile LONG
@@ -91,11 +91,11 @@ typedef qboolean bool;
 	#define _mm_cvtss_f32(val) (__builtin_ia32_vec_ext_v4sf ((__v4sf)(val), 0))
 #endif
 
-#define MM_MALLOC(size) _mm_malloc(size, ATOMIC_SIZE)
+#define MM_MALLOC(size) _mm_malloc(size, ALIGN_SIZE)
 
 static void *MM_CALLOC(size_t nmemb, size_t size)
 {
-	void *ptr = _mm_malloc(nmemb*size, ATOMIC_SIZE);
+	void *ptr = _mm_malloc(nmemb*size, ALIGN_SIZE);
 	if (ptr != NULL) memset(ptr, 0, nmemb*size);
 	return ptr;
 }
@@ -163,15 +163,15 @@ enum { DPSOFTRAST_OPCODE_Reset = 0 };
 #define DPSOFTRAST_DRAW_MAXCOMMANDPOOL 2097152
 #define DPSOFTRAST_DRAW_MAXCOMMANDSIZE 16384
 
-typedef ATOMIC(struct DPSOFTRAST_State_Command_Pool_s
+typedef ALIGN(struct DPSOFTRAST_State_Command_Pool_s
 {
 	int freecommand;
 	int usedcommands;
-	ATOMIC(unsigned char commands[DPSOFTRAST_DRAW_MAXCOMMANDPOOL]);
+	ALIGN(unsigned char commands[DPSOFTRAST_DRAW_MAXCOMMANDPOOL]);
 }
 DPSOFTRAST_State_Command_Pool);
 
-typedef ATOMIC(struct DPSOFTRAST_State_Triangle_s
+typedef ALIGN(struct DPSOFTRAST_State_Triangle_s
 {
 	unsigned char mip[DPSOFTRAST_MAXTEXTUREUNITS]; // texcoord to screen space density values (for picking mipmap of textures)
 	float w[3];
@@ -236,7 +236,7 @@ typedef enum DPSOFTRAST_BLENDMODE_e
 }
 DPSOFTRAST_BLENDMODE;
 
-typedef ATOMIC(struct DPSOFTRAST_State_Thread_s
+typedef ALIGN(struct DPSOFTRAST_State_Thread_s
 {
 	void *thread;
 	int index;
@@ -249,9 +249,6 @@ typedef ATOMIC(struct DPSOFTRAST_State_Thread_s
 	int depthtest;
 	int depthfunc;
 	int scissortest;
-	int alphatest;
-	int alphafunc;
-	float alphavalue;
 	int viewport[4];
 	int scissor[4];
 	float depthrange[2];
@@ -305,7 +302,7 @@ typedef ATOMIC(struct DPSOFTRAST_State_Thread_s
 }
 DPSOFTRAST_State_Thread);
 
-typedef ATOMIC(struct DPSOFTRAST_State_s
+typedef ALIGN(struct DPSOFTRAST_State_s
 {
 	int fb_width;
 	int fb_height;
@@ -495,7 +492,7 @@ static void DPSOFTRAST_Validate(DPSOFTRAST_State_Thread *thread, int mask)
 	}
 }
 
-DPSOFTRAST_Texture *DPSOFTRAST_Texture_GetByIndex(int index)
+static DPSOFTRAST_Texture *DPSOFTRAST_Texture_GetByIndex(int index)
 {
 	if (index >= 1 && index < dpsoftrast.texture_end && dpsoftrast.texture[index].bytes)
 		return &dpsoftrast.texture[index];
@@ -620,9 +617,6 @@ int DPSOFTRAST_Texture_New(int flags, int width, int height, int depth)
 	d = depth;
 	size = 0;
 	mipmaps = 0;
-	w = width;
-	h = height;
-	d = depth;
 	for (;;)
 	{
 		s = w * h * d * sides * 4;
@@ -663,7 +657,7 @@ void DPSOFTRAST_Texture_Free(int index)
 	while (dpsoftrast.texture_end > 0 && dpsoftrast.texture[dpsoftrast.texture_end-1].bytes == NULL)
 		dpsoftrast.texture_end--;
 }
-void DPSOFTRAST_Texture_CalculateMipmaps(int index)
+static void DPSOFTRAST_Texture_CalculateMipmaps(int index)
 {
 	int i, x, y, z, w, layer0, layer1, row0, row1;
 	unsigned char *o, *i0, *i1, *i2, *i3;
@@ -751,12 +745,12 @@ void DPSOFTRAST_Texture_UpdatePartial(int index, int mip, const unsigned char *p
 		DPSOFTRAST_Flush();
 	if (pixels)
 	{
-		dst = texture->bytes + (blocky * texture->mipmap[0][2] + blockx) * 4;
+		dst = texture->bytes + texture->mipmap[0][1] +(-blocky * texture->mipmap[0][2] + blockx) * 4;
 		while (blockheight > 0)
 		{
+			dst -= texture->mipmap[0][2] * 4;
 			memcpy(dst, pixels, blockwidth * 4);
 			pixels += blockwidth * 4;
-			dst += texture->mipmap[0][2] * 4;
 			blockheight--;
 		}
 	}
@@ -769,7 +763,16 @@ void DPSOFTRAST_Texture_UpdateFull(int index, const unsigned char *pixels)
 	if (texture->binds)
 		DPSOFTRAST_Flush();
 	if (pixels)
-		memcpy(texture->bytes, pixels, texture->mipmap[0][1]);
+	{
+		int i, stride = texture->mipmap[0][2]*4;
+		unsigned char *dst = texture->bytes + texture->mipmap[0][1];
+		for (i = texture->mipmap[0][3];i > 0;i--)
+		{
+			dst -= stride;
+			memcpy(dst, pixels, stride);
+			pixels += stride;
+		}
+	}
 	DPSOFTRAST_Texture_CalculateMipmaps(index);
 }
 int DPSOFTRAST_Texture_GetWidth(int index, int mip)
@@ -1168,30 +1171,6 @@ void DPSOFTRAST_CullFace(int mode)
 	command->mode = mode;
 }
 
-DEFCOMMAND(15, AlphaTest, int enable;)
-static void DPSOFTRAST_Interpret_AlphaTest(DPSOFTRAST_State_Thread *thread, DPSOFTRAST_Command_AlphaTest *command)
-{
-	thread->alphatest = command->enable;
-}
-void DPSOFTRAST_AlphaTest(int enable)
-{
-	DPSOFTRAST_Command_AlphaTest *command = DPSOFTRAST_ALLOCATECOMMAND(AlphaTest);
-	command->enable = enable;
-}
-
-DEFCOMMAND(16, AlphaFunc, int func; float ref;)
-static void DPSOFTRAST_Interpret_AlphaFunc(DPSOFTRAST_State_Thread *thread, DPSOFTRAST_Command_AlphaFunc *command)
-{
-	thread->alphafunc = command->func;
-	thread->alphavalue = command->ref;
-}
-void DPSOFTRAST_AlphaFunc(int func, float ref)
-{
-	DPSOFTRAST_Command_AlphaFunc *command = DPSOFTRAST_ALLOCATECOMMAND(AlphaFunc);
-	command->func = func;
-	command->ref = ref;
-}
-
 void DPSOFTRAST_Color4f(float r, float g, float b, float a)
 {
 	dpsoftrast.color[0] = r;
@@ -1296,9 +1275,10 @@ void DPSOFTRAST_CopyRectangleToTexture(int index, int mip, int tx, int ty, int s
 	if (th > sh) th = sh;
 	if (tw < 1 || th < 1)
 		return;
-	sy1 = sheight - 1 - sy1;
+	sy1 = sheight - sy1 - th;
+	ty1 = theight - ty1 - th;
 	for (y = 0;y < th;y++)
-		memcpy(tpixels + ((ty1 + y) * twidth + tx1), spixels + ((sy1 - y) * swidth + sx1), tw*4);
+		memcpy(tpixels + ((ty1 + y) * twidth + tx1), spixels + ((sy1 + y) * swidth + sx1), tw*4);
 	if (texture->mipmaps > 1)
 		DPSOFTRAST_Texture_CalculateMipmaps(index);
 }
@@ -1331,7 +1311,8 @@ void DPSOFTRAST_SetTexture(int unitnum, int index)
 	command->texture = texture;
 
 	dpsoftrast.texbound[unitnum] = texture;
-	ATOMIC_ADD(texture->binds, dpsoftrast.numthreads);
+	if (texture)
+		ATOMIC_ADD(texture->binds, dpsoftrast.numthreads);
 }
 
 void DPSOFTRAST_SetVertexPointer(const float *vertex3f, size_t stride)
@@ -1680,7 +1661,7 @@ static void DPSOFTRAST_Fill4f(float *dst, const float *src, int size)
 }
 #endif
 
-void DPSOFTRAST_Vertex_Transform(float *out4f, const float *in4f, int numitems, const float *inmatrix16f)
+static void DPSOFTRAST_Vertex_Transform(float *out4f, const float *in4f, int numitems, const float *inmatrix16f)
 {
 #ifdef SSE_POSSIBLE
 	static const float identitymatrix[4][4] = {{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,0,1}};
@@ -1728,10 +1709,12 @@ void DPSOFTRAST_Vertex_Transform(float *out4f, const float *in4f, int numitems, 
 #endif
 }
 
-void DPSOFTRAST_Vertex_Copy(float *out4f, const float *in4f, int numitems)
+#if 0
+static void DPSOFTRAST_Vertex_Copy(float *out4f, const float *in4f, int numitems)
 {
 	memcpy(out4f, in4f, numitems * sizeof(float[4]));
 }
+#endif
 
 #ifdef SSE_POSSIBLE
 #define DPSOFTRAST_PROJECTVERTEX(out, in, viewportcenter, viewportscale) \
@@ -2032,7 +2015,7 @@ static float *DPSOFTRAST_Array_TransformProject(int outarray, int inarray, const
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_Begin(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *zf)
+static void DPSOFTRAST_Draw_Span_Begin(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *zf)
 {
 	int x;
 	int startx = span->startx;
@@ -2059,7 +2042,7 @@ void DPSOFTRAST_Draw_Span_Begin(DPSOFTRAST_State_Thread *thread, const DPSOFTRAS
 	}
 }
 
-void DPSOFTRAST_Draw_Span_FinishBGRA8(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, const unsigned char* RESTRICT in4ub)
+static void DPSOFTRAST_Draw_Span_FinishBGRA8(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, const unsigned char* RESTRICT in4ub)
 {
 #ifdef SSE_POSSIBLE
 	int x;
@@ -2069,14 +2052,12 @@ void DPSOFTRAST_Draw_Span_FinishBGRA8(DPSOFTRAST_State_Thread *thread, const DPS
 	int subx;
 	const unsigned int * RESTRICT ini = (const unsigned int *)in4ub;
 	unsigned char * RESTRICT pixelmask = span->pixelmask;
-	unsigned char * RESTRICT pixel = (unsigned char *)dpsoftrast.fb_colorpixels[0];
 	unsigned int * RESTRICT pixeli = (unsigned int *)dpsoftrast.fb_colorpixels[0];
-	if (!pixel)
+	if (!pixeli)
 		return;
-	pixel += (span->y * dpsoftrast.fb_width + span->x) * 4;
 	pixeli += span->y * dpsoftrast.fb_width + span->x;
 	// handle alphatest now (this affects depth writes too)
-	if (thread->alphatest)
+	if (thread->shader_permutation & SHADERPERMUTATION_ALPHAKILL)
 		for (x = startx;x < endx;x++)
 			if (in4ub[x*4+3] < 128)
 				pixelmask[x] = false;
@@ -2318,7 +2299,7 @@ static void DPSOFTRAST_Texture2DBGRA8(DPSOFTRAST_Texture *texture, int mip, floa
 	const unsigned char * RESTRICT pixel[4];
 	int width = texture->mipmap[mip][2], height = texture->mipmap[mip][3];
 	int wrapmask[2] = { width-1, height-1 };
-	pixelbase = (unsigned char *)texture->bytes + texture->mipmap[mip][0];
+	pixelbase = (unsigned char *)texture->bytes + texture->mipmap[mip][0] + texture->mipmap[mip][1] - 4*width;
 	if(texture->filter & DPSOFTRAST_TEXTURE_FILTER_LINEAR)
 	{
 		unsigned int tc[2] = { x * (width<<12) - 2048, y * (height<<12) - 2048};
@@ -2341,10 +2322,10 @@ static void DPSOFTRAST_Texture2DBGRA8(DPSOFTRAST_Texture *texture, int mip, floa
 			tci1[0] &= wrapmask[0];
 			tci1[1] &= wrapmask[1];
 		}
-		pixel[0] = pixelbase + 4 * (tci[1]*width+tci[0]);
-		pixel[1] = pixelbase + 4 * (tci[1]*width+tci1[0]);
-		pixel[2] = pixelbase + 4 * (tci1[1]*width+tci[0]);
-		pixel[3] = pixelbase + 4 * (tci1[1]*width+tci1[0]);
+		pixel[0] = pixelbase + 4 * (tci[0] - tci[1]*width);
+		pixel[1] = pixelbase + 4 * (tci[0] - tci[1]*width);
+		pixel[2] = pixelbase + 4 * (tci[0] - tci1[1]*width);
+		pixel[3] = pixelbase + 4 * (tci[0] - tci1[1]*width);
 		c[0] = (pixel[0][0]*lerp[0]+pixel[1][0]*lerp[1]+pixel[2][0]*lerp[2]+pixel[3][0]*lerp[3])>>24;
 		c[1] = (pixel[0][1]*lerp[0]+pixel[1][1]*lerp[1]+pixel[2][1]*lerp[2]+pixel[3][1]*lerp[3])>>24;
 		c[2] = (pixel[0][2]*lerp[0]+pixel[1][2]*lerp[1]+pixel[2][2]*lerp[2]+pixel[3][2]*lerp[3])>>24;
@@ -2363,7 +2344,7 @@ static void DPSOFTRAST_Texture2DBGRA8(DPSOFTRAST_Texture *texture, int mip, floa
 			tci[0] &= wrapmask[0];
 			tci[1] &= wrapmask[1];
 		}
-		pixel[0] = pixelbase + 4 * (tci[1]*width+tci[0]);
+		pixel[0] = pixelbase + 4 * (tci[0] - tci[1]*width);
 		c[0] = pixel[0][0];
 		c[1] = pixel[0][1];
 		c[2] = pixel[0][2];
@@ -2371,7 +2352,8 @@ static void DPSOFTRAST_Texture2DBGRA8(DPSOFTRAST_Texture *texture, int mip, floa
 	}
 }
 
-void DPSOFTRAST_Draw_Span_Texture2DVarying(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float * RESTRICT out4f, int texunitindex, int arrayindex, const float * RESTRICT zf)
+#if 0
+static void DPSOFTRAST_Draw_Span_Texture2DVarying(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float * RESTRICT out4f, int texunitindex, int arrayindex, const float * RESTRICT zf)
 {
 	int x;
 	int startx = span->startx;
@@ -2406,7 +2388,7 @@ void DPSOFTRAST_Draw_Span_Texture2DVarying(DPSOFTRAST_State_Thread *thread, cons
 		return;
 	}
 	mip = triangle->mip[texunitindex];
-	pixelbase = (unsigned char *)texture->bytes + texture->mipmap[mip][0];
+	pixelbase = (unsigned char *)texture->bytes + texture->mipmap[mip][0] + texture->mipmap[mip][1] - 4*texture->mipmap[mip][2];
 	// if this mipmap of the texture is 1 pixel, just fill it with that color
 	if (texture->mipmap[mip][1] == 4)
 	{
@@ -2428,7 +2410,7 @@ void DPSOFTRAST_Draw_Span_Texture2DVarying(DPSOFTRAST_State_Thread *thread, cons
 	flags = texture->flags;
 	tcscale[0] = texture->mipmap[mip][2];
 	tcscale[1] = texture->mipmap[mip][3];
-	tciwidth = texture->mipmap[mip][2];
+	tciwidth = -texture->mipmap[mip][2];
 	tcimin[0] = 0;
 	tcimin[1] = 0;
 	tcimax[0] = texture->mipmap[mip][2]-1;
@@ -2567,8 +2549,9 @@ void DPSOFTRAST_Draw_Span_Texture2DVarying(DPSOFTRAST_State_Thread *thread, cons
 		}
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char * RESTRICT out4ub, int texunitindex, int arrayindex, const float * RESTRICT zf)
+static void DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char * RESTRICT out4ub, int texunitindex, int arrayindex, const float * RESTRICT zf)
 {
 #ifdef SSE_POSSIBLE
 	int x;
@@ -2592,7 +2575,7 @@ void DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(DPSOFTRAST_State_Thread *thread,
 		return;
 	}
 	mip = triangle->mip[texunitindex];
-	pixelbase = (const unsigned char *)texture->bytes + texture->mipmap[mip][0];
+	pixelbase = (const unsigned char *)texture->bytes + texture->mipmap[mip][0] + texture->mipmap[mip][1] - 4*texture->mipmap[mip][2];
 	// if this mipmap of the texture is 1 pixel, just fill it with that color
 	if (texture->mipmap[mip][1] == 4)
 	{
@@ -2614,7 +2597,7 @@ void DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(DPSOFTRAST_State_Thread *thread,
 	if (filter)
 		endtc = _mm_sub_ps(endtc, _mm_set1_ps(0.5f));
 	endsubtc = _mm_cvtps_epi32(_mm_mul_ps(endtc, _mm_set1_ps(65536.0f)));
-	tcoffset = _mm_add_epi32(_mm_slli_epi32(_mm_shuffle_epi32(tcsize, _MM_SHUFFLE(0, 0, 0, 0)), 18), _mm_set1_epi32(4));
+	tcoffset = _mm_add_epi32(_mm_slli_epi32(_mm_sub_epi32(_mm_setzero_si128(), _mm_shuffle_epi32(tcsize, _MM_SHUFFLE(0, 0, 0, 0))), 18), _mm_set1_epi32(4));
 	tcmax = _mm_packs_epi32(tcmask, tcmask);
 	for (x = startx;x < endx;)
 	{
@@ -2849,19 +2832,20 @@ void DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(DPSOFTRAST_State_Thread *thread,
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_TextureCubeVaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char * RESTRICT out4ub, int texunitindex, int arrayindex, const float * RESTRICT zf)
+static void DPSOFTRAST_Draw_Span_TextureCubeVaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char * RESTRICT out4ub, int texunitindex, int arrayindex, const float * RESTRICT zf)
 {
 	// TODO: IMPLEMENT
 	memset(out4ub + span->startx*4, 255, (span->startx - span->endx)*4);
 }
 
-float DPSOFTRAST_SampleShadowmap(const float *vector)
+static float DPSOFTRAST_SampleShadowmap(const float *vector)
 {
 	// TODO: IMPLEMENT
 	return 1.0f;
 }
 
-void DPSOFTRAST_Draw_Span_MultiplyVarying(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *in4f, int arrayindex, const float *zf)
+#if 0
+static void DPSOFTRAST_Draw_Span_MultiplyVarying(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *in4f, int arrayindex, const float *zf)
 {
 	int x;
 	int startx = span->startx;
@@ -2884,8 +2868,10 @@ void DPSOFTRAST_Draw_Span_MultiplyVarying(const DPSOFTRAST_State_Triangle * REST
 		out4f[x*4+3] = in4f[x*4+3] * c[3];
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_Varying(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, int arrayindex, const float *zf)
+#if 0
+static void DPSOFTRAST_Draw_Span_Varying(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, int arrayindex, const float *zf)
 {
 	int x;
 	int startx = span->startx;
@@ -2908,8 +2894,10 @@ void DPSOFTRAST_Draw_Span_Varying(const DPSOFTRAST_State_Triangle * RESTRICT tri
 		out4f[x*4+3] = c[3];
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_AddBloom(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f, const float *subcolor)
+#if 0
+static void DPSOFTRAST_Draw_Span_AddBloom(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f, const float *subcolor)
 {
 	int x, startx = span->startx, endx = span->endx;
 	float c[4], localcolor[4];
@@ -2929,8 +2917,10 @@ void DPSOFTRAST_Draw_Span_AddBloom(const DPSOFTRAST_State_Triangle * RESTRICT tr
 		out4f[x*4+3] = ina4f[x*4+3] + c[3];
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_MultiplyBuffers(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f)
+#if 0
+static void DPSOFTRAST_Draw_Span_MultiplyBuffers(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f)
 {
 	int x, startx = span->startx, endx = span->endx;
 	for (x = startx;x < endx;x++)
@@ -2941,8 +2931,10 @@ void DPSOFTRAST_Draw_Span_MultiplyBuffers(const DPSOFTRAST_State_Triangle * REST
 		out4f[x*4+3] = ina4f[x*4+3] * inb4f[x*4+3];
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_AddBuffers(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f)
+#if 0
+static void DPSOFTRAST_Draw_Span_AddBuffers(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f)
 {
 	int x, startx = span->startx, endx = span->endx;
 	for (x = startx;x < endx;x++)
@@ -2953,8 +2945,10 @@ void DPSOFTRAST_Draw_Span_AddBuffers(const DPSOFTRAST_State_Triangle * RESTRICT 
 		out4f[x*4+3] = ina4f[x*4+3] + inb4f[x*4+3];
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_MixBuffers(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f)
+#if 0
+static void DPSOFTRAST_Draw_Span_MixBuffers(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *ina4f, const float *inb4f)
 {
 	int x, startx = span->startx, endx = span->endx;
 	float a, b;
@@ -2968,8 +2962,10 @@ void DPSOFTRAST_Draw_Span_MixBuffers(const DPSOFTRAST_State_Triangle * RESTRICT 
 		out4f[x*4+3] = ina4f[x*4+3] * a + inb4f[x*4+3] * b;
 	}
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_MixUniformColor(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *in4f, const float *color)
+#if 0
+static void DPSOFTRAST_Draw_Span_MixUniformColor(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, float *out4f, const float *in4f, const float *color)
 {
 	int x, startx = span->startx, endx = span->endx;
 	float localcolor[4], ilerp, lerp;
@@ -2987,10 +2983,11 @@ void DPSOFTRAST_Draw_Span_MixUniformColor(const DPSOFTRAST_State_Triangle * REST
 		out4f[x*4+3] = in4f[x*4+3] * ilerp + localcolor[3] * lerp;
 	}
 }
+#endif
 
 
 
-void DPSOFTRAST_Draw_Span_MultiplyVaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *in4ub, int arrayindex, const float *zf)
+static void DPSOFTRAST_Draw_Span_MultiplyVaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *in4ub, int arrayindex, const float *zf)
 {
 #ifdef SSE_POSSIBLE
 	int x;
@@ -3037,7 +3034,7 @@ void DPSOFTRAST_Draw_Span_MultiplyVaryingBGRA8(const DPSOFTRAST_State_Triangle *
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_VaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, int arrayindex, const float *zf)
+static void DPSOFTRAST_Draw_Span_VaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, int arrayindex, const float *zf)
 {
 #ifdef SSE_POSSIBLE
 	int x;
@@ -3082,7 +3079,7 @@ void DPSOFTRAST_Draw_Span_VaryingBGRA8(const DPSOFTRAST_State_Triangle * RESTRIC
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_AddBloomBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub, const float *subcolor)
+static void DPSOFTRAST_Draw_Span_AddBloomBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub, const float *subcolor)
 {
 #ifdef SSE_POSSIBLE
 	int x, startx = span->startx, endx = span->endx;
@@ -3105,7 +3102,7 @@ void DPSOFTRAST_Draw_Span_AddBloomBGRA8(const DPSOFTRAST_State_Triangle * RESTRI
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_MultiplyBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub)
+static void DPSOFTRAST_Draw_Span_MultiplyBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub)
 {
 #ifdef SSE_POSSIBLE
 	int x, startx = span->startx, endx = span->endx;
@@ -3126,7 +3123,7 @@ void DPSOFTRAST_Draw_Span_MultiplyBuffersBGRA8(const DPSOFTRAST_State_Triangle *
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_AddBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub)
+static void DPSOFTRAST_Draw_Span_AddBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub)
 {
 #ifdef SSE_POSSIBLE
 	int x, startx = span->startx, endx = span->endx;
@@ -3147,7 +3144,8 @@ void DPSOFTRAST_Draw_Span_AddBuffersBGRA8(const DPSOFTRAST_State_Triangle * REST
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_TintedAddBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub, const float *inbtintbgra)
+#if 0
+static void DPSOFTRAST_Draw_Span_TintedAddBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub, const float *inbtintbgra)
 {
 #ifdef SSE_POSSIBLE
 	int x, startx = span->startx, endx = span->endx;
@@ -3169,8 +3167,9 @@ void DPSOFTRAST_Draw_Span_TintedAddBuffersBGRA8(const DPSOFTRAST_State_Triangle 
 	}
 #endif
 }
+#endif
 
-void DPSOFTRAST_Draw_Span_MixBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub)
+static void DPSOFTRAST_Draw_Span_MixBuffersBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *ina4ub, const unsigned char *inb4ub)
 {
 #ifdef SSE_POSSIBLE
 	int x, startx = span->startx, endx = span->endx;
@@ -3193,7 +3192,7 @@ void DPSOFTRAST_Draw_Span_MixBuffersBGRA8(const DPSOFTRAST_State_Triangle * REST
 #endif
 }
 
-void DPSOFTRAST_Draw_Span_MixUniformColorBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *in4ub, const float *color)
+static void DPSOFTRAST_Draw_Span_MixUniformColorBGRA8(const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span, unsigned char *out4ub, const unsigned char *in4ub, const float *color)
 {
 #ifdef SSE_POSSIBLE
 	int x, startx = span->startx, endx = span->endx;
@@ -3217,7 +3216,7 @@ void DPSOFTRAST_Draw_Span_MixUniformColorBGRA8(const DPSOFTRAST_State_Triangle *
 
 
 
-void DPSOFTRAST_VertexShader_Generic(void)
+static void DPSOFTRAST_VertexShader_Generic(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_COLOR, DPSOFTRAST_ARRAY_COLOR);
@@ -3226,7 +3225,7 @@ void DPSOFTRAST_VertexShader_Generic(void)
 		DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD1);
 }
 
-void DPSOFTRAST_PixelShader_Generic(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_Generic(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
 	unsigned char buffer_texture_colorbgra8[DPSOFTRAST_DRAW_MAXSPANLENGTH*4];
@@ -3259,19 +3258,25 @@ void DPSOFTRAST_PixelShader_Generic(DPSOFTRAST_State_Thread *thread, const DPSOF
 	}
 	else
 		DPSOFTRAST_Draw_Span_VaryingBGRA8(triangle, span, buffer_FragColorbgra8, 1, buffer_z);
+	if(thread->shader_permutation & SHADERPERMUTATION_ALPHAKILL)
+	{
+		int x;
+		for (x = span->startx;x < span->endx;x++)
+			buffer_FragColorbgra8[x*4+3] = buffer_FragColorbgra8[x*4+3] * thread->uniform4f[DPSOFTRAST_UNIFORM_Alpha*4+0];
+	}
 	DPSOFTRAST_Draw_Span_FinishBGRA8(thread, triangle, span, buffer_FragColorbgra8);
 }
 
 
 
-void DPSOFTRAST_VertexShader_PostProcess(void)
+static void DPSOFTRAST_VertexShader_PostProcess(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD0);
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD4);
 }
 
-void DPSOFTRAST_PixelShader_PostProcess(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_PostProcess(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	// TODO: optimize!!  at the very least there is no reason to use texture sampling on the frame texture
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
@@ -3298,12 +3303,12 @@ void DPSOFTRAST_PixelShader_PostProcess(DPSOFTRAST_State_Thread *thread, const D
 
 
 
-void DPSOFTRAST_VertexShader_Depth_Or_Shadow(void)
+static void DPSOFTRAST_VertexShader_Depth_Or_Shadow(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_Depth_Or_Shadow(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_Depth_Or_Shadow(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	// this is never called (because colormask is off when this shader is used)
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
@@ -3315,13 +3320,13 @@ void DPSOFTRAST_PixelShader_Depth_Or_Shadow(DPSOFTRAST_State_Thread *thread, con
 
 
 
-void DPSOFTRAST_VertexShader_FlatColor(void)
+static void DPSOFTRAST_VertexShader_FlatColor(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 	DPSOFTRAST_Array_Transform(DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD0, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_TexMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_FlatColor(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_FlatColor(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 #ifdef SSE_POSSIBLE
 	unsigned char * RESTRICT pixelmask = span->pixelmask;
@@ -3333,7 +3338,7 @@ void DPSOFTRAST_PixelShader_FlatColor(DPSOFTRAST_State_Thread *thread, const DPS
 	unsigned char buffer_FragColorbgra8[DPSOFTRAST_DRAW_MAXSPANLENGTH*4];
 	DPSOFTRAST_Draw_Span_Begin(thread, triangle, span, buffer_z);
 	DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(thread, triangle, span, buffer_texture_colorbgra8, GL20TU_COLOR, 2, buffer_z);
-	if (thread->alphatest || thread->fb_blendmode != DPSOFTRAST_BLENDMODE_OPAQUE)
+	if ((thread->shader_permutation & SHADERPERMUTATION_ALPHAKILL) || thread->fb_blendmode != DPSOFTRAST_BLENDMODE_OPAQUE)
 		pixel = buffer_FragColorbgra8;
 	Color_Ambientm = _mm_shuffle_epi32(_mm_cvtps_epi32(_mm_mul_ps(_mm_load_ps(&thread->uniform4f[DPSOFTRAST_UNIFORM_Color_Ambient*4]), _mm_set1_ps(256.0f))), _MM_SHUFFLE(3, 0, 1, 2));
 	Color_Ambientm = _mm_and_si128(Color_Ambientm, _mm_setr_epi32(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0));
@@ -3365,14 +3370,14 @@ void DPSOFTRAST_PixelShader_FlatColor(DPSOFTRAST_State_Thread *thread, const DPS
 
 
 
-void DPSOFTRAST_VertexShader_VertexColor(void)
+static void DPSOFTRAST_VertexShader_VertexColor(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_COLOR, DPSOFTRAST_ARRAY_COLOR);
 	DPSOFTRAST_Array_Transform(DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD0, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_TexMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_VertexColor(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_VertexColor(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 #ifdef SSE_POSSIBLE
 	unsigned char * RESTRICT pixelmask = span->pixelmask;
@@ -3386,7 +3391,7 @@ void DPSOFTRAST_PixelShader_VertexColor(DPSOFTRAST_State_Thread *thread, const D
 	int arrayindex = DPSOFTRAST_ARRAY_COLOR;
 	DPSOFTRAST_Draw_Span_Begin(thread, triangle, span, buffer_z);
 	DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(thread, triangle, span, buffer_texture_colorbgra8, GL20TU_COLOR, 2, buffer_z);
-	if (thread->alphatest || thread->fb_blendmode != DPSOFTRAST_BLENDMODE_OPAQUE)
+	if ((thread->shader_permutation & SHADERPERMUTATION_ALPHAKILL) || thread->fb_blendmode != DPSOFTRAST_BLENDMODE_OPAQUE)
 		pixel = buffer_FragColorbgra8;
 	Color_Ambientm = _mm_shuffle_epi32(_mm_cvtps_epi32(_mm_mul_ps(_mm_load_ps(&thread->uniform4f[DPSOFTRAST_UNIFORM_Color_Ambient*4]), _mm_set1_ps(256.0f))), _MM_SHUFFLE(3, 0, 1, 2));
 	Color_Ambientm = _mm_and_si128(Color_Ambientm, _mm_setr_epi32(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0));
@@ -3439,14 +3444,14 @@ void DPSOFTRAST_PixelShader_VertexColor(DPSOFTRAST_State_Thread *thread, const D
 
 
 
-void DPSOFTRAST_VertexShader_Lightmap(void)
+static void DPSOFTRAST_VertexShader_Lightmap(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 	DPSOFTRAST_Array_Transform(DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD0, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_TexMatrixM1);
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_TEXCOORD4, DPSOFTRAST_ARRAY_TEXCOORD4);
 }
 
-void DPSOFTRAST_PixelShader_Lightmap(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_Lightmap(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 #ifdef SSE_POSSIBLE
 	unsigned char * RESTRICT pixelmask = span->pixelmask;
@@ -3461,7 +3466,7 @@ void DPSOFTRAST_PixelShader_Lightmap(DPSOFTRAST_State_Thread *thread, const DPSO
 	DPSOFTRAST_Draw_Span_Begin(thread, triangle, span, buffer_z);
 	DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(thread, triangle, span, buffer_texture_colorbgra8, GL20TU_COLOR, DPSOFTRAST_ARRAY_TEXCOORD0, buffer_z);
 	DPSOFTRAST_Draw_Span_Texture2DVaryingBGRA8(thread, triangle, span, buffer_texture_lightmapbgra8, GL20TU_LIGHTMAP, DPSOFTRAST_ARRAY_TEXCOORD4, buffer_z);
-	if (thread->alphatest || thread->fb_blendmode != DPSOFTRAST_BLENDMODE_OPAQUE)
+	if ((thread->shader_permutation & SHADERPERMUTATION_ALPHAKILL) || thread->fb_blendmode != DPSOFTRAST_BLENDMODE_OPAQUE)
 		pixel = buffer_FragColorbgra8;
 	Color_Ambientm = _mm_shuffle_epi32(_mm_cvtps_epi32(_mm_mul_ps(_mm_load_ps(&thread->uniform4f[DPSOFTRAST_UNIFORM_Color_Ambient*4]), _mm_set1_ps(256.0f))), _MM_SHUFFLE(3, 0, 1, 2));
 	Color_Ambientm = _mm_and_si128(Color_Ambientm, _mm_setr_epi32(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0));
@@ -3541,38 +3546,38 @@ void DPSOFTRAST_PixelShader_Lightmap(DPSOFTRAST_State_Thread *thread, const DPSO
 void DPSOFTRAST_VertexShader_LightDirection(void);
 void DPSOFTRAST_PixelShader_LightDirection(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span);
 
-void DPSOFTRAST_VertexShader_FakeLight(void)
+static void DPSOFTRAST_VertexShader_FakeLight(void)
 {
 	DPSOFTRAST_VertexShader_LightDirection();
 }
 
-void DPSOFTRAST_PixelShader_FakeLight(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_FakeLight(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	DPSOFTRAST_PixelShader_LightDirection(thread, triangle, span);
 }
 
 
 
-void DPSOFTRAST_VertexShader_LightDirectionMap_ModelSpace(void)
+static void DPSOFTRAST_VertexShader_LightDirectionMap_ModelSpace(void)
 {
 	DPSOFTRAST_VertexShader_LightDirection();
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_TEXCOORD4, DPSOFTRAST_ARRAY_TEXCOORD4);
 }
 
-void DPSOFTRAST_PixelShader_LightDirectionMap_ModelSpace(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_LightDirectionMap_ModelSpace(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	DPSOFTRAST_PixelShader_LightDirection(thread, triangle, span);
 }
 
 
 
-void DPSOFTRAST_VertexShader_LightDirectionMap_TangentSpace(void)
+static void DPSOFTRAST_VertexShader_LightDirectionMap_TangentSpace(void)
 {
 	DPSOFTRAST_VertexShader_LightDirection();
 	DPSOFTRAST_Array_Load(DPSOFTRAST_ARRAY_TEXCOORD4, DPSOFTRAST_ARRAY_TEXCOORD4);
 }
 
-void DPSOFTRAST_PixelShader_LightDirectionMap_TangentSpace(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_LightDirectionMap_TangentSpace(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	DPSOFTRAST_PixelShader_LightDirection(thread, triangle, span);
 }
@@ -3884,8 +3889,8 @@ void DPSOFTRAST_PixelShader_LightDirection(DPSOFTRAST_State_Thread *thread, cons
 
 				specular = DPSOFTRAST_Vector3Dot(surfacenormal, specularnormal);if (specular < 0.0f) specular = 0.0f;
 			}
+			specular = pow(specular, 1.0f + SpecularPower * glosstex[3]);
 
-			specular = pow(specular, SpecularPower * glosstex[3]);
 			if (thread->shader_permutation & SHADERPERMUTATION_GLOW)
 			{
 				d[0] = (int)(buffer_texture_glowbgra8[x*4+0] * Color_Glow[0] + diffusetex[0] * Color_Ambient[0] + (diffusetex[0] * Color_Diffuse[0] * diffuse + glosstex[0] * Color_Specular[0] * specular) * LightColor[0]);if (d[0] > 255) d[0] = 255;
@@ -4042,7 +4047,7 @@ void DPSOFTRAST_PixelShader_LightDirection(DPSOFTRAST_State_Thread *thread, cons
 	{
 		for (x = startx;x < endx;x++)
 		{
-			z = buffer_z[x];
+			// z = buffer_z[x];
 			diffusetex[0] = buffer_texture_colorbgra8[x*4+0];
 			diffusetex[1] = buffer_texture_colorbgra8[x*4+1];
 			diffusetex[2] = buffer_texture_colorbgra8[x*4+2];
@@ -4073,7 +4078,7 @@ void DPSOFTRAST_PixelShader_LightDirection(DPSOFTRAST_State_Thread *thread, cons
 
 
 
-void DPSOFTRAST_VertexShader_LightSource(void)
+static void DPSOFTRAST_VertexShader_LightSource(void)
 {
 	int i;
 	int numvertices = dpsoftrast.numvertices;
@@ -4140,7 +4145,7 @@ void DPSOFTRAST_VertexShader_LightSource(void)
 	DPSOFTRAST_Array_Transform(DPSOFTRAST_ARRAY_TEXCOORD3, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelToLightM1);
 }
 
-void DPSOFTRAST_PixelShader_LightSource(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_LightSource(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 #ifdef SSE_POSSIBLE
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
@@ -4293,7 +4298,7 @@ void DPSOFTRAST_PixelShader_LightSource(DPSOFTRAST_State_Thread *thread, const D
 
 				specular = DPSOFTRAST_Vector3Dot(surfacenormal, specularnormal);if (specular < 0.0f) specular = 0.0f;
 			}
-			specular = pow(specular, SpecularPower * glosstex[3]);
+			specular = pow(specular, 1.0f + SpecularPower * glosstex[3]);
 
 			if (thread->shader_permutation & SHADERPERMUTATION_CUBEFILTER)
 			{
@@ -4437,14 +4442,14 @@ void DPSOFTRAST_PixelShader_LightSource(DPSOFTRAST_State_Thread *thread, const D
 
 
 
-void DPSOFTRAST_VertexShader_Refraction(void)
+static void DPSOFTRAST_VertexShader_Refraction(void)
 {
 	DPSOFTRAST_Array_Transform(DPSOFTRAST_ARRAY_TEXCOORD4, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 	DPSOFTRAST_Array_Transform(DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD0, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_TexMatrixM1);
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_Refraction(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_Refraction(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
 	float z;
@@ -4526,7 +4531,7 @@ void DPSOFTRAST_PixelShader_Refraction(DPSOFTRAST_State_Thread *thread, const DP
 
 
 
-void DPSOFTRAST_VertexShader_Water(void)
+static void DPSOFTRAST_VertexShader_Water(void)
 {
 	int i;
 	int numvertices = dpsoftrast.numvertices;
@@ -4576,10 +4581,10 @@ void DPSOFTRAST_VertexShader_Water(void)
 }
 
 
-void DPSOFTRAST_PixelShader_Water(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_Water(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
-	float z;
+	// float z;
 	int x, startx = span->startx, endx = span->endx;
 
 	// texture reads
@@ -4593,9 +4598,9 @@ void DPSOFTRAST_PixelShader_Water(DPSOFTRAST_State_Thread *thread, const DPSOFTR
 	float EyeVectorslope[4];
 
 	// uniforms
-	float ScreenScaleRefractReflect[2];
-	float ScreenCenterRefractReflect[2];
-	float DistortScaleRefractReflect[2];
+	float ScreenScaleRefractReflect[4];
+	float ScreenCenterRefractReflect[4];
+	float DistortScaleRefractReflect[4];
 	float RefractColor[4];
 	float ReflectColor[4];
 	float ReflectFactor;
@@ -4648,7 +4653,7 @@ void DPSOFTRAST_PixelShader_Water(DPSOFTRAST_State_Thread *thread, const DPSOFTR
 		unsigned char c2[4];
 		float Fresnel;
 
-		z = buffer_z[x];
+		// z = buffer_z[x];
 
 		// "    vec4 ScreenScaleRefractReflectIW = ScreenScaleRefractReflect * (1.0 / ModelViewProjectionPosition.w);\n"
 		iw = 1.0f / (ModelViewProjectionPositiondata[3] + ModelViewProjectionPositionslope[3]*x); // / z
@@ -4694,12 +4699,12 @@ void DPSOFTRAST_PixelShader_Water(DPSOFTRAST_State_Thread *thread, const DPSOFTR
 
 
 
-void DPSOFTRAST_VertexShader_ShowDepth(void)
+static void DPSOFTRAST_VertexShader_ShowDepth(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_ShowDepth(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_ShowDepth(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	// TODO: IMPLEMENT
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
@@ -4711,12 +4716,12 @@ void DPSOFTRAST_PixelShader_ShowDepth(DPSOFTRAST_State_Thread *thread, const DPS
 
 
 
-void DPSOFTRAST_VertexShader_DeferredGeometry(void)
+static void DPSOFTRAST_VertexShader_DeferredGeometry(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_DeferredGeometry(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_DeferredGeometry(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	// TODO: IMPLEMENT
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
@@ -4728,12 +4733,12 @@ void DPSOFTRAST_PixelShader_DeferredGeometry(DPSOFTRAST_State_Thread *thread, co
 
 
 
-void DPSOFTRAST_VertexShader_DeferredLightSource(void)
+static void DPSOFTRAST_VertexShader_DeferredLightSource(void)
 {
 	DPSOFTRAST_Array_TransformProject(DPSOFTRAST_ARRAY_POSITION, DPSOFTRAST_ARRAY_POSITION, dpsoftrast.uniform4f + 4*DPSOFTRAST_UNIFORM_ModelViewProjectionMatrixM1);
 }
 
-void DPSOFTRAST_PixelShader_DeferredLightSource(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
+static void DPSOFTRAST_PixelShader_DeferredLightSource(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_State_Triangle * RESTRICT triangle, const DPSOFTRAST_State_Span * RESTRICT span)
 {
 	// TODO: IMPLEMENT
 	float buffer_z[DPSOFTRAST_DRAW_MAXSPANLENGTH];
@@ -4766,6 +4771,8 @@ static const DPSOFTRAST_ShaderModeInfo DPSOFTRAST_ShaderModeTable[SHADERMODE_COU
 	{2, DPSOFTRAST_VertexShader_FakeLight,                      DPSOFTRAST_PixelShader_FakeLight,                      {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD2, DPSOFTRAST_ARRAY_TEXCOORD3, DPSOFTRAST_ARRAY_TEXCOORD5, DPSOFTRAST_ARRAY_TEXCOORD6, ~0}, {GL20TU_COLOR, GL20TU_PANTS, GL20TU_SHIRT, GL20TU_GLOW, GL20TU_NORMAL, GL20TU_GLOSS, ~0}},
 	{2, DPSOFTRAST_VertexShader_LightDirectionMap_ModelSpace,   DPSOFTRAST_PixelShader_LightDirectionMap_ModelSpace,   {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD2, DPSOFTRAST_ARRAY_TEXCOORD3, DPSOFTRAST_ARRAY_TEXCOORD4, DPSOFTRAST_ARRAY_TEXCOORD5, DPSOFTRAST_ARRAY_TEXCOORD6, ~0}, {GL20TU_COLOR, GL20TU_PANTS, GL20TU_SHIRT, GL20TU_GLOW, GL20TU_NORMAL, GL20TU_GLOSS, GL20TU_LIGHTMAP, GL20TU_DELUXEMAP, ~0}},
 	{2, DPSOFTRAST_VertexShader_LightDirectionMap_TangentSpace, DPSOFTRAST_PixelShader_LightDirectionMap_TangentSpace, {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD2, DPSOFTRAST_ARRAY_TEXCOORD3, DPSOFTRAST_ARRAY_TEXCOORD4, DPSOFTRAST_ARRAY_TEXCOORD5, DPSOFTRAST_ARRAY_TEXCOORD6, ~0}, {GL20TU_COLOR, GL20TU_PANTS, GL20TU_SHIRT, GL20TU_GLOW, GL20TU_NORMAL, GL20TU_GLOSS, GL20TU_LIGHTMAP, GL20TU_DELUXEMAP, ~0}},
+	{2, DPSOFTRAST_VertexShader_Lightmap,                       DPSOFTRAST_PixelShader_Lightmap,                       {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD4, ~0}, {GL20TU_COLOR, GL20TU_LIGHTMAP, GL20TU_GLOW, ~0}},
+	{2, DPSOFTRAST_VertexShader_VertexColor,	                DPSOFTRAST_PixelShader_VertexColor,                    {DPSOFTRAST_ARRAY_COLOR, DPSOFTRAST_ARRAY_TEXCOORD0, ~0}, {GL20TU_COLOR, ~0}},
 	{2, DPSOFTRAST_VertexShader_LightDirection,                 DPSOFTRAST_PixelShader_LightDirection,                 {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD2, DPSOFTRAST_ARRAY_TEXCOORD3, DPSOFTRAST_ARRAY_TEXCOORD5, DPSOFTRAST_ARRAY_TEXCOORD6, ~0}, {GL20TU_COLOR, GL20TU_PANTS, GL20TU_SHIRT, GL20TU_GLOW, GL20TU_NORMAL, GL20TU_GLOSS, ~0}},
 	{2, DPSOFTRAST_VertexShader_LightSource,                    DPSOFTRAST_PixelShader_LightSource,                    {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD1, DPSOFTRAST_ARRAY_TEXCOORD2, DPSOFTRAST_ARRAY_TEXCOORD3, DPSOFTRAST_ARRAY_TEXCOORD4, ~0}, {GL20TU_COLOR, GL20TU_PANTS, GL20TU_SHIRT, GL20TU_GLOW, GL20TU_NORMAL, GL20TU_GLOSS, GL20TU_CUBE, ~0}},
 	{2, DPSOFTRAST_VertexShader_Refraction,                     DPSOFTRAST_PixelShader_Refraction,                     {DPSOFTRAST_ARRAY_TEXCOORD0, DPSOFTRAST_ARRAY_TEXCOORD4, ~0}, {GL20TU_NORMAL, GL20TU_REFRACTION, ~0}},
@@ -4785,8 +4792,6 @@ static void DPSOFTRAST_Draw_DepthTest(DPSOFTRAST_State_Thread *thread, DPSOFTRAS
 	int depthslope;
 	unsigned int d;
 	unsigned char *pixelmask;
-	DPSOFTRAST_State_Triangle *triangle;
-	triangle = &thread->triangles[span->triangle];
 	depthpixel = dpsoftrast.fb_depthpixels + span->y * dpsoftrast.fb_width + span->x;
 	startx = span->startx;
 	endx = span->endx;
@@ -4840,7 +4845,7 @@ static void DPSOFTRAST_Draw_DepthWrite(const DPSOFTRAST_State_Thread *thread, co
 	}
 }
 
-void DPSOFTRAST_Draw_ProcessSpans(DPSOFTRAST_State_Thread *thread)
+static void DPSOFTRAST_Draw_ProcessSpans(DPSOFTRAST_State_Thread *thread)
 {
 	int i;
 	DPSOFTRAST_State_Triangle *triangle;
@@ -4862,7 +4867,7 @@ void DPSOFTRAST_Draw_ProcessSpans(DPSOFTRAST_State_Thread *thread)
 	thread->numspans = 0;
 }
 
-DEFCOMMAND(22, Draw, int datasize; int starty; int endy; ATOMIC_COUNTER refcount; int clipped; int firstvertex; int numvertices; int numtriangles; float *arrays; int *element3i; unsigned short *element3s;);
+DEFCOMMAND(22, Draw, int datasize; int starty; int endy; ATOMIC_COUNTER refcount; int clipped; int firstvertex; int numvertices; int numtriangles; float *arrays; int *element3i; unsigned short *element3s;)
 
 static void DPSOFTRAST_Interpret_Draw(DPSOFTRAST_State_Thread *thread, DPSOFTRAST_Command_Draw *command)
 {
@@ -5432,7 +5437,7 @@ void DPSOFTRAST_DrawTriangles(int firstvertex, int numvertices, int numtriangles
 	}
 }
 
-DEFCOMMAND(23, SetRenderTargets, int width; int height;);
+DEFCOMMAND(23, SetRenderTargets, int width; int height;)
 static void DPSOFTRAST_Interpret_SetRenderTargets(DPSOFTRAST_State_Thread *thread, const DPSOFTRAST_Command_SetRenderTargets *command)
 {
 	thread->validate |= DPSOFTRAST_VALIDATE_FB;
@@ -5486,8 +5491,6 @@ static void DPSOFTRAST_Draw_InterpretCommands(DPSOFTRAST_State_Thread *thread, i
 		INTERPCOMMAND(DepthRange)
 		INTERPCOMMAND(PolygonOffset)
 		INTERPCOMMAND(CullFace)
-		INTERPCOMMAND(AlphaTest)
-		INTERPCOMMAND(AlphaFunc)
 		INTERPCOMMAND(SetTexture)
 		INTERPCOMMAND(SetShader)
 		INTERPCOMMAND(Uniform4f)
@@ -5643,9 +5646,6 @@ int DPSOFTRAST_Init(int width, int height, int numthreads, int interlace, unsign
 		thread->depthtest = true;
 		thread->depthfunc = GL_LEQUAL;
 		thread->scissortest = false;
-		thread->alphatest = false;
-		thread->alphafunc = GL_GREATER;
-		thread->alphavalue = 0.5f;
 		thread->viewport[0] = 0;
 		thread->viewport[1] = 0;
 		thread->viewport[2] = dpsoftrast.fb_width;

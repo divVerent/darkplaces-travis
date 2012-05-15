@@ -23,12 +23,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "r_shadow.h"
 #include "portals.h"
 #include "csprogs.h"
+#include "image.h"
 
 cvar_t r_ambient = {0, "r_ambient", "0", "brightens map, value is 0-128"};
 cvar_t r_lockpvs = {0, "r_lockpvs", "0", "disables pvs switching, allows you to walk around and inspect what is visible from a given location in the map (anything not visible from your current location will not be drawn)"};
 cvar_t r_lockvisibility = {0, "r_lockvisibility", "0", "disables visibility updates, allows you to walk around and inspect what is visible from a given viewpoint in the map (anything offscreen at the moment this is enabled will not be drawn)"};
 cvar_t r_useportalculling = {0, "r_useportalculling", "2", "improve framerate with r_novis 1 by using portal culling - still not as good as compiled visibility data in the map, but it helps (a value of 2 forces use of this even with vis data, which improves framerates in maps without too much complexity, but hurts in extremely complex maps, which is why 2 is not the default mode)"};
-cvar_t r_usesurfaceculling = {0, "r_usesurfaceculling", "1", "improve framerate by culling offscreen surfaces"};
+cvar_t r_usesurfaceculling = {0, "r_usesurfaceculling", "1", "skip off-screen surfaces (1 = cull surfaces if the map is likely to benefit, 2 = always cull surfaces)"};
 cvar_t r_q3bsp_renderskydepth = {0, "r_q3bsp_renderskydepth", "0", "draws sky depth masking in q3 maps (as in q1 maps), this means for example that sky polygons can hide other things"};
 
 /*
@@ -120,6 +121,8 @@ void R_BuildLightMap (const entity_render_t *ent, msurface_t *surface)
 		}
 	}
 
+	if(vid_sRGB.integer && vid_sRGB_fallback.integer && !vid.sRGB3D)
+		Image_MakesRGBColorsFromLinear_Lightmap(templight, templight, size);
 	R_UpdateTexture(surface->lightmaptexture, templight, surface->lightmapinfo->lightmaporigin[0], surface->lightmapinfo->lightmaporigin[1], 0, smax, tmax, 1);
 
 	// update the surface's deluxemap if it has one
@@ -162,7 +165,7 @@ void R_BuildLightMap (const entity_render_t *ent, msurface_t *surface)
 	}
 }
 
-void R_StainNode (mnode_t *node, dp_model_t *model, const vec3_t origin, float radius, const float fcolor[8])
+static void R_StainNode (mnode_t *node, dp_model_t *model, const vec3_t origin, float radius, const float fcolor[8])
 {
 	float ndist, a, ratio, maxdist, maxdist2, maxdist3, invradius, sdtable[256], td, dist2;
 	msurface_t *surface, *endsurface;
@@ -362,7 +365,7 @@ static void R_DrawPortal_Callback(const entity_render_t *ent, const rtlight_t *r
 	for (i = 0, v = vertex3f;i < numpoints;i++, v += 3)
 		VectorCopy(portal->points[i].position, v);
 	R_Mesh_PrepareVertices_Generic_Arrays(numpoints, vertex3f, NULL, NULL);
-	R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic_NoTexture(false, false);
 	R_Mesh_Draw(0, numpoints, 0, numpoints - 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 }
 
@@ -390,11 +393,34 @@ void R_DrawPortals(void)
 						VectorAdd(center, portal->points[i].position, center);
 					f = ixtable[portal->numpoints];
 					VectorScale(center, f, center);
-					R_MeshQueue_AddTransparent(center, R_DrawPortal_Callback, (entity_render_t *)portal, leafnum, rsurface.rtlight);
+					R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, center, R_DrawPortal_Callback, (entity_render_t *)portal, leafnum, rsurface.rtlight);
 				}
 			}
 		}
 	}
+}
+
+static void R_View_WorldVisibility_CullSurfaces(void)
+{
+	int surfaceindex;
+	int surfaceindexstart;
+	int surfaceindexend;
+	unsigned char *surfacevisible;
+	msurface_t *surfaces;
+	dp_model_t *model = r_refdef.scene.worldmodel;
+	if (!model)
+		return;
+	if (r_trippy.integer)
+		return;
+	if (r_usesurfaceculling.integer < 1)
+		return;
+	surfaceindexstart = model->firstmodelsurface;
+	surfaceindexend = surfaceindexstart + model->nummodelsurfaces;
+	surfaces = model->data_surfaces;
+	surfacevisible = r_refdef.viewcache.world_surfacevisible;
+	for (surfaceindex = surfaceindexstart;surfaceindex < surfaceindexend;surfaceindex++)
+		if (surfacevisible[surfaceindex] && R_CullBox(surfaces[surfaceindex].mins, surfaces[surfaceindex].maxs))
+			surfacevisible[surfaceindex] = 0;
 }
 
 void R_View_WorldVisibility(qboolean forcenovis)
@@ -427,6 +453,7 @@ void R_View_WorldVisibility(qboolean forcenovis)
 						r_refdef.viewcache.world_surfacevisible[*mark] = true;
 			}
 		}
+		R_View_WorldVisibility_CullSurfaces();
 		return;
 	}
 
@@ -446,7 +473,7 @@ void R_View_WorldVisibility(qboolean forcenovis)
 
 		// if floating around in the void (no pvs data available, and no
 		// portals available), simply use all on-screen leafs.
-		if (!viewleaf || viewleaf->clusterindex < 0 || forcenovis)
+		if (!viewleaf || viewleaf->clusterindex < 0 || forcenovis || r_trippy.integer)
 		{
 			// no visibility method: (used when floating around in the void)
 			// simply cull each leaf to the frustum (view pyramid)
@@ -454,6 +481,8 @@ void R_View_WorldVisibility(qboolean forcenovis)
 			r_refdef.viewcache.world_novis = true;
 			for (j = 0, leaf = model->brush.data_leafs;j < model->brush.num_leafs;j++, leaf++)
 			{
+				if (leaf->clusterindex < 0)
+					continue;
 				// if leaf is in current pvs and on the screen, mark its surfaces
 				if (!R_CullBox(leaf->mins, leaf->maxs))
 				{
@@ -475,6 +504,8 @@ void R_View_WorldVisibility(qboolean forcenovis)
 			// similar to quake's RecursiveWorldNode but without cache misses
 			for (j = 0, leaf = model->brush.data_leafs;j < model->brush.num_leafs;j++, leaf++)
 			{
+				if (leaf->clusterindex < 0)
+					continue;
 				// if leaf is in current pvs and on the screen, mark its surfaces
 				if (CHECKPVSBIT(r_refdef.viewcache.world_pvsbits, leaf->clusterindex) && !R_CullBox(leaf->mins, leaf->maxs))
 				{
@@ -507,6 +538,8 @@ void R_View_WorldVisibility(qboolean forcenovis)
 				leaf = leafstack[--leafstackpos];
 				if (r_refdef.viewcache.world_leafvisible[leaf - model->brush.data_leafs])
 					continue;
+				if (leaf->clusterindex < 0)
+					continue;
 				r_refdef.stats.world_leafs++;
 				r_refdef.viewcache.world_leafvisible[leaf - model->brush.data_leafs] = true;
 				// mark any surfaces bounding this leaf
@@ -534,23 +567,7 @@ void R_View_WorldVisibility(qboolean forcenovis)
 		}
 	}
 
-	if (r_usesurfaceculling.integer)
-	{
-		int k = model->firstmodelsurface;
-		int l = k + model->nummodelsurfaces;
-		unsigned char *visible = r_refdef.viewcache.world_surfacevisible;
-		msurface_t *surfaces = model->data_surfaces;
-		msurface_t *surface;
-		for (;k < l;k++)
-		{
-			if (visible[k])
-			{
-				surface = surfaces + k;
-				if (R_CullBox(surface->mins, surface->maxs))
-					visible[k] = false;
-			}
-		}
-}
+        R_View_WorldVisibility_CullSurfaces();
 }
 
 void R_Q1BSP_DrawSky(entity_render_t *ent)
@@ -563,7 +580,6 @@ void R_Q1BSP_DrawSky(entity_render_t *ent)
 		R_DrawModelSurfaces(ent, true, true, false, false, false);
 }
 
-extern void R_Water_AddWaterPlane(msurface_t *surface, int entno);
 void R_Q1BSP_DrawAddWaterPlanes(entity_render_t *ent)
 {
 	int i, j, n, flagsmask;
@@ -575,7 +591,7 @@ void R_Q1BSP_DrawAddWaterPlanes(entity_render_t *ent)
 	if (ent == r_refdef.scene.worldentity)
 		RSurf_ActiveWorldEntity();
 	else
-		RSurf_ActiveModelEntity(ent, false, false, false);
+		RSurf_ActiveModelEntity(ent, true, false, false);
 
 	surfaces = model->data_surfaces;
 	flagsmask = MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_REFLECTION | MATERIALFLAG_CAMERA;
@@ -629,7 +645,7 @@ void R_Q1BSP_DrawDepth(entity_render_t *ent)
 	GL_BlendFunc(GL_ONE, GL_ZERO);
 	GL_DepthMask(true);
 //	R_Mesh_ResetTextureState();
-	R_SetupShader_DepthOrShadow();
+	R_SetupShader_DepthOrShadow(false, false);
 	if (ent == r_refdef.scene.worldentity)
 		R_DrawWorldSurfaces(false, false, true, false, false);
 	else
@@ -1166,7 +1182,7 @@ static void R_Q1BSP_CallRecursiveGetLightInfo(r_q1bsp_getlightinfo_t *info, qboo
 
 static msurface_t *r_q1bsp_getlightinfo_surfaces;
 
-int R_Q1BSP_GetLightInfo_comparefunc(const void *ap, const void *bp)
+static int R_Q1BSP_GetLightInfo_comparefunc(const void *ap, const void *bp)
 {
 	int a = *(int*)ap;
 	int b = *(int*)bp;
@@ -1347,6 +1363,8 @@ void R_Q1BSP_CompileShadowMap(entity_render_t *ent, vec3_t relativelightorigin, 
 	int surfacelistindex;
 	int sidetotals[6] = { 0, 0, 0, 0, 0, 0 }, sidemasks = 0;
 	int i;
+	if (!model->brush.shadowmesh)
+		return;
 	r_shadow_compilingrtlight->static_meshchain_shadow_shadowmap = Mod_ShadowMesh_Begin(r_main_mempool, 32768, 32768, NULL, NULL, NULL, false, false, true);
 	R_Shadow_PrepareShadowSides(model->brush.shadowmesh->numtriangles);
 	for (surfacelistindex = 0;surfacelistindex < numsurfaces;surfacelistindex++)
@@ -1488,9 +1506,9 @@ void R_Q1BSP_DrawLight(entity_render_t *ent, int numsurfaces, const int *surface
 				;
 			// now figure out what to do with this particular range of surfaces
 			// VorteX: added MATERIALFLAG_NORTLIGHT
-			if ((rsurface.texture->currentmaterialflags & (MATERIALFLAG_WALL + MATERIALFLAG_NORTLIGHT)) != MATERIALFLAG_WALL)
+			if ((rsurface.texture->currentmaterialflags & (MATERIALFLAG_WALL | MATERIALFLAG_FULLBRIGHT | MATERIALFLAG_NORTLIGHT)) != MATERIALFLAG_WALL)
 				continue;
-			if (r_waterstate.renderingscene && (rsurface.texture->currentmaterialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_REFLECTION | MATERIALFLAG_CAMERA)))
+			if (r_fb.water.renderingscene && (rsurface.texture->currentmaterialflags & (MATERIALFLAG_WATERSHADER | MATERIALFLAG_REFRACTION | MATERIALFLAG_REFLECTION | MATERIALFLAG_CAMERA)))
 				continue;
 			if (rsurface.texture->currentmaterialflags & MATERIALFLAGMASK_DEPTHSORTED)
 			{
@@ -1498,11 +1516,26 @@ void R_Q1BSP_DrawLight(entity_render_t *ent, int numsurfaces, const int *surface
 				for (l = k;l < kend;l++)
 				{
 					surface = batchsurfacelist[l];
-					tempcenter[0] = (surface->mins[0] + surface->maxs[0]) * 0.5f;
-					tempcenter[1] = (surface->mins[1] + surface->maxs[1]) * 0.5f;
-					tempcenter[2] = (surface->mins[2] + surface->maxs[2]) * 0.5f;
+					if (r_transparent_sortsurfacesbynearest.integer)
+					{
+						tempcenter[0] = bound(surface->mins[0], rsurface.localvieworigin[0], surface->maxs[0]);
+						tempcenter[1] = bound(surface->mins[1], rsurface.localvieworigin[1], surface->maxs[1]);
+						tempcenter[2] = bound(surface->mins[2], rsurface.localvieworigin[2], surface->maxs[2]);
+					}
+					else
+					{
+						tempcenter[0] = (surface->mins[0] + surface->maxs[0]) * 0.5f;
+						tempcenter[1] = (surface->mins[1] + surface->maxs[1]) * 0.5f;
+						tempcenter[2] = (surface->mins[2] + surface->maxs[2]) * 0.5f;
+					}
 					Matrix4x4_Transform(&rsurface.matrix, tempcenter, center);
-					R_MeshQueue_AddTransparent(rsurface.texture->currentmaterialflags & MATERIALFLAG_NODEPTHTEST ? r_refdef.view.origin : center, R_Q1BSP_DrawLight_TransparentCallback, ent, surface - rsurface.modelsurfaces, rsurface.rtlight);
+					if (ent->transparent_offset) // transparent offset
+					{
+						center[0] += r_refdef.view.forward[0]*ent->transparent_offset;
+						center[1] += r_refdef.view.forward[1]*ent->transparent_offset;
+						center[2] += r_refdef.view.forward[2]*ent->transparent_offset;
+					}
+					R_MeshQueue_AddTransparent((rsurface.entity->flags & RENDER_WORLDOBJECT) ? MESHQUEUE_SORT_SKY : ((rsurface.texture->currentmaterialflags & MATERIALFLAG_NODEPTHTEST) ? MESHQUEUE_SORT_HUD : MESHQUEUE_SORT_DISTANCE), center, R_Q1BSP_DrawLight_TransparentCallback, ent, surface - rsurface.modelsurfaces, rsurface.rtlight);
 				}
 				continue;
 			}
@@ -1517,7 +1550,7 @@ void R_Q1BSP_DrawLight(entity_render_t *ent, int numsurfaces, const int *surface
 }
 
 //Made by [515]
-void R_ReplaceWorldTexture (void)
+static void R_ReplaceWorldTexture (void)
 {
 	dp_model_t		*m;
 	texture_t	*t;
@@ -1554,7 +1587,6 @@ void R_ReplaceWorldTexture (void)
 			{
 //				t->skinframes[0] = skinframe;
 				t->currentskinframe = skinframe;
-				t->currentskinframe = skinframe;
 				Con_Printf("%s replaced with %s\n", r, newt);
 			}
 			else
@@ -1567,7 +1599,7 @@ void R_ReplaceWorldTexture (void)
 }
 
 //Made by [515]
-void R_ListWorldTextures (void)
+static void R_ListWorldTextures (void)
 {
 	dp_model_t		*m;
 	texture_t	*t;

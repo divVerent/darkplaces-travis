@@ -39,6 +39,7 @@ cvar_t scr_loadingscreen_scale = {0, "scr_loadingscreen_scale","1", "scale facto
 cvar_t scr_loadingscreen_scale_base = {0, "scr_loadingscreen_scale_base","0", "0 = console pixels, 1 = video pixels"};
 cvar_t scr_loadingscreen_scale_limit = {0, "scr_loadingscreen_scale_limit","0", "0 = no limit, 1 = until first edge hits screen edge, 2 = until last edge hits screen edge, 3 = until width hits screen width, 4 = until height hits screen height"};
 cvar_t scr_loadingscreen_count = {0, "scr_loadingscreen_count","1", "number of loading screen files to use randomly (named loading.tga, loading2.tga, loading3.tga, ...)"};
+cvar_t scr_loadingscreen_firstforstartup = {0, "scr_loadingscreen_firstforstartup","0", "remove loading.tga from random scr_loadingscreen_count selection and only display it on client startup, 0 = normal, 1 = firstforstartup"};
 cvar_t scr_loadingscreen_barcolor = {0, "scr_loadingscreen_barcolor", "0 0 1", "rgb color of loadingscreen progress bar"};
 cvar_t scr_loadingscreen_barheight = {0, "scr_loadingscreen_barheight", "8", "the height of the loadingscreen progress bar"};
 cvar_t scr_infobar_height = {0, "scr_infobar_height", "8", "the height of the infobar items"};
@@ -51,6 +52,7 @@ cvar_t scr_screenshot_png = {CVAR_SAVE, "scr_screenshot_png","0", "save png inst
 cvar_t scr_screenshot_gammaboost = {CVAR_SAVE, "scr_screenshot_gammaboost","1", "gamma correction on saved screenshots and videos, 1.0 saves unmodified images"};
 cvar_t scr_screenshot_hwgamma = {CVAR_SAVE, "scr_screenshot_hwgamma","1", "apply the video gamma ramp to saved screenshots and videos"};
 cvar_t scr_screenshot_alpha = {CVAR_SAVE, "scr_screenshot_alpha","0", "try to write an alpha channel to screenshots (debugging feature)"};
+cvar_t scr_screenshot_timestamp = {CVAR_SAVE, "scr_screenshot_timestamp", "1", "use a timestamp based number of the type YYYYMMDDHHMMSSsss instead of sequential numbering"};
 // scr_screenshot_name is defined in fs.c
 cvar_t cl_capturevideo = {0, "cl_capturevideo", "0", "enables saving of video to a .avi file using uncompressed I420 colorspace and PCM audio, note that scr_screenshot_gammaboost affects the brightness of the output)"};
 cvar_t cl_capturevideo_printfps = {CVAR_SAVE, "cl_capturevideo_printfps", "1", "prints the frames per second captured in capturevideo (is only written to the log file, not to the console, as that would be visible on the video)"};
@@ -71,10 +73,6 @@ cvar_t r_stereo_redblue = {0, "r_stereo_redblue", "0", "red/blue anaglyph stereo
 cvar_t r_stereo_redcyan = {0, "r_stereo_redcyan", "0", "red/cyan anaglyph stereo glasses, the kind given away at drive-in movies like Creature From The Black Lagoon In 3D"};
 cvar_t r_stereo_redgreen = {0, "r_stereo_redgreen", "0", "red/green anaglyph stereo glasses (for those who don't mind yellow)"};
 cvar_t r_stereo_angle = {0, "r_stereo_angle", "0", "separation angle of eyes (makes the views look different directions, as an example, 90 gives a 90 degree separation where the views are 45 degrees left and 45 degrees right)"};
-cvar_t scr_zoomwindow = {CVAR_SAVE, "scr_zoomwindow", "0", "displays a zoomed in overlay window"};
-cvar_t scr_zoomwindow_viewsizex = {CVAR_SAVE, "scr_zoomwindow_viewsizex", "20", "horizontal viewsize of zoom window"};
-cvar_t scr_zoomwindow_viewsizey = {CVAR_SAVE, "scr_zoomwindow_viewsizey", "20", "vertical viewsize of zoom window"};
-cvar_t scr_zoomwindow_fov = {CVAR_SAVE, "scr_zoomwindow_fov", "20", "fov of zoom window"};
 cvar_t scr_stipple = {0, "scr_stipple", "0", "interlacing-like stippling of the display"};
 cvar_t scr_refresh = {0, "scr_refresh", "1", "allows you to completely shut off rendering for benchmarking purposes"};
 cvar_t scr_screenshot_name_in_mapdir = {CVAR_SAVE, "scr_screenshot_name_in_mapdir", "0", "if set to 1, screenshots are placed in a subdirectory named like the map they are from"};
@@ -146,7 +144,7 @@ void SCR_CenterPrint(const char *str)
 }
 
 
-void SCR_DrawCenterString (void)
+static void SCR_DrawCenterString (void)
 {
 	char	*start;
 	int		x, y;
@@ -203,7 +201,7 @@ void SCR_DrawCenterString (void)
 	} while (1);
 }
 
-void SCR_CheckDrawCenterString (void)
+static void SCR_CheckDrawCenterString (void)
 {
 	if (scr_center_lines > scr_erase_lines)
 		scr_erase_lines = scr_center_lines;
@@ -223,7 +221,7 @@ void SCR_CheckDrawCenterString (void)
 	SCR_DrawCenterString ();
 }
 
-void SCR_DrawNetGraph_DrawGraph (int graphx, int graphy, int graphwidth, int graphheight, float graphscale, const char *label, float textsize, int packetcounter, netgraphitem_t *netgraph)
+static void SCR_DrawNetGraph_DrawGraph (int graphx, int graphy, int graphwidth, int graphheight, float graphscale, const char *label, float textsize, int packetcounter, netgraphitem_t *netgraph)
 {
 	netgraphitem_t *graph;
 	int j, x, y, numlines;
@@ -238,9 +236,6 @@ void SCR_DrawNetGraph_DrawGraph (int graphx, int graphy, int graphwidth, int gra
 	float *c;
 	DrawQ_Fill(graphx, graphy, graphwidth, graphheight + textsize * 2, 0, 0, 0, 0.5, 0);
 	// draw the bar graph itself
-	// advance the packet counter because it is the latest packet column being
-	// built up and should come last
-	packetcounter = (packetcounter + 1) % NETGRAPH_PACKETS;
 	memset(g, 0, sizeof(g));
 	for (j = 0;j < NETGRAPH_PACKETS;j++)
 	{
@@ -311,11 +306,12 @@ void SCR_DrawNetGraph_DrawGraph (int graphx, int graphy, int graphwidth, int gra
 SCR_DrawNetGraph
 ==============
 */
-void SCR_DrawNetGraph (void)
+static void SCR_DrawNetGraph (void)
 {
 	int i, separator1, separator2, graphwidth, graphheight, netgraph_x, netgraph_y, textsize, index, netgraphsperrow;
 	float graphscale;
 	netconn_t *c;
+	char vabuf[1024];
 
 	if (cls.state != ca_connected)
 		return;
@@ -351,7 +347,7 @@ void SCR_DrawNetGraph (void)
 				continue;
 			netgraph_x = (vid_conwidth.integer + separator2) - (1 + (index % netgraphsperrow)) * (graphwidth * 2 + separator1 + separator2);
 			netgraph_y = (vid_conheight.integer - 48 + separator2) - (1 + (index / netgraphsperrow)) * (graphheight + textsize + separator2);
-			SCR_DrawNetGraph_DrawGraph(netgraph_x                          , netgraph_y, graphwidth, graphheight, graphscale, va("%s", svs.clients[i].name), textsize, c->outgoing_packetcounter, c->outgoing_netgraph);
+			SCR_DrawNetGraph_DrawGraph(netgraph_x                          , netgraph_y, graphwidth, graphheight, graphscale, va(vabuf, sizeof(vabuf), "%s", svs.clients[i].name), textsize, c->outgoing_packetcounter, c->outgoing_netgraph);
 			SCR_DrawNetGraph_DrawGraph(netgraph_x + graphwidth + separator1, netgraph_y, graphwidth, graphheight, graphscale, ""                           , textsize, c->incoming_packetcounter, c->incoming_netgraph);
 			index++;
 		}
@@ -363,7 +359,7 @@ void SCR_DrawNetGraph (void)
 SCR_DrawTurtle
 ==============
 */
-void SCR_DrawTurtle (void)
+static void SCR_DrawTurtle (void)
 {
 	static int	count;
 
@@ -391,7 +387,7 @@ void SCR_DrawTurtle (void)
 SCR_DrawNet
 ==============
 */
-void SCR_DrawNet (void)
+static void SCR_DrawNet (void)
 {
 	if (cls.state != ca_connected)
 		return;
@@ -408,7 +404,7 @@ void SCR_DrawNet (void)
 DrawPause
 ==============
 */
-void SCR_DrawPause (void)
+static void SCR_DrawPause (void)
 {
 	cachepic_t	*pic;
 
@@ -430,7 +426,7 @@ void SCR_DrawPause (void)
 SCR_DrawBrand
 ==============
 */
-void SCR_DrawBrand (void)
+static void SCR_DrawBrand (void)
 {
 	cachepic_t	*pic;
 	float		x, y;
@@ -552,9 +548,10 @@ static int SCR_DrawCurlDownload(int offset)
 	float size = scr_infobar_height.value;
 	Curl_downloadinfo_t *downinfo;
 	char temp[256];
+	char addinfobuf[128];
 	const char *addinfo;
 
-	downinfo = Curl_GetDownloadInfo(&nDownloads, &addinfo);
+	downinfo = Curl_GetDownloadInfo(&nDownloads, &addinfo, addinfobuf, sizeof(addinfobuf));
 	if(!downinfo)
 		return 0;
 
@@ -609,6 +606,7 @@ static int SCR_InfobarHeight(void)
 	Curl_downloadinfo_t *downinfo;
 	const char *addinfo;
 	int nDownloads;
+	char addinfobuf[128];
 
 	if (cl.time > cl.oldtime)
 		scr_infobartime_off -= cl.time - cl.oldtime;
@@ -617,7 +615,7 @@ static int SCR_InfobarHeight(void)
 	if(cls.qw_downloadname[0])
 		offset += 1;
 
-	downinfo = Curl_GetDownloadInfo(&nDownloads, &addinfo);
+	downinfo = Curl_GetDownloadInfo(&nDownloads, &addinfo, addinfobuf, sizeof(addinfobuf));
 	if(downinfo)
 	{
 		offset += (nDownloads + (addinfo ? 1 : 0));
@@ -633,7 +631,7 @@ static int SCR_InfobarHeight(void)
 SCR_InfoBar_f
 ==============
 */
-void SCR_InfoBar_f(void)
+static void SCR_InfoBar_f(void)
 {
 	if(Cmd_Argc() == 3)
 	{
@@ -652,7 +650,7 @@ void SCR_InfoBar_f(void)
 SCR_SetUpToDrawConsole
 ==================
 */
-void SCR_SetUpToDrawConsole (void)
+static void SCR_SetUpToDrawConsole (void)
 {
 	// lines of console to display
 	float conlines;
@@ -709,13 +707,13 @@ SCR_BeginLoadingPlaque
 
 ================
 */
-void SCR_BeginLoadingPlaque (void)
+void SCR_BeginLoadingPlaque (qboolean startup)
 {
 	// save console log up to this point to log_file if it was set by configs
 	Log_Start();
 
 	Host_StartVideo();
-	SCR_UpdateLoadingScreen(false);
+	SCR_UpdateLoadingScreen(false, startup);
 }
 
 //=============================================================================
@@ -739,7 +737,7 @@ void R_TimeReport(const char *desc)
 		GL_Finish();
 	CHECKGLERROR
 	r_timereport_temp = r_timereport_current;
-	r_timereport_current = Sys_DoubleTime();
+	r_timereport_current = Sys_DirtyTime();
 	t = (int) ((r_timereport_current - r_timereport_temp) * 1000000.0 + 0.5);
 
 	length = dpsnprintf(tempbuf, sizeof(tempbuf), "%8i %s", t, desc);
@@ -759,17 +757,17 @@ void R_TimeReport(const char *desc)
 	speedstringcount += length;
 }
 
-void R_TimeReport_BeginFrame(void)
+static void R_TimeReport_BeginFrame(void)
 {
 	speedstringcount = 0;
 	r_speeds_timestring[0] = 0;
 	r_timereport_active = false;
 	memset(&r_refdef.stats, 0, sizeof(r_refdef.stats));
 
-	if (r_speeds.integer >= 2 && cls.signon == SIGNONS && cls.state == ca_connected)
+	if (r_speeds.integer >= 2)
 	{
 		r_timereport_active = true;
-		r_timereport_start = r_timereport_current = Sys_DoubleTime();
+		r_timereport_start = r_timereport_current = Sys_DirtyTime();
 	}
 }
 
@@ -783,7 +781,7 @@ static int R_CountLeafTriangles(const dp_model_t *model, const mleaf_t *leaf)
 
 extern cvar_t r_viewscale;
 extern float viewscalefpsadjusted;
-void R_TimeReport_EndFrame(void)
+static void R_TimeReport_EndFrame(void)
 {
 	int i, j, lines, y;
 	cl_locnode_t *loc;
@@ -791,16 +789,16 @@ void R_TimeReport_EndFrame(void)
 	mleaf_t *viewleaf;
 
 	string[0] = 0;
-	if (r_speeds.integer && cls.signon == SIGNONS && cls.state == ca_connected)
+	if (r_speeds.integer)
 	{
 		// put the location name in the r_speeds display as it greatly helps
 		// when creating loc files
 		loc = CL_Locs_FindNearest(cl.movement_origin);
 		viewleaf = (r_refdef.scene.worldmodel && r_refdef.scene.worldmodel->brush.PointInLeaf) ? r_refdef.scene.worldmodel->brush.PointInLeaf(r_refdef.scene.worldmodel, r_refdef.view.origin) : NULL;
 		dpsnprintf(string, sizeof(string),
-"%6.0fus rendertime %3.0f%% viewscale %s%s\n"
+"%6.0fus rendertime %3.0f%% viewscale %s%s %.3f cl.time%2.4f brightness\n"
 "%3i renders org:'%+8.2f %+8.2f %+8.2f' dir:'%+2.3f %+2.3f %+2.3f'\n"
-"%5i viewleaf%5i cluster%2i area%4i brushes%4i surfaces(%7i triangles)\n"
+"%5i viewleaf%5i cluster%3i area%4i brushes%4i surfaces(%7i triangles)\n"
 "%7i surfaces%7i triangles %5i entities (%7i surfaces%7i triangles)\n"
 "%5i leafs%5i portals%6i/%6i particles%6i/%6i decals %3i%% quality\n"
 "%7i lightmap updates (%7i pixels)%8iKB/%8iKB framedata\n"
@@ -810,7 +808,7 @@ void R_TimeReport_EndFrame(void)
 "%6i draws%8i vertices%8i triangles bloompixels%8i copied%8i drawn\n"
 "updated%5i indexbuffers%8i bytes%5i vertexbuffers%8i bytes\n"
 "%s"
-, r_refdef.lastdrawscreentime * 1000000.0, r_viewscale.value * sqrt(viewscalefpsadjusted) * 100.0f, loc ? "Location: " : "", loc ? loc->name : ""
+, r_refdef.lastdrawscreentime * 1000000.0, r_viewscale.value * sqrt(viewscalefpsadjusted) * 100.0f, loc ? "Location: " : "", loc ? loc->name : "", cl.time, r_refdef.view.colorscale
 , r_refdef.stats.renders, r_refdef.view.origin[0], r_refdef.view.origin[1], r_refdef.view.origin[2], r_refdef.view.forward[0], r_refdef.view.forward[1], r_refdef.view.forward[2]
 , viewleaf ? (int)(viewleaf - r_refdef.scene.worldmodel->brush.data_leafs) : -1, viewleaf ? viewleaf->clusterindex : -1, viewleaf ? viewleaf->areaindex : -1, viewleaf ? viewleaf->numleafbrushes : 0, viewleaf ? viewleaf->numleafsurfaces : 0, viewleaf ? R_CountLeafTriangles(r_refdef.scene.worldmodel, viewleaf) : 0
 , r_refdef.stats.world_surfaces, r_refdef.stats.world_triangles, r_refdef.stats.entities, r_refdef.stats.entities_surfaces, r_refdef.stats.entities_triangles
@@ -832,7 +830,7 @@ void R_TimeReport_EndFrame(void)
 		if (r_speeds.integer >= 2)
 		{
 			r_timereport_active = true;
-			r_timereport_start = r_timereport_current = Sys_DoubleTime();
+			r_timereport_start = r_timereport_current = Sys_DirtyTime();
 		}
 	}
 
@@ -870,7 +868,7 @@ SCR_SizeUp_f
 Keybinding command
 =================
 */
-void SCR_SizeUp_f (void)
+static void SCR_SizeUp_f (void)
 {
 	Cvar_SetValue ("viewsize",scr_viewsize.value+10);
 }
@@ -883,7 +881,7 @@ SCR_SizeDown_f
 Keybinding command
 =================
 */
-void SCR_SizeDown_f (void)
+static void SCR_SizeDown_f (void)
 {
 	Cvar_SetValue ("viewsize",scr_viewsize.value-10);
 }
@@ -916,6 +914,7 @@ void CL_Screen_Init(void)
 	Cvar_RegisterVariable (&scr_loadingscreen_scale_base);
 	Cvar_RegisterVariable (&scr_loadingscreen_scale_limit);
 	Cvar_RegisterVariable (&scr_loadingscreen_count);
+	Cvar_RegisterVariable (&scr_loadingscreen_firstforstartup);
 	Cvar_RegisterVariable (&scr_loadingscreen_barcolor);
 	Cvar_RegisterVariable (&scr_loadingscreen_barheight);
 	Cvar_RegisterVariable (&scr_infobar_height);
@@ -935,6 +934,7 @@ void CL_Screen_Init(void)
 	Cvar_RegisterVariable (&scr_screenshot_hwgamma);
 	Cvar_RegisterVariable (&scr_screenshot_name_in_mapdir);
 	Cvar_RegisterVariable (&scr_screenshot_alpha);
+	Cvar_RegisterVariable (&scr_screenshot_timestamp);
 	Cvar_RegisterVariable (&cl_capturevideo);
 	Cvar_RegisterVariable (&cl_capturevideo_printfps);
 	Cvar_RegisterVariable (&cl_capturevideo_width);
@@ -954,10 +954,6 @@ void CL_Screen_Init(void)
 	Cvar_RegisterVariable(&r_stereo_redcyan);
 	Cvar_RegisterVariable(&r_stereo_redgreen);
 	Cvar_RegisterVariable(&r_stereo_angle);
-	Cvar_RegisterVariable(&scr_zoomwindow);
-	Cvar_RegisterVariable(&scr_zoomwindow_viewsizex);
-	Cvar_RegisterVariable(&scr_zoomwindow_viewsizey);
-	Cvar_RegisterVariable(&scr_zoomwindow_fov);
 	Cvar_RegisterVariable(&scr_stipple);
 	Cvar_RegisterVariable(&scr_refresh);
 	Cvar_RegisterVariable(&shownetgraph);
@@ -965,6 +961,10 @@ void CL_Screen_Init(void)
 	Cvar_RegisterVariable(&timedemo_screenshotframelist);
 	Cvar_RegisterVariable(&vid_touchscreen_outlinealpha);
 	Cvar_RegisterVariable(&vid_touchscreen_overlayalpha);
+
+	// if we want no console, turn it off here too
+	if (COM_CheckParm ("-noconsole"))
+		Cvar_SetQuick(&scr_conforcewhiledisconnected, "0");
 
 	Cmd_AddCommand ("sizeup",SCR_SizeUp_f, "increase view size (increases viewsize cvar)");
 	Cmd_AddCommand ("sizedown",SCR_SizeDown_f, "decrease view size (decreases viewsize cvar)");
@@ -992,6 +992,7 @@ void SCR_ScreenShot_f (void)
 	unsigned char *buffer2;
 	qboolean jpeg = (scr_screenshot_jpeg.integer != 0);
 	qboolean png = (scr_screenshot_png.integer != 0) && !jpeg;
+	char vabuf[1024];
 
 	if (Cmd_Argc() == 2)
 	{
@@ -1019,14 +1020,41 @@ void SCR_ScreenShot_f (void)
 			return;
 		}
 	}
+	else if (scr_screenshot_timestamp.integer)
+	{
+		int shotnumber100;
+
+		// TODO maybe make capturevideo and screenshot use similar name patterns?
+		if (scr_screenshot_name_in_mapdir.integer && cl.worldbasename[0])
+			dpsnprintf(prefix_name, sizeof(prefix_name), "%s/%s%s", cl.worldbasename, scr_screenshot_name.string, Sys_TimeString("%Y%m%d%H%M%S"));
+		else
+			dpsnprintf(prefix_name, sizeof(prefix_name), "%s%s", scr_screenshot_name.string, Sys_TimeString("%Y%m%d%H%M%S"));
+
+		// find a file name to save it to
+		for (shotnumber100 = 0;shotnumber100 < 100;shotnumber100++)
+			if (!FS_SysFileExists(va(vabuf, sizeof(vabuf), "%s/screenshots/%s-%02d.tga", fs_gamedir, prefix_name, shotnumber100))
+			 && !FS_SysFileExists(va(vabuf, sizeof(vabuf), "%s/screenshots/%s-%02d.jpg", fs_gamedir, prefix_name, shotnumber100))
+			 && !FS_SysFileExists(va(vabuf, sizeof(vabuf), "%s/screenshots/%s-%02d.png", fs_gamedir, prefix_name, shotnumber100)))
+				break;
+		if (shotnumber100 >= 100)
+		{
+			Con_Print("Couldn't create the image file - already 100 shots taken this second!\n");
+			return;
+		}
+
+		dpsnprintf(filename, sizeof(filename), "screenshots/%s-%02d.%s", prefix_name, shotnumber100, jpeg ? "jpg" : png ? "png" : "tga");
+	}
 	else
 	{
 		// TODO maybe make capturevideo and screenshot use similar name patterns?
 		if (scr_screenshot_name_in_mapdir.integer && cl.worldbasename[0])
-			dpsnprintf (prefix_name, sizeof(prefix_name), "%s/%s", cl.worldbasename, Sys_TimeString(scr_screenshot_name.string));
+			dpsnprintf(prefix_name, sizeof(prefix_name), "%s/%s", cl.worldbasename, Sys_TimeString(scr_screenshot_name.string));
 		else
-			dpsnprintf (prefix_name, sizeof(prefix_name), "%s", Sys_TimeString(scr_screenshot_name.string));
+			dpsnprintf(prefix_name, sizeof(prefix_name), "%s", Sys_TimeString(scr_screenshot_name.string));
 
+		// if prefix changed, gamedir or map changed, reset the shotnumber so
+		// we scan again
+		// FIXME: should probably do this whenever FS_Rescan or something like that occurs?
 		if (strcmp(old_prefix_name, prefix_name))
 		{
 			dpsnprintf(old_prefix_name, sizeof(old_prefix_name), "%s", prefix_name );
@@ -1035,15 +1063,19 @@ void SCR_ScreenShot_f (void)
 
 		// find a file name to save it to
 		for (;shotnumber < 1000000;shotnumber++)
-			if (!FS_SysFileExists(va("%s/screenshots/%s%06d.tga", fs_gamedir, prefix_name, shotnumber)) && !FS_SysFileExists(va("%s/screenshots/%s%06d.jpg", fs_gamedir, prefix_name, shotnumber)) && !FS_SysFileExists(va("%s/screenshots/%s%06d.png", fs_gamedir, prefix_name, shotnumber)))
+			if (!FS_SysFileExists(va(vabuf, sizeof(vabuf), "%s/screenshots/%s%06d.tga", fs_gamedir, prefix_name, shotnumber))
+			 && !FS_SysFileExists(va(vabuf, sizeof(vabuf), "%s/screenshots/%s%06d.jpg", fs_gamedir, prefix_name, shotnumber))
+			 && !FS_SysFileExists(va(vabuf, sizeof(vabuf), "%s/screenshots/%s%06d.png", fs_gamedir, prefix_name, shotnumber)))
 				break;
 		if (shotnumber >= 1000000)
 		{
-			Con_Print("Couldn't create the image file\n");
+			Con_Print("Couldn't create the image file - you already have 1000000 screenshots!\n");
 			return;
 		}
 
 		dpsnprintf(filename, sizeof(filename), "screenshots/%s%06d.%s", prefix_name, shotnumber, jpeg ? "jpg" : png ? "png" : "tga");
+
+		shotnumber++;
 	}
 
 	buffer1 = (unsigned char *)Mem_Alloc(tempmempool, vid.width * vid.height * 4);
@@ -1066,11 +1098,9 @@ void SCR_ScreenShot_f (void)
 
 	Mem_Free (buffer1);
 	Mem_Free (buffer2);
-
-	shotnumber++;
 }
 
-void SCR_CaptureVideo_BeginVideo(void)
+static void SCR_CaptureVideo_BeginVideo(void)
 {
 	double r, g, b;
 	unsigned int i;
@@ -1105,7 +1135,7 @@ void SCR_CaptureVideo_BeginVideo(void)
 	cls.capturevideo.soundchannels = S_GetSoundChannels();
 	cls.capturevideo.startrealtime = realtime;
 	cls.capturevideo.frame = cls.capturevideo.lastfpsframe = 0;
-	cls.capturevideo.starttime = cls.capturevideo.lastfpstime = Sys_DoubleTime();
+	cls.capturevideo.starttime = cls.capturevideo.lastfpstime = realtime;
 	cls.capturevideo.soundsampleframe = 0;
 	cls.capturevideo.realtime = cl_capturevideo_realtime.integer != 0;
 	cls.capturevideo.screenbuffer = (unsigned char *)Mem_Alloc(tempmempool, vid.width * vid.height * 4);
@@ -1263,7 +1293,7 @@ static void SCR_ScaleDownBGRA(unsigned char *in, int inw, int inh, unsigned char
 	}
 }
 
-void SCR_CaptureVideo_VideoFrame(int newframestepframenum)
+static void SCR_CaptureVideo_VideoFrame(int newframestepframenum)
 {
 	int x = 0, y = 0;
 	int width = cls.capturevideo.width, height = cls.capturevideo.height;
@@ -1284,7 +1314,7 @@ void SCR_CaptureVideo_VideoFrame(int newframestepframenum)
 	if(cl_capturevideo_printfps.integer)
 	{
 		char buf[80];
-		double t = Sys_DoubleTime();
+		double t = realtime;
 		if(t > cls.capturevideo.lastfpstime + 1)
 		{
 			double fps1 = (cls.capturevideo.frame - cls.capturevideo.lastfpsframe) / (t - cls.capturevideo.lastfpstime + 0.0000001);
@@ -1303,7 +1333,7 @@ void SCR_CaptureVideo_SoundFrame(const portable_sampleframe_t *paintbuffer, size
 	cls.capturevideo.soundframe(paintbuffer, length);
 }
 
-void SCR_CaptureVideo(void)
+static void SCR_CaptureVideo(void)
 {
 	int newframenum;
 	if (cl_capturevideo.integer)
@@ -1418,6 +1448,8 @@ static void R_Envmap_f (void)
 
 	r_refdef.view.frustum_x = 1; // tan(45 * M_PI / 180.0);
 	r_refdef.view.frustum_y = 1; // tan(45 * M_PI / 180.0);
+	r_refdef.view.ortho_x = 90; // abused as angle by VM_CL_R_SetView
+	r_refdef.view.ortho_y = 90; // abused as angle by VM_CL_R_SetView
 
 	buffer1 = (unsigned char *)Mem_Alloc(tempmempool, size * size * 4);
 	buffer2 = (unsigned char *)Mem_Alloc(tempmempool, size * size * 3);
@@ -1446,7 +1478,7 @@ void SHOWLMP_decodehide(void)
 {
 	int i;
 	char *lmplabel;
-	lmplabel = MSG_ReadString();
+	lmplabel = MSG_ReadString(&cl_message, cl_readstring, sizeof(cl_readstring));
 	for (i = 0;i < cl.num_showlmps;i++)
 		if (cl.showlmps[i].isactive && strcmp(cl.showlmps[i].label, lmplabel) == 0)
 		{
@@ -1460,17 +1492,17 @@ void SHOWLMP_decodeshow(void)
 	int k;
 	char lmplabel[256], picname[256];
 	float x, y;
-	strlcpy (lmplabel,MSG_ReadString(), sizeof (lmplabel));
-	strlcpy (picname, MSG_ReadString(), sizeof (picname));
+	strlcpy (lmplabel,MSG_ReadString(&cl_message, cl_readstring, sizeof(cl_readstring)), sizeof (lmplabel));
+	strlcpy (picname, MSG_ReadString(&cl_message, cl_readstring, sizeof(cl_readstring)), sizeof (picname));
 	if (gamemode == GAME_NEHAHRA) // LordHavoc: nasty old legacy junk
 	{
-		x = MSG_ReadByte();
-		y = MSG_ReadByte();
+		x = MSG_ReadByte(&cl_message);
+		y = MSG_ReadByte(&cl_message);
 	}
 	else
 	{
-		x = MSG_ReadShort();
-		y = MSG_ReadShort();
+		x = MSG_ReadShort(&cl_message);
+		y = MSG_ReadShort(&cl_message);
 	}
 	if (!cl.showlmps || cl.num_showlmps >= cl.max_showlmps)
 	{
@@ -1608,17 +1640,15 @@ static void SCR_DrawTouchscreenOverlay(void)
 	}
 }
 
-extern void R_UpdateFogColor(void);
 void R_ClearScreen(qboolean fogcolor)
 {
 	float clearcolor[4];
 	// clear to black
 	Vector4Clear(clearcolor);
-	if (fogcolor)
+	if (fogcolor && r_fog_clear.integer)
 	{
-		R_UpdateFogColor();
-		if (r_fog_clear.integer)
-			VectorCopy(r_refdef.fogcolor, clearcolor);
+		R_UpdateFog();
+		VectorCopy(r_refdef.fogcolor, clearcolor);
 	}
 	// clear depth is 1.0
 	// LordHavoc: we use a stencil centered around 128 instead of 0,
@@ -1628,14 +1658,9 @@ void R_ClearScreen(qboolean fogcolor)
 	GL_Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | (vid.stencil ? GL_STENCIL_BUFFER_BIT : 0), clearcolor, 1.0f, 128);
 }
 
-qboolean CL_VM_UpdateView (void);
-void SCR_DrawConsole (void);
-void R_Shadow_EditLights_DrawSelectedLightProperties(void);
-
 int r_stereo_side;
 
-extern void Sbar_ShowFPS(void);
-void SCR_DrawScreen (void)
+static void SCR_DrawScreen (void)
 {
 	Draw_Frame();
 
@@ -1709,31 +1734,11 @@ void SCR_DrawScreen (void)
 
 		r_refdef.view.frustum_x *= r_refdef.frustumscale_x;
 		r_refdef.view.frustum_y *= r_refdef.frustumscale_y;
+		r_refdef.view.ortho_x = atan(r_refdef.view.frustum_x) * (360.0 / M_PI); // abused as angle by VM_CL_R_SetView
+		r_refdef.view.ortho_y = atan(r_refdef.view.frustum_y) * (360.0 / M_PI); // abused as angle by VM_CL_R_SetView
 
 		if(!CL_VM_UpdateView())
 			R_RenderView();
-
-		if (scr_zoomwindow.integer)
-		{
-			float sizex = bound(10, scr_zoomwindow_viewsizex.value, 100) / 100.0;
-			float sizey = bound(10, scr_zoomwindow_viewsizey.value, 100) / 100.0;
-			r_refdef.view.width = (int)(vid.width * sizex);
-			r_refdef.view.height = (int)(vid.height * sizey);
-			r_refdef.view.depth = 1;
-			r_refdef.view.x = (int)((vid.width - r_refdef.view.width)/2);
-			r_refdef.view.y = 0;
-			r_refdef.view.z = 0;
-
-			r_refdef.view.useperspective = true;
-			r_refdef.view.frustum_y = tan(scr_zoomwindow_fov.value * M_PI / 360.0) * (3.0/4.0) * cl.viewzoom;
-			r_refdef.view.frustum_x = r_refdef.view.frustum_y * vid_pixelheight.value * (float)r_refdef.view.width / (float)r_refdef.view.height;
-
-			r_refdef.view.frustum_x *= r_refdef.frustumscale_x;
-			r_refdef.view.frustum_y *= r_refdef.frustumscale_y;
-
-			if(!CL_VM_UpdateView())
-				R_RenderView();
-		}
 	}
 
 	if (!r_stereo_sidebyside.integer && !r_stereo_horizontal.integer && !r_stereo_vertical.integer)
@@ -1791,7 +1796,6 @@ void SCR_DrawScreen (void)
 		SCR_DrawPause ();
 		if (!r_letterbox.value)
 			Sbar_Draw();
-		Sbar_ShowFPS();
 		SHOWLMP_drawall();
 		SCR_CheckDrawCenterString();
 	}
@@ -1811,11 +1815,9 @@ void SCR_DrawScreen (void)
 	if (r_timereport_active)
 		R_TimeReport("2d");
 
-	if (cls.signon == SIGNONS)
-	{
-		R_TimeReport_EndFrame();
-		R_TimeReport_BeginFrame();
-	}
+	R_TimeReport_EndFrame();
+	R_TimeReport_BeginFrame();
+	Sbar_ShowFPS();
 
 	DrawQ_Finish();
 
@@ -1887,7 +1889,7 @@ static void SCR_SetLoadingScreenTexture(void)
 void SCR_UpdateLoadingScreenIfShown(void)
 {
 	if(loadingscreendone)
-		SCR_UpdateLoadingScreen(loadingscreencleared);
+		SCR_UpdateLoadingScreen(loadingscreencleared, false);
 }
 
 void SCR_PushLoadingScreen (qboolean redraw, const char *msg, float len_in_parent)
@@ -2009,7 +2011,7 @@ static void SCR_DrawLoadingStack(void)
 		sscanf(scr_loadingscreen_barcolor.string, "%f %f %f", &colors[12], &colors[13], &colors[14]);  colors[15] = 1;
 
 		R_Mesh_PrepareVertices_Generic_Arrays(4, verts, colors, NULL);
-		R_SetupShader_Generic(NULL, NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic_NoTexture(true, true);
 		R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 
 		// make sure everything is cleared, including the progress indicator
@@ -2026,13 +2028,14 @@ static void SCR_DrawLoadingScreen_SharedSetup (qboolean clear)
 {
 	r_viewport_t viewport;
 	float x, y, w, h, sw, sh, f;
+	char vabuf[1024];
 	// release mouse grab while loading
 	if (!vid.fullscreen)
 		VID_SetMouse(false, false, false);
 //	CHECKGLERROR
 	r_refdef.draw2dstage = true;
 	R_Viewport_InitOrtho(&viewport, &identitymatrix, 0, 0, vid.width, vid.height, 0, 0, vid_conwidth.integer, vid_conheight.integer, -10, 100, NULL);
-	R_Mesh_ResetRenderTargets();
+	R_Mesh_SetRenderTargets(0, NULL, NULL, NULL, NULL, NULL);
 	R_SetViewport(&viewport);
 	GL_ColorMask(1,1,1,1);
 	// when starting up a new video mode, make sure the screen is cleared to black
@@ -2042,7 +2045,7 @@ static void SCR_DrawLoadingScreen_SharedSetup (qboolean clear)
 	R_Mesh_Start();
 	R_EntityMatrix(&identitymatrix);
 	// draw the loading plaque
-	loadingscreenpic = Draw_CachePic (loadingscreenpic_number ? va("gfx/loading%d", loadingscreenpic_number+1) : "gfx/loading");
+	loadingscreenpic = Draw_CachePic_Flags (loadingscreenpic_number ? va(vabuf, sizeof(vabuf), "gfx/loading%d", loadingscreenpic_number+1) : "gfx/loading", loadingscreenpic_number ? CACHEPICFLAG_NOTPERSISTENT : 0);
 
 	w = loadingscreenpic->width;
 	h = loadingscreenpic->height;
@@ -2108,11 +2111,11 @@ static void SCR_DrawLoadingScreen (qboolean clear)
 	if(loadingscreentexture)
 	{
 		R_Mesh_PrepareVertices_Generic_Arrays(4, loadingscreentexture_vertex3f, NULL, loadingscreentexture_texcoord2f);
-		R_SetupShader_Generic(loadingscreentexture, NULL, GL_MODULATE, 1);
+		R_SetupShader_Generic(loadingscreentexture, NULL, GL_MODULATE, 1, true, true, true);
 		R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 	}
 	R_Mesh_PrepareVertices_Generic_Arrays(4, loadingscreenpic_vertex3f, NULL, loadingscreenpic_texcoord2f);
-	R_SetupShader_Generic(loadingscreenpic->tex, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic(Draw_GetPicTexture(loadingscreenpic), NULL, GL_MODULATE, 1, true, true, false);
 	R_Mesh_Draw(0, 4, 0, 2, polygonelement3i, NULL, 0, polygonelement3s, NULL, 0);
 	SCR_DrawLoadingStack();
 }
@@ -2124,7 +2127,7 @@ static void SCR_DrawLoadingScreen_SharedFinish (qboolean clear)
 	VID_Finish();
 }
 
-void SCR_UpdateLoadingScreen (qboolean clear)
+void SCR_UpdateLoadingScreen (qboolean clear, qboolean startup)
 {
 	keydest_t	old_key_dest;
 	int			old_key_consoleactive;
@@ -2140,7 +2143,17 @@ void SCR_UpdateLoadingScreen (qboolean clear)
 		clear |= loadingscreencleared;
 
 	if(!loadingscreendone)
-		loadingscreenpic_number = rand() % (scr_loadingscreen_count.integer > 1 ? scr_loadingscreen_count.integer : 1);
+	{
+		if(startup && scr_loadingscreen_firstforstartup.integer)
+			loadingscreenpic_number = 0;
+		else if(scr_loadingscreen_firstforstartup.integer)
+			if(scr_loadingscreen_count.integer > 1)
+				loadingscreenpic_number = rand() % (scr_loadingscreen_count.integer - 1) + 1;
+			else
+				loadingscreenpic_number = 0;
+		else
+			loadingscreenpic_number = rand() % (scr_loadingscreen_count.integer > 1 ? scr_loadingscreen_count.integer : 1);
+	}
 
 	if(clear)
 	        SCR_ClearLoadingScreenTexture();
@@ -2154,6 +2167,10 @@ void SCR_UpdateLoadingScreen (qboolean clear)
 	}
 	loadingscreencleared = clear;
 
+#ifdef USE_GLES2
+	SCR_DrawLoadingScreen_SharedSetup(clear);
+	SCR_DrawLoadingScreen(clear);
+#else
 	if (qglDrawBuffer)
 		qglDrawBuffer(GL_BACK);
 	SCR_DrawLoadingScreen_SharedSetup(clear);
@@ -2170,6 +2187,7 @@ void SCR_UpdateLoadingScreen (qboolean clear)
 			qglDrawBuffer(GL_BACK);
 		SCR_DrawLoadingScreen(clear);
 	}
+#endif
 	SCR_DrawLoadingScreen_SharedFinish(clear);
 
 	// this goes into the event loop, and should prevent unresponsive cursor on vista
@@ -2196,20 +2214,89 @@ extern cvar_t cl_minfps;
 extern cvar_t cl_minfps_fade;
 extern cvar_t cl_minfps_qualitymax;
 extern cvar_t cl_minfps_qualitymin;
-extern cvar_t cl_minfps_qualitypower;
-extern cvar_t cl_minfps_qualityscale;
-extern cvar_t r_viewscale_fpsscaling;
-static double cl_updatescreen_rendertime = 0;
+extern cvar_t cl_minfps_qualitymultiply;
+extern cvar_t cl_minfps_qualityhysteresis;
+extern cvar_t cl_minfps_qualitystepmax;
+extern cvar_t cl_minfps_force;
 static double cl_updatescreen_quality = 1;
-extern void Sbar_ShowFPS_Update(void);
 void CL_UpdateScreen(void)
 {
 	vec3_t vieworigin;
-	double rendertime1;
-	double drawscreenstart;
+	static double drawscreenstart = 0.0;
+	double drawscreendelta;
 	float conwidth, conheight;
-	float f;
 	r_viewport_t viewport;
+
+	if(drawscreenstart)
+	{
+		drawscreendelta = Sys_DirtyTime() - drawscreenstart;
+		if (cl_minfps.value > 0 && (cl_minfps_force.integer || !(cls.timedemo || (cls.capturevideo.active && !cls.capturevideo.realtime))) && drawscreendelta >= 0 && drawscreendelta < 60)
+		{
+			// quality adjustment according to render time
+			double actualframetime;
+			double targetframetime;
+			double adjust;
+			double f;
+			double h;
+
+			// fade lastdrawscreentime
+			r_refdef.lastdrawscreentime += (drawscreendelta - r_refdef.lastdrawscreentime) * cl_minfps_fade.value;
+
+			// find actual and target frame times
+			actualframetime = r_refdef.lastdrawscreentime;
+			targetframetime = (1.0 / cl_minfps.value);
+
+			// we scale hysteresis by quality
+			h = cl_updatescreen_quality * cl_minfps_qualityhysteresis.value;
+
+			// calculate adjustment assuming linearity
+			f = cl_updatescreen_quality / actualframetime * cl_minfps_qualitymultiply.value;
+			adjust = (targetframetime - actualframetime) * f;
+
+			// one sided hysteresis
+			if(adjust > 0)
+				adjust = max(0, adjust - h);
+
+			// adjust > 0 if:
+			//   (targetframetime - actualframetime) * f > h
+			//   ((1.0 / cl_minfps.value) - actualframetime) * (cl_updatescreen_quality / actualframetime * cl_minfps_qualitymultiply.value) > (cl_updatescreen_quality * cl_minfps_qualityhysteresis.value)
+			//   ((1.0 / cl_minfps.value) - actualframetime) * (cl_minfps_qualitymultiply.value / actualframetime) > cl_minfps_qualityhysteresis.value
+			//   (1.0 / cl_minfps.value) * (cl_minfps_qualitymultiply.value / actualframetime) - cl_minfps_qualitymultiply.value > cl_minfps_qualityhysteresis.value
+			//   (1.0 / cl_minfps.value) * (cl_minfps_qualitymultiply.value / actualframetime) > cl_minfps_qualityhysteresis.value + cl_minfps_qualitymultiply.value
+			//   (1.0 / cl_minfps.value) / actualframetime > (cl_minfps_qualityhysteresis.value + cl_minfps_qualitymultiply.value) / cl_minfps_qualitymultiply.value
+			//   (1.0 / cl_minfps.value) / actualframetime > 1.0 + cl_minfps_qualityhysteresis.value / cl_minfps_qualitymultiply.value
+			//   cl_minfps.value * actualframetime < 1.0 / (1.0 + cl_minfps_qualityhysteresis.value / cl_minfps_qualitymultiply.value)
+			//   actualframetime < 1.0 / cl_minfps.value / (1.0 + cl_minfps_qualityhysteresis.value / cl_minfps_qualitymultiply.value)
+			//   actualfps > cl_minfps.value * (1.0 + cl_minfps_qualityhysteresis.value / cl_minfps_qualitymultiply.value)
+
+			// adjust < 0 if:
+			//   (targetframetime - actualframetime) * f < 0
+			//   ((1.0 / cl_minfps.value) - actualframetime) * (cl_updatescreen_quality / actualframetime * cl_minfps_qualitymultiply.value) < 0
+			//   ((1.0 / cl_minfps.value) - actualframetime) < 0
+			//   -actualframetime) < -(1.0 / cl_minfps.value)
+			//   actualfps < cl_minfps.value
+
+			/*
+			Con_Printf("adjust UP if fps > %f, adjust DOWN if fps < %f\n",
+					cl_minfps.value * (1.0 + cl_minfps_qualityhysteresis.value / cl_minfps_qualitymultiply.value),
+					cl_minfps.value);
+			*/
+
+			// don't adjust too much at once
+			adjust = bound(-cl_minfps_qualitystepmax.value, adjust, cl_minfps_qualitystepmax.value);
+
+			// adjust!
+			cl_updatescreen_quality += adjust;
+			cl_updatescreen_quality = bound(max(0.01, cl_minfps_qualitymin.value), cl_updatescreen_quality, cl_minfps_qualitymax.value);
+		}
+		else
+		{
+			cl_updatescreen_quality = 1;
+			r_refdef.lastdrawscreentime = 0;
+		}
+	}
+
+	drawscreenstart = Sys_DirtyTime();
 
 	Sbar_ShowFPS_Update();
 
@@ -2236,8 +2323,6 @@ void CL_UpdateScreen(void)
 		VID_Finish();
 		return;
 	}
-
-	rendertime1 = Sys_DoubleTime();
 
 	conwidth = bound(160, vid_conwidth.value, 32768);
 	conheight = bound(90, vid_conheight.value, 24576);
@@ -2280,6 +2365,7 @@ void CL_UpdateScreen(void)
 
 	SCR_SetUpToDrawConsole();
 
+#ifndef USE_GLES2
 	if (qglDrawBuffer)
 	{
 		CHECKGLERROR
@@ -2294,9 +2380,10 @@ void CL_UpdateScreen(void)
 			qglDisable(GL_DITHER);CHECKGLERROR
 		}
 	}
+#endif
 
 	R_Viewport_InitOrtho(&viewport, &identitymatrix, 0, 0, vid.width, vid.height, 0, 0, vid_conwidth.integer, vid_conheight.integer, -10, 100, NULL);
-	R_Mesh_ResetRenderTargets();
+	R_Mesh_SetRenderTargets(0, NULL, NULL, NULL, NULL, NULL);
 	R_SetViewport(&viewport);
 	GL_ScissorTest(false);
 	GL_ColorMask(1,1,1,1);
@@ -2305,9 +2392,11 @@ void CL_UpdateScreen(void)
 	R_ClearScreen(false);
 	r_refdef.view.clear = false;
 	r_refdef.view.isoverlay = false;
-	f = pow((float)cl_updatescreen_quality, cl_minfps_qualitypower.value) * cl_minfps_qualityscale.value;
-	r_refdef.view.quality = bound(cl_minfps_qualitymin.value, f, cl_minfps_qualitymax.value);
 
+	// calculate r_refdef.view.quality
+	r_refdef.view.quality = cl_updatescreen_quality;
+
+#ifndef USE_GLES2
 	if (qglPolygonStipple)
 	{
 		if(scr_stipple.integer)
@@ -2334,10 +2423,9 @@ void CL_UpdateScreen(void)
 			qglDisable(GL_POLYGON_STIPPLE);CHECKGLERROR
 		}
 	}
+#endif
 
-	if (r_viewscale_fpsscaling.integer)
-		GL_Finish();
-	drawscreenstart = Sys_DoubleTime();
+#ifndef USE_GLES2
 	if (R_Stereo_Active())
 	{
 		r_stereo_side = 0;
@@ -2355,6 +2443,7 @@ void CL_UpdateScreen(void)
 		SCR_DrawScreen();
 
 		r_stereo_side = 1;
+		r_refdef.view.clear = true;
 
 		if (r_stereo_redblue.integer || r_stereo_redgreen.integer || r_stereo_redcyan.integer)
 		{
@@ -2369,22 +2458,13 @@ void CL_UpdateScreen(void)
 		SCR_DrawScreen();
 	}
 	else
+#endif
 		SCR_DrawScreen();
-	if (r_viewscale_fpsscaling.integer)
-		GL_Finish();
-	r_refdef.lastdrawscreentime = Sys_DoubleTime() - drawscreenstart;
 
 	SCR_CaptureVideo();
 
 	if (qglFlush)
 		qglFlush(); // FIXME: should we really be using qglFlush here?
-
-	// quality adjustment according to render time
-	cl_updatescreen_rendertime += ((Sys_DoubleTime() - rendertime1) - cl_updatescreen_rendertime) * bound(0, cl_minfps_fade.value, 1);
-	if (cl_minfps.value > 0 && cl_updatescreen_rendertime > 0 && !cls.timedemo && (!cls.capturevideo.active || !cls.capturevideo.realtime))
-		cl_updatescreen_quality = 1 / (cl_updatescreen_rendertime * cl_minfps.value);
-	else
-		cl_updatescreen_quality = 1;
 
 	if (!vid_activewindow)
 		VID_SetMouse(false, false, false);

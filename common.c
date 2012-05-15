@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 #include "quakedef.h"
+#include "utf8lib.h"
 
 cvar_t registered = {0, "registered","0", "indicates if this is running registered quake (whether gfx/pop.lmp was found)"};
 cvar_t cmdline = {0, "cmdline","0", "contains commandline the engine was launched with"};
@@ -363,7 +364,7 @@ void MSG_WriteCoord (sizebuf_t *sb, float f, protocolversion_t protocol)
 		MSG_WriteCoord32f (sb, f);
 }
 
-void MSG_WriteVector (sizebuf_t *sb, float *v, protocolversion_t protocol)
+void MSG_WriteVector (sizebuf_t *sb, const vec3_t v, protocolversion_t protocol)
 {
 	MSG_WriteCoord (sb, v[0], protocol);
 	MSG_WriteCoord (sb, v[1], protocol);
@@ -403,167 +404,175 @@ void MSG_WriteAngle (sizebuf_t *sb, float f, protocolversion_t protocol)
 //
 // reading functions
 //
-int msg_readcount;
-qboolean msg_badread;
 
-void MSG_BeginReading (void)
+void MSG_InitReadBuffer (sizebuf_t *buf, unsigned char *data, int size)
 {
-	msg_readcount = 0;
-	msg_badread = false;
+	memset(buf, 0, sizeof(*buf));
+	buf->data = data;
+	buf->maxsize = buf->cursize = size;
+	MSG_BeginReading(buf);
 }
 
-int MSG_ReadLittleShort (void)
+void MSG_BeginReading(sizebuf_t *sb)
 {
-	if (msg_readcount+2 > net_message.cursize)
+	sb->readcount = 0;
+	sb->badread = false;
+}
+
+int MSG_ReadLittleShort(sizebuf_t *sb)
+{
+	if (sb->readcount+2 > sb->cursize)
 	{
-		msg_badread = true;
+		sb->badread = true;
 		return -1;
 	}
-	msg_readcount += 2;
-	return (short)(net_message.data[msg_readcount-2] | (net_message.data[msg_readcount-1]<<8));
+	sb->readcount += 2;
+	return (short)(sb->data[sb->readcount-2] | (sb->data[sb->readcount-1]<<8));
 }
 
-int MSG_ReadBigShort (void)
+int MSG_ReadBigShort (sizebuf_t *sb)
 {
-	if (msg_readcount+2 > net_message.cursize)
+	if (sb->readcount+2 > sb->cursize)
 	{
-		msg_badread = true;
+		sb->badread = true;
 		return -1;
 	}
-	msg_readcount += 2;
-	return (short)((net_message.data[msg_readcount-2]<<8) + net_message.data[msg_readcount-1]);
+	sb->readcount += 2;
+	return (short)((sb->data[sb->readcount-2]<<8) + sb->data[sb->readcount-1]);
 }
 
-int MSG_ReadLittleLong (void)
+int MSG_ReadLittleLong (sizebuf_t *sb)
 {
-	if (msg_readcount+4 > net_message.cursize)
+	if (sb->readcount+4 > sb->cursize)
 	{
-		msg_badread = true;
+		sb->badread = true;
 		return -1;
 	}
-	msg_readcount += 4;
-	return net_message.data[msg_readcount-4] | (net_message.data[msg_readcount-3]<<8) | (net_message.data[msg_readcount-2]<<16) | (net_message.data[msg_readcount-1]<<24);
+	sb->readcount += 4;
+	return sb->data[sb->readcount-4] | (sb->data[sb->readcount-3]<<8) | (sb->data[sb->readcount-2]<<16) | (sb->data[sb->readcount-1]<<24);
 }
 
-int MSG_ReadBigLong (void)
+int MSG_ReadBigLong (sizebuf_t *sb)
 {
-	if (msg_readcount+4 > net_message.cursize)
+	if (sb->readcount+4 > sb->cursize)
 	{
-		msg_badread = true;
+		sb->badread = true;
 		return -1;
 	}
-	msg_readcount += 4;
-	return (net_message.data[msg_readcount-4]<<24) + (net_message.data[msg_readcount-3]<<16) + (net_message.data[msg_readcount-2]<<8) + net_message.data[msg_readcount-1];
+	sb->readcount += 4;
+	return (sb->data[sb->readcount-4]<<24) + (sb->data[sb->readcount-3]<<16) + (sb->data[sb->readcount-2]<<8) + sb->data[sb->readcount-1];
 }
 
-float MSG_ReadLittleFloat (void)
+float MSG_ReadLittleFloat (sizebuf_t *sb)
 {
 	union
 	{
 		float f;
 		int l;
 	} dat;
-	if (msg_readcount+4 > net_message.cursize)
+	if (sb->readcount+4 > sb->cursize)
 	{
-		msg_badread = true;
+		sb->badread = true;
 		return -1;
 	}
-	msg_readcount += 4;
-	dat.l = net_message.data[msg_readcount-4] | (net_message.data[msg_readcount-3]<<8) | (net_message.data[msg_readcount-2]<<16) | (net_message.data[msg_readcount-1]<<24);
+	sb->readcount += 4;
+	dat.l = sb->data[sb->readcount-4] | (sb->data[sb->readcount-3]<<8) | (sb->data[sb->readcount-2]<<16) | (sb->data[sb->readcount-1]<<24);
 	return dat.f;
 }
 
-float MSG_ReadBigFloat (void)
+float MSG_ReadBigFloat (sizebuf_t *sb)
 {
 	union
 	{
 		float f;
 		int l;
 	} dat;
-	if (msg_readcount+4 > net_message.cursize)
+	if (sb->readcount+4 > sb->cursize)
 	{
-		msg_badread = true;
+		sb->badread = true;
 		return -1;
 	}
-	msg_readcount += 4;
-	dat.l = (net_message.data[msg_readcount-4]<<24) | (net_message.data[msg_readcount-3]<<16) | (net_message.data[msg_readcount-2]<<8) | net_message.data[msg_readcount-1];
+	sb->readcount += 4;
+	dat.l = (sb->data[sb->readcount-4]<<24) | (sb->data[sb->readcount-3]<<16) | (sb->data[sb->readcount-2]<<8) | sb->data[sb->readcount-1];
 	return dat.f;
 }
 
-char *MSG_ReadString (void)
+char *MSG_ReadString (sizebuf_t *sb, char *string, size_t maxstring)
 {
-	static char string[MAX_INPUTLINE];
-	int l,c;
-	for (l = 0;l < (int) sizeof(string) - 1 && (c = MSG_ReadByte()) != -1 && c != 0;l++)
-		string[l] = c;
+	int c;
+	size_t l = 0;
+	// read string into sbfer, but only store as many characters as will fit
+	while ((c = MSG_ReadByte(sb)) > 0)
+		if (l < maxstring - 1)
+			string[l++] = c;
 	string[l] = 0;
 	return string;
 }
 
-int MSG_ReadBytes (int numbytes, unsigned char *out)
+int MSG_ReadBytes (sizebuf_t *sb, int numbytes, unsigned char *out)
 {
 	int l, c;
-	for (l = 0;l < numbytes && (c = MSG_ReadByte()) != -1;l++)
+	for (l = 0;l < numbytes && (c = MSG_ReadByte(sb)) != -1;l++)
 		out[l] = c;
 	return l;
 }
 
-float MSG_ReadCoord13i (void)
+float MSG_ReadCoord13i (sizebuf_t *sb)
 {
-	return MSG_ReadLittleShort() * (1.0/8.0);
+	return MSG_ReadLittleShort(sb) * (1.0/8.0);
 }
 
-float MSG_ReadCoord16i (void)
+float MSG_ReadCoord16i (sizebuf_t *sb)
 {
-	return (signed short) MSG_ReadLittleShort();
+	return (signed short) MSG_ReadLittleShort(sb);
 }
 
-float MSG_ReadCoord32f (void)
+float MSG_ReadCoord32f (sizebuf_t *sb)
 {
-	return MSG_ReadLittleFloat();
+	return MSG_ReadLittleFloat(sb);
 }
 
-float MSG_ReadCoord (protocolversion_t protocol)
+float MSG_ReadCoord (sizebuf_t *sb, protocolversion_t protocol)
 {
 	if (protocol == PROTOCOL_QUAKE || protocol == PROTOCOL_QUAKEDP || protocol == PROTOCOL_NEHAHRAMOVIE || protocol == PROTOCOL_NEHAHRABJP || protocol == PROTOCOL_NEHAHRABJP2 || protocol == PROTOCOL_NEHAHRABJP3 || protocol == PROTOCOL_QUAKEWORLD)
-		return MSG_ReadCoord13i();
+		return MSG_ReadCoord13i(sb);
 	else if (protocol == PROTOCOL_DARKPLACES1)
-		return MSG_ReadCoord32f();
+		return MSG_ReadCoord32f(sb);
 	else if (protocol == PROTOCOL_DARKPLACES2 || protocol == PROTOCOL_DARKPLACES3 || protocol == PROTOCOL_DARKPLACES4)
-		return MSG_ReadCoord16i();
+		return MSG_ReadCoord16i(sb);
 	else
-		return MSG_ReadCoord32f();
+		return MSG_ReadCoord32f(sb);
 }
 
-void MSG_ReadVector (float *v, protocolversion_t protocol)
+void MSG_ReadVector (sizebuf_t *sb, vec3_t v, protocolversion_t protocol)
 {
-	v[0] = MSG_ReadCoord(protocol);
-	v[1] = MSG_ReadCoord(protocol);
-	v[2] = MSG_ReadCoord(protocol);
+	v[0] = MSG_ReadCoord(sb, protocol);
+	v[1] = MSG_ReadCoord(sb, protocol);
+	v[2] = MSG_ReadCoord(sb, protocol);
 }
 
 // LordHavoc: round to nearest value, rather than rounding toward zero, fixes crosshair problem
-float MSG_ReadAngle8i (void)
+float MSG_ReadAngle8i (sizebuf_t *sb)
 {
-	return (signed char) MSG_ReadByte () * (360.0/256.0);
+	return (signed char) MSG_ReadByte (sb) * (360.0/256.0);
 }
 
-float MSG_ReadAngle16i (void)
+float MSG_ReadAngle16i (sizebuf_t *sb)
 {
-	return (signed short)MSG_ReadShort () * (360.0/65536.0);
+	return (signed short)MSG_ReadShort (sb) * (360.0/65536.0);
 }
 
-float MSG_ReadAngle32f (void)
+float MSG_ReadAngle32f (sizebuf_t *sb)
 {
-	return MSG_ReadFloat ();
+	return MSG_ReadFloat (sb);
 }
 
-float MSG_ReadAngle (protocolversion_t protocol)
+float MSG_ReadAngle (sizebuf_t *sb, protocolversion_t protocol)
 {
 	if (protocol == PROTOCOL_QUAKE || protocol == PROTOCOL_QUAKEDP || protocol == PROTOCOL_NEHAHRAMOVIE || protocol == PROTOCOL_NEHAHRABJP || protocol == PROTOCOL_NEHAHRABJP2 || protocol == PROTOCOL_NEHAHRABJP3 || protocol == PROTOCOL_DARKPLACES1 || protocol == PROTOCOL_DARKPLACES2 || protocol == PROTOCOL_DARKPLACES3 || protocol == PROTOCOL_DARKPLACES4 || protocol == PROTOCOL_QUAKEWORLD)
-		return MSG_ReadAngle8i ();
+		return MSG_ReadAngle8i (sb);
 	else
-		return MSG_ReadAngle16i ();
+		return MSG_ReadAngle16i (sb);
 }
 
 
@@ -733,7 +742,6 @@ int COM_Wordwrap(const char *string, size_t length, float continuationWidth, flo
 		{
 			case 0: // end of string
 				result += processLine(passthroughPL, startOfLine, cursor - startOfLine, spaceUsedInLine, isContinuation);
-				isContinuation = false;
 				goto out;
 			case '\n': // end of line
 				result += processLine(passthroughPL, startOfLine, cursor - startOfLine, spaceUsedInLine, isContinuation);
@@ -988,7 +996,7 @@ COM_ParseToken_Simple
 Parse a token out of a string
 ==============
 */
-int COM_ParseToken_Simple(const char **datapointer, qboolean returnnewline, qboolean parsebackslash)
+int COM_ParseToken_Simple(const char **datapointer, qboolean returnnewline, qboolean parsebackslash, qboolean parsecomments)
 {
 	int len;
 	int c;
@@ -1023,14 +1031,14 @@ skipwhite:
 	if (data[0] == '\r' && data[1] == '\n')
 		data++;
 
-	if (data[0] == '/' && data[1] == '/')
+	if (parsecomments && data[0] == '/' && data[1] == '/')
 	{
 		// comment
 		while (*data && *data != '\n' && *data != '\r')
 			data++;
 		goto skipwhite;
 	}
-	else if (data[0] == '/' && data[1] == '*')
+	else if (parsecomments && data[0] == '/' && data[1] == '*')
 	{
 		// comment
 		data++;
@@ -1449,7 +1457,7 @@ static const gamemode_info_t gamemode_info [GAME_COUNT] =
 { GAME_BATTLEMECH,		GAME_BATTLEMECH,		"battlemech",		"-battlemech",		"Battlemech",			"base",		NULL,			"battlemech",	"battlemech"		}, // COMMANDLINEOPTION: Game: -battlemech runs the multiplayer topdown deathmatch game BattleMech
 { GAME_ZYMOTIC,			GAME_ZYMOTIC,			"zymotic",			"-zymotic",			"Zymotic",				"basezym",	NULL,			"zymotic",		"zymotic"			}, // COMMANDLINEOPTION: Game: -zymotic runs the singleplayer game Zymotic
 { GAME_SETHERAL,		GAME_SETHERAL,			"setheral",			"-setheral",		"Setheral",				"data",		NULL,			"setheral",		"setheral"			}, // COMMANDLINEOPTION: Game: -setheral runs the multiplayer game Setheral
-{ GAME_SOM,				GAME_NORMAL,			"som",				"-som",				"Son of Man",			"id1",		"sonofman",		"som",			"darkplaces"		}, // COMMANDLINEOPTION: Game: -som runs the multiplayer game Son Of Man
+{ GAME_SOM,				GAME_NORMAL,			"sonofman",			"-som",				"Son of Man",			"id1",		"sonofman",		"som",			"darkplaces"		}, // COMMANDLINEOPTION: Game: -som runs the multiplayer game Son Of Man
 { GAME_TENEBRAE,		GAME_NORMAL,			"tenebrae",			"-tenebrae",		"DarkPlaces-Tenebrae",	"id1",		"tenebrae",		"dp",			"darkplaces"		}, // COMMANDLINEOPTION: Game: -tenebrae runs the graphics test mod known as Tenebrae (some features not implemented)
 { GAME_NEOTERIC,		GAME_NORMAL,			"neoteric",			"-neoteric",		"Neoteric",				"id1",		"neobase",		"neo",			"darkplaces"		}, // COMMANDLINEOPTION: Game: -neoteric runs the game Neoteric
 { GAME_OPENQUARTZ,		GAME_NORMAL,			"openquartz",		"-openquartz",		"OpenQuartz",			"id1",		NULL,			"openquartz",	"darkplaces"		}, // COMMANDLINEOPTION: Game: -openquartz runs the game OpenQuartz, a standalone GPL replacement of the quake content
@@ -1460,9 +1468,11 @@ static const gamemode_info_t gamemode_info [GAME_COUNT] =
 { GAME_DARSANA,			GAME_DARSANA,			"darsana",			"-darsana",			"Darsana",				"ddata",	NULL, 			"darsana",		"darsana"			}, // COMMANDLINEOPTION: Game: -darsana runs the game Darsana
 { GAME_CONTAGIONTHEORY,	GAME_CONTAGIONTHEORY,	"contagiontheory",	"-contagiontheory",	"Contagion Theory",		"ctdata",	NULL, 			"ct",			"contagiontheory"	}, // COMMANDLINEOPTION: Game: -contagiontheory runs the game Contagion Theory
 { GAME_EDU2P,			GAME_EDU2P,				"edu2p",			"-edu2p",			"EDU2 Prototype",		"id1",		"edu2",			"edu2_p",		"edu2prototype"		}, // COMMANDLINEOPTION: Game: -edu2p runs the game Edu2 prototype
-{ GAME_PROPHECY,		GAME_PROPHECY,			"prophecy",			"-prophecy",		"Prophecy",				"data",		NULL,			"prophecy",		"prophecy"			}, // COMMANDLINEOPTION: Game: -prophecy runs the game Prophecy
+{ GAME_PROPHECY,		GAME_PROPHECY,			"prophecy",		"-prophecy",		"Prophecy",			"gamedata",		NULL,			"phcy",		"prophecy"			}, // COMMANDLINEOPTION: Game: -prophecy runs the game Prophecy
 { GAME_BLOODOMNICIDE,	GAME_BLOODOMNICIDE,		"omnicide",			"-omnicide",		"Blood Omnicide",		"kain",		NULL,			"omnicide",		"omnicide"			}, // COMMANDLINEOPTION: Game: -omnicide runs the game Blood Omnicide
 { GAME_STEELSTORM,		GAME_STEELSTORM,		"steelstorm",		"-steelstorm",		"Steel-Storm",			"gamedata",	NULL,			"ss",			"steelstorm"		}, // COMMANDLINEOPTION: Game: -steelstorm runs the game Steel Storm
+{ GAME_STEELSTORM2,		GAME_STEELSTORM2,		"steelstorm2",		"-steelstorm2",		"Steel Storm 2",			"gamedata",	NULL,			"ss2",			"steelstorm2"		}, // COMMANDLINEOPTION: Game: -steelstorm2 runs the game Steel Storm 2
+{ GAME_TOMESOFMEPHISTOPHELES,		GAME_TOMESOFMEPHISTOPHELES,		"tomesofmephistopheles",		"-tomesofmephistopheles",		"Tomes of Mephistopheles",			"gamedata",	NULL,			"tom",			"tomesofmephistopheles"		}, // COMMANDLINEOPTION: Game: -steelstorm runs the game Steel Storm
 { GAME_STRAPBOMB,		GAME_STRAPBOMB,			"strapbomb",		"-strapbomb",		"Strap-on-bomb Car",	"id1",		NULL,			"strap",		"strapbomb"			}, // COMMANDLINEOPTION: Game: -strapbomb runs the game Strap-on-bomb Car
 { GAME_MOONHELM,		GAME_MOONHELM,			"moonhelm",			"-moonhelm",		"MoonHelm",				"data",		NULL,			"mh",			"moonhelm"			}, // COMMANDLINEOPTION: Game: -moonhelm runs the game MoonHelm
 };
@@ -1474,24 +1484,17 @@ void COM_InitGameType (void)
 	int i;
 	int index = 0;
 
-	FS_StripExtension (com_argv[0], name, sizeof (name));
-	COM_ToLowerString (name, name, sizeof (name));
-
-	// check executable filename for keywords
+	// check executable filename for keywords, but do it SMARTLY - only check the last path element
+	FS_StripExtension(FS_FileWithoutPath(com_argv[0]), name, sizeof (name));
+	COM_ToLowerString(name, name, sizeof (name));
 	for (i = 1;i < (int)(sizeof (gamemode_info) / sizeof (gamemode_info[0]));i++)
 		if (gamemode_info[i].prog_name && gamemode_info[i].prog_name[0] && strstr (name, gamemode_info[i].prog_name))
-		{
 			index = i;
-			break;
-		}
 
 	// check commandline options for keywords
 	for (i = 0;i < (int)(sizeof (gamemode_info) / sizeof (gamemode_info[0]));i++)
 		if (COM_CheckParm (gamemode_info[i].cmdline))
-		{
 			index = i;
-			break;
-		}
 
 	com_startupgamemode = gamemode_info[index].mode;
 	com_startupgamegroup = gamemode_info[index].group;
@@ -1613,25 +1616,18 @@ void COM_Init_Commands (void)
 ============
 va
 
-does a varargs printf into a temp buffer, so I don't need to have
-varargs versions of all text functions.
-FIXME: make this buffer size safe someday
+varargs print into provided buffer, returns buffer (so that it can be called in-line, unlike dpsnprintf)
 ============
 */
-char *va(const char *format, ...)
+char *va(char *buf, size_t buflen, const char *format, ...)
 {
 	va_list argptr;
-	// LordHavoc: now cycles through 8 buffers to avoid problems in most cases
-	static char string[8][1024], *s;
-	static int stringindex = 0;
 
-	s = string[stringindex];
-	stringindex = (stringindex + 1) & 7;
 	va_start (argptr, format);
-	dpvsnprintf (s, sizeof (string[0]), format,argptr);
+	dpvsnprintf (buf, buflen, format,argptr);
 	va_end (argptr);
 
-	return s;
+	return buf;
 }
 
 
@@ -1687,6 +1683,23 @@ void COM_ToLowerString (const char *in, char *out, size_t size_out)
 	if (size_out == 0)
 		return;
 
+	if(utf8_enable.integer)
+	{
+		*out = 0;
+		while(*in && size_out > 1)
+		{
+			int n;
+			Uchar ch = u8_getchar_utf8_enabled(in, &in);
+			ch = u8_tolower(ch);
+			n = u8_fromchar(ch, out, size_out);
+			if(n <= 0)
+				break;
+			out += n;
+			size_out -= n;
+		}
+		return;
+	}
+
 	while (*in && size_out > 1)
 	{
 		if (*in >= 'A' && *in <= 'Z')
@@ -1702,6 +1715,23 @@ void COM_ToUpperString (const char *in, char *out, size_t size_out)
 {
 	if (size_out == 0)
 		return;
+
+	if(utf8_enable.integer)
+	{
+		*out = 0;
+		while(*in && size_out > 1)
+		{
+			int n;
+			Uchar ch = u8_getchar_utf8_enabled(in, &in);
+			ch = u8_toupper(ch);
+			n = u8_fromchar(ch, out, size_out);
+			if(n <= 0)
+				break;
+			out += n;
+			size_out -= n;
+		}
+		return;
+	}
 
 	while (*in && size_out > 1)
 	{
@@ -1939,69 +1969,7 @@ COM_StringDecolorize(const char *in, size_t size_in, char *out, size_t size_out,
 #undef APPEND
 }
 
-// written by Elric, thanks Elric!
-char *SearchInfostring(const char *infostring, const char *key)
-{
-	static char value [MAX_INPUTLINE];
-	char crt_key [MAX_INPUTLINE];
-	size_t value_ind, key_ind;
-	char c;
-
-	if (*infostring++ != '\\')
-		return NULL;
-
-	value_ind = 0;
-	for (;;)
-	{
-		key_ind = 0;
-
-		// Get the key name
-		for (;;)
-		{
-			c = *infostring++;
-
-			if (c == '\0')
-				return NULL;
-			if (c == '\\' || key_ind == sizeof (crt_key) - 1)
-			{
-				crt_key[key_ind] = '\0';
-				break;
-			}
-
-			crt_key[key_ind++] = c;
-		}
-
-		// If it's the key we are looking for, save it in "value"
-		if (!strcmp(crt_key, key))
-		{
-			for (;;)
-			{
-				c = *infostring++;
-
-				if (c == '\0' || c == '\\' || value_ind == sizeof (value) - 1)
-				{
-					value[value_ind] = '\0';
-					return value;
-				}
-
-				value[value_ind++] = c;
-			}
-		}
-
-		// Else, skip the value
-		for (;;)
-		{
-			c = *infostring++;
-
-			if (c == '\0')
-				return NULL;
-			if (c == '\\')
-				break;
-		}
-	}
-}
-
-void InfoString_GetValue(const char *buffer, const char *key, char *value, size_t valuelength)
+char *InfoString_GetValue(const char *buffer, const char *key, char *value, size_t valuelength)
 {
 	int pos = 0, j;
 	size_t keylength;
@@ -2011,23 +1979,23 @@ void InfoString_GetValue(const char *buffer, const char *key, char *value, size_
 	if (valuelength < 1 || !value)
 	{
 		Con_Printf("InfoString_GetValue: no room in value\n");
-		return;
+		return NULL;
 	}
 	value[0] = 0;
 	if (strchr(key, '\\'))
 	{
 		Con_Printf("InfoString_GetValue: key name \"%s\" contains \\ which is not possible in an infostring\n", key);
-		return;
+		return NULL;
 	}
 	if (strchr(key, '\"'))
 	{
 		Con_Printf("InfoString_SetValue: key name \"%s\" contains \" which is not allowed in an infostring\n", key);
-		return;
+		return NULL;
 	}
 	if (!key[0])
 	{
 		Con_Printf("InfoString_GetValue: can not look up a key with no name\n");
-		return;
+		return NULL;
 	}
 	while (buffer[pos] == '\\')
 	{
@@ -2038,12 +2006,13 @@ void InfoString_GetValue(const char *buffer, const char *key, char *value, size_
 			for (j = 0;buffer[pos+j] && buffer[pos+j] != '\\' && j < (int)valuelength - 1;j++)
 				value[j] = buffer[pos+j];
 			value[j] = 0;
-			return;
+			return value;
 		}
 		for (pos++;buffer[pos] && buffer[pos] != '\\';pos++);
 		for (pos++;buffer[pos] && buffer[pos] != '\\';pos++);
 	}
 	// if we reach this point the key was not found
+	return NULL;
 }
 
 void InfoString_SetValue(char *buffer, size_t bufferlength, const char *key, const char *value)
@@ -2092,7 +2061,7 @@ void InfoString_SetValue(char *buffer, size_t bufferlength, const char *key, con
 	if (value && value[0])
 	{
 		// set the key/value and append the remaining text
-		char tempbuffer[4096];
+		char tempbuffer[MAX_INPUTLINE];
 		strlcpy(tempbuffer, buffer + pos2, sizeof(tempbuffer));
 		dpsnprintf(buffer + pos, bufferlength - pos, "\\%s\\%s%s", key, value, tempbuffer);
 	}
@@ -2106,8 +2075,8 @@ void InfoString_SetValue(char *buffer, size_t bufferlength, const char *key, con
 void InfoString_Print(char *buffer)
 {
 	int i;
-	char key[2048];
-	char value[2048];
+	char key[MAX_INPUTLINE];
+	char value[MAX_INPUTLINE];
 	while (*buffer)
 	{
 		if (*buffer != '\\')

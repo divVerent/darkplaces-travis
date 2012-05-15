@@ -101,7 +101,9 @@ typedef struct particleeffectinfo_s
 	float stretchfactor;
 	// stretch velocity factor (used for sparks)
 	float originoffset[3];
+	float relativeoriginoffset[3];
 	float velocityoffset[3];
+	float relativevelocityoffset[3];
 	float originjitter[3];
 	float velocityjitter[3];
 	float velocitymultiplier;
@@ -112,6 +114,7 @@ typedef struct particleeffectinfo_s
 	float lightcolor[3];
 	qboolean lightshadow;
 	int lightcubemapnum;
+	float lightcorona[2];
 	unsigned int staincolor[2]; // note: 0x808080 = neutral (particle's own color), these are modding factors for the particle's original color!
 	int staintex[2];
 	float stainalpha[2];
@@ -192,6 +195,84 @@ static const int tex_bubble = 62;
 static const int tex_raindrop = 61;
 static const int tex_beam = 60;
 
+particleeffectinfo_t baselineparticleeffectinfo =
+{
+	0, //int effectnameindex; // which effect this belongs to
+	// PARTICLEEFFECT_* bits
+	0, //int flags;
+	// blood effects may spawn very few particles, so proper fraction-overflow
+	// handling is very important, this variable keeps track of the fraction
+	0.0, //double particleaccumulator;
+	// the math is: countabsolute + requestedcount * countmultiplier * quality
+	// absolute number of particles to spawn, often used for decals
+	// (unaffected by quality and requestedcount)
+	0.0f, //float countabsolute;
+	// multiplier for the number of particles CL_ParticleEffect was told to
+	// spawn, most effects do not really have a count and hence use 1, so
+	// this is often the actual count to spawn, not merely a multiplier
+	0.0f, //float countmultiplier;
+	// if > 0 this causes the particle to spawn in an evenly spaced line from
+	// originmins to originmaxs (causing them to describe a trail, not a box)
+	0.0f, //float trailspacing;
+	// type of particle to spawn (defines some aspects of behavior)
+	pt_alphastatic, //ptype_t particletype;
+	// blending mode used on this particle type
+	PBLEND_ALPHA, //pblend_t blendmode;
+	// orientation of this particle type (BILLBOARD, SPARK, BEAM, etc)
+	PARTICLE_BILLBOARD, //porientation_t orientation;
+	// range of colors to choose from in hex RRGGBB (like HTML color tags),
+	// randomly interpolated at spawn
+	{0xFFFFFF, 0xFFFFFF}, //unsigned int color[2];
+	// a random texture is chosen in this range (note the second value is one
+	// past the last choosable, so for example 8,16 chooses any from 8 up and
+	// including 15)
+	// if start and end of the range are the same, no randomization is done
+	{63, 63 /* tex_particle */}, //int tex[2];
+	// range of size values randomly chosen when spawning, plus size increase over time
+	{1, 1, 0.0f}, //float size[3];
+	// range of alpha values randomly chosen when spawning, plus alpha fade
+	{0.0f, 256.0f, 256.0f}, //float alpha[3];
+	// how long the particle should live (note it is also removed if alpha drops to 0)
+	{16777216.0f, 16777216.0f}, //float time[2];
+	// how much gravity affects this particle (negative makes it fly up!)
+	0.0f, //float gravity;
+	// how much bounce the particle has when it hits a surface
+	// if negative the particle is removed on impact
+	0.0f, //float bounce;
+	// if in air this friction is applied
+	// if negative the particle accelerates
+	0.0f, //float airfriction;
+	// if in liquid (water/slime/lava) this friction is applied
+	// if negative the particle accelerates
+	0.0f, //float liquidfriction;
+	// these offsets are added to the values given to particleeffect(), and
+	// then an ellipsoid-shaped jitter is added as defined by these
+	// (they are the 3 radii)
+	1.0f, //float stretchfactor;
+	// stretch velocity factor (used for sparks)
+	{0.0f, 0.0f, 0.0f}, //float originoffset[3];
+	{0.0f, 0.0f, 0.0f}, //float relativeoriginoffset[3];
+	{0.0f, 0.0f, 0.0f}, //float velocityoffset[3];
+	{0.0f, 0.0f, 0.0f}, //float relativevelocityoffset[3];
+	{0.0f, 0.0f, 0.0f}, //float originjitter[3];
+	{0.0f, 0.0f, 0.0f}, //float velocityjitter[3];
+	0.0f, //float velocitymultiplier;
+	// an effect can also spawn a dlight
+	0.0f, //float lightradiusstart;
+	0.0f, //float lightradiusfade;
+	16777216.0f, //float lighttime;
+	{1.0f, 1.0f, 1.0f}, //float lightcolor[3];
+	true, //qboolean lightshadow;
+	0, //int lightcubemapnum;
+	{1.0f, 0.25f}, //float lightcorona[2];
+	{(unsigned int)-1, (unsigned int)-1}, //unsigned int staincolor[2]; // note: 0x808080 = neutral (particle's own color), these are modding factors for the particle's original color!
+	{-1, -1}, //int staintex[2];
+	{1.0f, 1.0f}, //float stainalpha[2];
+	{2.0f, 2.0f}, //float stainsize[2];
+	// other parameters
+	{0.0f, 360.0f, 0.0f, 0.0f}, //float rotate[4]; // min/max base angle, min/max rotation over time
+};
+
 cvar_t cl_particles = {CVAR_SAVE, "cl_particles", "1", "enables particle effects"};
 cvar_t cl_particles_quality = {CVAR_SAVE, "cl_particles_quality", "1", "multiplies number of particles"};
 cvar_t cl_particles_alpha = {CVAR_SAVE, "cl_particles_alpha", "1", "multiplies opacity of particles"};
@@ -227,7 +308,7 @@ cvar_t cl_decals_bias = {CVAR_SAVE, "cl_decals_bias", "0.125", "distance to bias
 cvar_t cl_decals_max = {CVAR_SAVE, "cl_decals_max", "4096", "maximum number of decals allowed to exist in the world at once"};
 
 
-void CL_Particles_ParseEffectInfo(const char *textstart, const char *textend, const char *filename)
+static void CL_Particles_ParseEffectInfo(const char *textstart, const char *textend, const char *filename)
 {
 	int arrayindex;
 	int argc;
@@ -242,7 +323,7 @@ void CL_Particles_ParseEffectInfo(const char *textstart, const char *textend, co
 			argv[arrayindex][0] = 0;
 		for (;;)
 		{
-			if (!COM_ParseToken_Simple(&text, true, false))
+			if (!COM_ParseToken_Simple(&text, true, false, true))
 				return;
 			if (!strcmp(com_token, "\n"))
 				break;
@@ -289,37 +370,9 @@ void CL_Particles_ParseEffectInfo(const char *textstart, const char *textend, co
 				break;
 			}
 			info = particleeffectinfo + numparticleeffectinfo++;
+			// copy entire info from baseline, then fix up the nameindex
+			*info = baselineparticleeffectinfo;
 			info->effectnameindex = effectnameindex;
-			info->particletype = pt_alphastatic;
-			info->blendmode = particletype[info->particletype].blendmode;
-			info->orientation = particletype[info->particletype].orientation;
-			info->tex[0] = tex_particle;
-			info->tex[1] = tex_particle;
-			info->color[0] = 0xFFFFFF;
-			info->color[1] = 0xFFFFFF;
-			info->size[0] = 1;
-			info->size[1] = 1;
-			info->alpha[0] = 0;
-			info->alpha[1] = 256;
-			info->alpha[2] = 256;
-			info->time[0] = 9999;
-			info->time[1] = 9999;
-			VectorSet(info->lightcolor, 1, 1, 1);
-			info->lightshadow = true;
-			info->lighttime = 9999;
-			info->stretchfactor = 1;
-			info->staincolor[0] = (unsigned int)-1;
-			info->staincolor[1] = (unsigned int)-1;
-			info->staintex[0] = -1;
-			info->staintex[1] = -1;
-			info->stainalpha[0] = 1;
-			info->stainalpha[1] = 1;
-			info->stainsize[0] = 2;
-			info->stainsize[1] = 2;
-			info->rotate[0] = 0;
-			info->rotate[1] = 360;
-			info->rotate[2] = 0;
-			info->rotate[3] = 0;
 		}
 		else if (info == NULL)
 		{
@@ -375,7 +428,9 @@ void CL_Particles_ParseEffectInfo(const char *textstart, const char *textend, co
 		else if (!strcmp(argv[0], "airfriction")) {readfloat(info->airfriction);}
 		else if (!strcmp(argv[0], "liquidfriction")) {readfloat(info->liquidfriction);}
 		else if (!strcmp(argv[0], "originoffset")) {readfloats(info->originoffset, 3);}
+		else if (!strcmp(argv[0], "relativeoriginoffset")) {readfloats(info->relativeoriginoffset, 3);}
 		else if (!strcmp(argv[0], "velocityoffset")) {readfloats(info->velocityoffset, 3);}
+		else if (!strcmp(argv[0], "relativevelocityoffset")) {readfloats(info->relativevelocityoffset, 3);}
 		else if (!strcmp(argv[0], "originjitter")) {readfloats(info->originjitter, 3);}
 		else if (!strcmp(argv[0], "velocityjitter")) {readfloats(info->velocityjitter, 3);}
 		else if (!strcmp(argv[0], "velocitymultiplier")) {readfloat(info->velocitymultiplier);}
@@ -385,6 +440,7 @@ void CL_Particles_ParseEffectInfo(const char *textstart, const char *textend, co
 		else if (!strcmp(argv[0], "lightcolor")) {readfloats(info->lightcolor, 3);}
 		else if (!strcmp(argv[0], "lightshadow")) {readbool(info->lightshadow);}
 		else if (!strcmp(argv[0], "lightcubemapnum")) {readint(info->lightcubemapnum);}
+		else if (!strcmp(argv[0], "lightcorona")) {readints(info->lightcorona, 2);}
 		else if (!strcmp(argv[0], "underwater")) {checkparms(1);info->flags |= PARTICLEEFFECT_UNDERWATER;}
 		else if (!strcmp(argv[0], "notunderwater")) {checkparms(1);info->flags |= PARTICLEEFFECT_NOTUNDERWATER;}
 		else if (!strcmp(argv[0], "trailspacing")) {readfloat(info->trailspacing);if (info->trailspacing > 0) info->countmultiplier = 1.0f / info->trailspacing;}
@@ -462,7 +518,7 @@ static const char *standardeffectnames[EFFECT_TOTAL] =
 	"SVC_PARTICLE"
 };
 
-void CL_Particles_LoadEffectInfo(void)
+static void CL_Particles_LoadEffectInfo(const char *customfile)
 {
 	int i;
 	int filepass;
@@ -477,10 +533,15 @@ void CL_Particles_LoadEffectInfo(void)
 	for (filepass = 0;;filepass++)
 	{
 		if (filepass == 0)
-			dpsnprintf(filename, sizeof(filename), "effectinfo.txt");
+		{
+			if (customfile)
+				strlcpy(filename, customfile, sizeof(filename));
+			else
+				strlcpy(filename, "effectinfo.txt", sizeof(filename));
+		}
 		else if (filepass == 1)
 		{
-			if (!cl.worldbasename[0])
+			if (!cl.worldbasename[0] || customfile)
 				continue;
 			dpsnprintf(filename, sizeof(filename), "%s_effectinfo.txt", cl.worldnamenoextension);
 		}
@@ -494,6 +555,11 @@ void CL_Particles_LoadEffectInfo(void)
 	}
 }
 
+static void CL_Particles_LoadEffectInfo_f(void)
+{
+	CL_Particles_LoadEffectInfo(Cmd_Argc() > 1 ? Cmd_Argv(1) : NULL);
+}
+
 /*
 ===============
 CL_InitParticles
@@ -503,7 +569,7 @@ void CL_ReadPointFile_f (void);
 void CL_Particles_Init (void)
 {
 	Cmd_AddCommand ("pointfile", CL_ReadPointFile_f, "display point file produced by qbsp when a leak was detected in the map (a line leading through the leak hole, to an entity inside the level)");
-	Cmd_AddCommand ("cl_particles_reloadeffects", CL_Particles_LoadEffectInfo, "reloads effectinfo.txt and maps/levelname_effectinfo.txt (where levelname is the current map)");
+	Cmd_AddCommand ("cl_particles_reloadeffects", CL_Particles_LoadEffectInfo_f, "reloads effectinfo.txt and maps/levelname_effectinfo.txt (where levelname is the current map) if parameter is given, loads from custom file (no levelname_effectinfo are loaded in this case)");
 
 	Cvar_RegisterVariable (&cl_particles);
 	Cvar_RegisterVariable (&cl_particles_quality);
@@ -602,6 +668,12 @@ particle_t *CL_NewParticle(const vec3_t sortorigin, unsigned short ptypeindex, i
 	part->color[0] = ((((pcolor1 >> 16) & 0xFF) * l1 + ((pcolor2 >> 16) & 0xFF) * l2) >> 8) & 0xFF;
 	part->color[1] = ((((pcolor1 >>  8) & 0xFF) * l1 + ((pcolor2 >>  8) & 0xFF) * l2) >> 8) & 0xFF;
 	part->color[2] = ((((pcolor1 >>  0) & 0xFF) * l1 + ((pcolor2 >>  0) & 0xFF) * l2) >> 8) & 0xFF;
+	if (vid.sRGB3D)
+	{
+		part->color[0] = (unsigned char)floor(Image_LinearFloatFromsRGB(part->color[0]) * 255.0f + 0.5f);
+		part->color[1] = (unsigned char)floor(Image_LinearFloatFromsRGB(part->color[1]) * 255.0f + 0.5f);
+		part->color[2] = (unsigned char)floor(Image_LinearFloatFromsRGB(part->color[2]) * 255.0f + 0.5f);
+	}
 	part->alpha = palpha;
 	part->alphafade = palphafade;
 	part->staintexnum = staintex;
@@ -758,7 +830,10 @@ void CL_SpawnDecalParticleForSurface(int hitent, const vec3_t org, const vec3_t 
 
 	if (cl_decals_newsystem.integer)
 	{
-		R_DecalSystem_SplatEntities(org, normal, color[0]*(1.0f/255.0f), color[1]*(1.0f/255.0f), color[2]*(1.0f/255.0f), alpha*(1.0f/255.0f), particletexture[texnum].s1, particletexture[texnum].t1, particletexture[texnum].s2, particletexture[texnum].t2, size);
+		if (vid.sRGB3D)
+			R_DecalSystem_SplatEntities(org, normal, Image_LinearFloatFromsRGB(color[0]), Image_LinearFloatFromsRGB(color[1]), Image_LinearFloatFromsRGB(color[2]), alpha*(1.0f/255.0f), particletexture[texnum].s1, particletexture[texnum].t1, particletexture[texnum].s2, particletexture[texnum].t2, size);
+		else
+			R_DecalSystem_SplatEntities(org, normal, color[0]*(1.0f/255.0f), color[1]*(1.0f/255.0f), color[2]*(1.0f/255.0f), alpha*(1.0f/255.0f), particletexture[texnum].s1, particletexture[texnum].t1, particletexture[texnum].s2, particletexture[texnum].t2, size);
 		return;
 	}
 
@@ -780,6 +855,12 @@ void CL_SpawnDecalParticleForSurface(int hitent, const vec3_t org, const vec3_t 
 	decal->color[0] = color[0];
 	decal->color[1] = color[1];
 	decal->color[2] = color[2];
+	if (vid.sRGB3D)
+	{
+		decal->color[0] = (unsigned char)(Image_LinearFloatFromsRGB(decal->color[0]) * 256.0f);
+		decal->color[1] = (unsigned char)(Image_LinearFloatFromsRGB(decal->color[1]) * 256.0f);
+		decal->color[2] = (unsigned char)(Image_LinearFloatFromsRGB(decal->color[2]) * 256.0f);
+	}
 	decal->owner = hitent;
 	decal->clusterindex = -1000; // no vis culling unless we're sure
 	if (hitent)
@@ -803,8 +884,10 @@ void CL_SpawnDecalParticleForSurface(int hitent, const vec3_t org, const vec3_t 
 void CL_SpawnDecalParticleForPoint(const vec3_t org, float maxdist, float size, float alpha, int texnum, int color1, int color2)
 {
 	int i;
-	float bestfrac, bestorg[3], bestnormal[3];
-	float org2[3];
+	vec_t bestfrac;
+	vec3_t bestorg;
+	vec3_t bestnormal;
+	vec3_t org2;
 	int besthitent = 0, hitent;
 	trace_t trace;
 	bestfrac = 10;
@@ -829,7 +912,7 @@ void CL_SpawnDecalParticleForPoint(const vec3_t org, float maxdist, float size, 
 
 static void CL_Sparks(const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, float sparkcount);
 static void CL_Smoke(const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, float smokecount);
-void CL_ParticleEffect_Fallback(int effectnameindex, float count, const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, entity_t *ent, int palettecolor, qboolean spawndlight, qboolean spawnparticles)
+static void CL_ParticleEffect_Fallback(int effectnameindex, float count, const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, entity_t *ent, int palettecolor, qboolean spawndlight, qboolean spawnparticles)
 {
 	vec3_t center;
 	matrix4x4_t tempmatrix;
@@ -1355,6 +1438,7 @@ void CL_ParticleEffect_Fallback(int effectnameindex, float count, const vec3_t o
 void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins, const vec3_t originmaxs, const vec3_t velocitymins, const vec3_t velocitymaxs, entity_t *ent, int palettecolor, qboolean spawndlight, qboolean spawnparticles, float tintmins[4], float tintmaxs[4])
 {
 	qboolean found = false;
+	char vabuf[1024];
 	if (effectnameindex < 1 || effectnameindex >= MAX_PARTICLEEFFECTNAME || !particleeffectname[effectnameindex][0])
 	{
 		Con_DPrintf("Unknown effect number %i received from server\n", effectnameindex);
@@ -1370,6 +1454,11 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 		vec3_t traildir;
 		vec3_t trailpos;
 		vec3_t rvec;
+		vec3_t angles;
+		vec3_t velocity;
+		vec3_t forward;
+		vec3_t right;
+		vec3_t up;
 		vec_t traillen;
 		vec_t trailstep;
 		qboolean underwater;
@@ -1413,7 +1502,7 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 					{
 						// light flash (explosion, etc)
 						// called when effect starts
-						CL_AllocLightFlash(NULL, &tempmatrix, info->lightradiusstart, info->lightcolor[0]*avgtint[0]*avgtint[3], info->lightcolor[1]*avgtint[1]*avgtint[3], info->lightcolor[2]*avgtint[2]*avgtint[3], info->lightradiusfade, info->lighttime, info->lightcubemapnum, -1, info->lightshadow, 1, 0.25, 0, 1, 1, LIGHTFLAG_NORMALMODE | LIGHTFLAG_REALTIMEMODE);
+						CL_AllocLightFlash(NULL, &tempmatrix, info->lightradiusstart, info->lightcolor[0]*avgtint[0]*avgtint[3], info->lightcolor[1]*avgtint[1]*avgtint[3], info->lightcolor[2]*avgtint[2]*avgtint[3], info->lightradiusfade, info->lighttime, info->lightcubemapnum, -1, info->lightshadow, info->lightcorona[0], info->lightcorona[1], 0, 1, 1, LIGHTFLAG_NORMALMODE | LIGHTFLAG_REALTIMEMODE);
 					}
 					else if (r_refdef.scene.numlights < MAX_DLIGHTS)
 					{
@@ -1423,7 +1512,7 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 						rvec[0] = info->lightcolor[0]*avgtint[0]*avgtint[3];
 						rvec[1] = info->lightcolor[1]*avgtint[1]*avgtint[3];
 						rvec[2] = info->lightcolor[2]*avgtint[2]*avgtint[3];
-						R_RTLight_Update(&r_refdef.scene.templights[r_refdef.scene.numlights], false, &tempmatrix, rvec, -1, info->lightcubemapnum > 0 ? va("cubemaps/%i", info->lightcubemapnum) : NULL, info->lightshadow, 1, 0.25, 0, 1, 1, LIGHTFLAG_NORMALMODE | LIGHTFLAG_REALTIMEMODE);
+						R_RTLight_Update(&r_refdef.scene.templights[r_refdef.scene.numlights], false, &tempmatrix, rvec, -1, info->lightcubemapnum > 0 ? va(vabuf, sizeof(vabuf), "cubemaps/%i", info->lightcubemapnum) : NULL, info->lightshadow, info->lightcorona[0], info->lightcorona[1], 0, 1, 1, LIGHTFLAG_NORMALMODE | LIGHTFLAG_REALTIMEMODE);
 						r_refdef.scene.lights[r_refdef.scene.numlights] = &r_refdef.scene.templights[r_refdef.scene.numlights];r_refdef.scene.numlights++;
 					}
 				}
@@ -1446,9 +1535,22 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 					staintex = min(staintex, info->staintex[1] - 1);
 				}
 				if (info->particletype == pt_decal)
-					CL_SpawnDecalParticleForPoint(center, info->originjitter[0], lhrandom(info->size[0], info->size[1]), lhrandom(info->alpha[0], info->alpha[1])*avgtint[3], tex, info->color[0], info->color[1]);
+				{
+					VectorMAM(0.5f, velocitymins, 0.5f, velocitymaxs, velocity);
+					AnglesFromVectors(angles, velocity, NULL, false);
+					AngleVectors(angles, forward, right, up);
+					VectorMAMAMAM(1.0f, center, info->relativeoriginoffset[0], forward, info->relativeoriginoffset[1], right, info->relativeoriginoffset[2], up, trailpos);
+
+					CL_SpawnDecalParticleForPoint(trailpos, info->originjitter[0], lhrandom(info->size[0], info->size[1]), lhrandom(info->alpha[0], info->alpha[1])*avgtint[3], tex, info->color[0], info->color[1]);
+				}
 				else if (info->orientation == PARTICLE_HBEAM)
-					CL_NewParticle(center, info->particletype, info->color[0], info->color[1], tex, lhrandom(info->size[0], info->size[1]), info->size[2], lhrandom(info->alpha[0], info->alpha[1]), info->alpha[2], 0, 0, originmins[0], originmins[1], originmins[2], originmaxs[0], originmaxs[1], originmaxs[2], 0, 0, 0, 0, false, lhrandom(info->time[0], info->time[1]), info->stretchfactor, info->blendmode, info->orientation, info->staincolor[0], info->staincolor[1], staintex, lhrandom(info->stainalpha[0], info->stainalpha[1]), lhrandom(info->stainsize[0], info->stainsize[1]), 0, 0, tintmins ? avgtint : NULL);
+				{
+					AnglesFromVectors(angles, traildir, NULL, false);
+					AngleVectors(angles, forward, right, up);
+					VectorMAMAM(info->relativeoriginoffset[0], forward, info->relativeoriginoffset[1], right, info->relativeoriginoffset[2], up, trailpos);
+
+					CL_NewParticle(center, info->particletype, info->color[0], info->color[1], tex, lhrandom(info->size[0], info->size[1]), info->size[2], lhrandom(info->alpha[0], info->alpha[1]), info->alpha[2], 0, 0, originmins[0] + trailpos[0], originmins[1] + trailpos[1], originmins[2] + trailpos[2], originmaxs[0], originmaxs[1], originmaxs[2], 0, 0, 0, 0, false, lhrandom(info->time[0], info->time[1]), info->stretchfactor, info->blendmode, info->orientation, info->staincolor[0], info->staincolor[1], staintex, lhrandom(info->stainalpha[0], info->stainalpha[1]), lhrandom(info->stainsize[0], info->stainsize[1]), 0, 0, tintmins ? avgtint : NULL);
+				}
 				else
 				{
 					if (!cl_particles.integer)
@@ -1469,6 +1571,11 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 						info->particleaccumulator += traillen / info->trailspacing * cl_particles_quality.value * pcount;
 						trailstep = info->trailspacing / cl_particles_quality.value / max(0.001, pcount);
 						immediatebloodstain = false;
+
+						AnglesFromVectors(angles, traildir, NULL, false);
+						AngleVectors(angles, forward, right, up);
+						VectorMAMAMAM(1.0f, trailpos, info->relativeoriginoffset[0], forward, info->relativeoriginoffset[1], right, info->relativeoriginoffset[2], up, trailpos);
+						VectorMAMAM(info->relativevelocityoffset[0], forward, info->relativevelocityoffset[1], right, info->relativevelocityoffset[2], up, velocity);
 					}
 					else
 					{
@@ -1478,6 +1585,12 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 							((cl_decals_newsystem_immediatebloodstain.integer >= 1) && (info->particletype == pt_blood))
 							||
 							((cl_decals_newsystem_immediatebloodstain.integer >= 2) && staintex);
+
+						VectorMAM(0.5f, velocitymins, 0.5f, velocitymaxs, velocity);
+						AnglesFromVectors(angles, velocity, NULL, false);
+						AngleVectors(angles, forward, right, up);
+						VectorMAMAMAM(1.0f, trailpos, info->relativeoriginoffset[0], traildir, info->relativeoriginoffset[1], right, info->relativeoriginoffset[2], up, trailpos);
+						VectorMAMAM(info->relativevelocityoffset[0], traildir, info->relativevelocityoffset[1], right, info->relativevelocityoffset[2], up, velocity);
 					}
 					info->particleaccumulator = bound(0, info->particleaccumulator, 16384);
 					for (;info->particleaccumulator >= 1;info->particleaccumulator--)
@@ -1499,7 +1612,7 @@ void CL_ParticleTrail(int effectnameindex, float pcount, const vec3_t originmins
 							Vector4Lerp(tintmins, tintlerp, tintmaxs, tint);
 						}
 						VectorRandom(rvec);
-						part = CL_NewParticle(center, info->particletype, info->color[0], info->color[1], tex, lhrandom(info->size[0], info->size[1]), info->size[2], lhrandom(info->alpha[0], info->alpha[1]), info->alpha[2], info->gravity, info->bounce, trailpos[0] + info->originoffset[0] + info->originjitter[0] * rvec[0], trailpos[1] + info->originoffset[1] + info->originjitter[1] * rvec[1], trailpos[2] + info->originoffset[2] + info->originjitter[2] * rvec[2], lhrandom(velocitymins[0], velocitymaxs[0]) * info->velocitymultiplier + info->velocityoffset[0] + info->velocityjitter[0] * rvec[0], lhrandom(velocitymins[1], velocitymaxs[1]) * info->velocitymultiplier + info->velocityoffset[1] + info->velocityjitter[1] * rvec[1], lhrandom(velocitymins[2], velocitymaxs[2]) * info->velocitymultiplier + info->velocityoffset[2] + info->velocityjitter[2] * rvec[2], info->airfriction, info->liquidfriction, 0, 0, info->countabsolute <= 0, lhrandom(info->time[0], info->time[1]), info->stretchfactor, info->blendmode, info->orientation, info->staincolor[0], info->staincolor[1], staintex, lhrandom(info->stainalpha[0], info->stainalpha[1]), lhrandom(info->stainsize[0], info->stainsize[1]), lhrandom(info->rotate[0], info->rotate[1]), lhrandom(info->rotate[2], info->rotate[3]), tintmins ? tint : NULL);
+						part = CL_NewParticle(center, info->particletype, info->color[0], info->color[1], tex, lhrandom(info->size[0], info->size[1]), info->size[2], lhrandom(info->alpha[0], info->alpha[1]), info->alpha[2], info->gravity, info->bounce, trailpos[0] + info->originoffset[0] + info->originjitter[0] * rvec[0], trailpos[1] + info->originoffset[1] + info->originjitter[1] * rvec[1], trailpos[2] + info->originoffset[2] + info->originjitter[2] * rvec[2], lhrandom(velocitymins[0], velocitymaxs[0]) * info->velocitymultiplier + info->velocityoffset[0] + info->velocityjitter[0] * rvec[0] + velocity[0], lhrandom(velocitymins[1], velocitymaxs[1]) * info->velocitymultiplier + info->velocityoffset[1] + info->velocityjitter[1] * rvec[1] + velocity[1], lhrandom(velocitymins[2], velocitymaxs[2]) * info->velocitymultiplier + info->velocityoffset[2] + info->velocityjitter[2] * rvec[2] + velocity[2], info->airfriction, info->liquidfriction, 0, 0, info->countabsolute <= 0, lhrandom(info->time[0], info->time[1]), info->stretchfactor, info->blendmode, info->orientation, info->staincolor[0], info->staincolor[1], staintex, lhrandom(info->stainalpha[0], info->stainalpha[1]), lhrandom(info->stainsize[0], info->stainsize[1]), lhrandom(info->rotate[0], info->rotate[1]), lhrandom(info->rotate[2], info->rotate[3]), tintmins ? tint : NULL);
 						if (immediatebloodstain && part)
 						{
 							immediatebloodstain = false;
@@ -1529,7 +1642,8 @@ CL_EntityParticles
 void CL_EntityParticles (const entity_t *ent)
 {
 	int i;
-	float pitch, yaw, dist = 64, beamlength = 16, org[3], v[3];
+	vec_t pitch, yaw, dist = 64, beamlength = 16;
+	vec3_t org, v;
 	static vec3_t avelocities[NUMVERTEXNORMALS];
 	if (!cl_particles.integer) return;
 	if (cl.time <= cl.oldtime) return; // don't spawn new entity particles while paused
@@ -1554,7 +1668,8 @@ void CL_EntityParticles (const entity_t *ent)
 
 void CL_ReadPointFile_f (void)
 {
-	vec3_t org, leakorg;
+	double org[3], leakorg[3];
+	vec3_t vecorg;
 	int r, c, s;
 	char *pointfile = NULL, *pointfilepos, *t, tchar;
 	char name[MAX_QPATH];
@@ -1589,7 +1704,8 @@ void CL_ReadPointFile_f (void)
 #if _MSC_VER >= 1400
 #define sscanf sscanf_s
 #endif
-		r = sscanf (pointfilepos,"%f %f %f", &org[0], &org[1], &org[2]);
+		r = sscanf (pointfilepos,"%lf %lf %lf", &org[0], &org[1], &org[2]);
+		VectorCopy(org, vecorg);
 		*t = tchar;
 		pointfilepos = t;
 		if (r != 3)
@@ -1601,16 +1717,16 @@ void CL_ReadPointFile_f (void)
 		if (cl.num_particles < cl.max_particles - 3)
 		{
 			s++;
-			CL_NewParticle(org, pt_alphastatic, particlepalette[(-c)&15], particlepalette[(-c)&15], tex_particle, 2, 0, 255, 0, 0, 0, org[0], org[1], org[2], 0, 0, 0, 0, 0, 0, 0, true, 1<<30, 1, PBLEND_ALPHA, PARTICLE_BILLBOARD, -1, -1, -1, 1, 1, 0, 0, NULL);
+			CL_NewParticle(vecorg, pt_alphastatic, particlepalette[(-c)&15], particlepalette[(-c)&15], tex_particle, 2, 0, 255, 0, 0, 0, org[0], org[1], org[2], 0, 0, 0, 0, 0, 0, 0, true, 1<<30, 1, PBLEND_ALPHA, PARTICLE_BILLBOARD, -1, -1, -1, 1, 1, 0, 0, NULL);
 		}
 	}
 	Mem_Free(pointfile);
-	VectorCopy(leakorg, org);
-	Con_Printf("%i points read (%i particles spawned)\nLeak at %f %f %f\n", c, s, org[0], org[1], org[2]);
+	VectorCopy(leakorg, vecorg);
+	Con_Printf("%i points read (%i particles spawned)\nLeak at %f %f %f\n", c, s, leakorg[0], leakorg[1], leakorg[2]);
 
-	CL_NewParticle(org, pt_beam, 0xFF0000, 0xFF0000, tex_beam, 64, 0, 255, 0, 0, 0, org[0] - 4096, org[1], org[2], org[0] + 4096, org[1], org[2], 0, 0, 0, 0, false, 1<<30, 1, PBLEND_ADD, PARTICLE_HBEAM, -1, -1, -1, 1, 1, 0, 0, NULL);
-	CL_NewParticle(org, pt_beam, 0x00FF00, 0x00FF00, tex_beam, 64, 0, 255, 0, 0, 0, org[0], org[1] - 4096, org[2], org[0], org[1] + 4096, org[2], 0, 0, 0, 0, false, 1<<30, 1, PBLEND_ADD, PARTICLE_HBEAM, -1, -1, -1, 1, 1, 0, 0, NULL);
-	CL_NewParticle(org, pt_beam, 0x0000FF, 0x0000FF, tex_beam, 64, 0, 255, 0, 0, 0, org[0], org[1], org[2] - 4096, org[0], org[1], org[2] + 4096, 0, 0, 0, 0, false, 1<<30, 1, PBLEND_ADD, PARTICLE_HBEAM, -1, -1, -1, 1, 1, 0, 0, NULL);
+	CL_NewParticle(vecorg, pt_beam, 0xFF0000, 0xFF0000, tex_beam, 64, 0, 255, 0, 0, 0, org[0] - 4096, org[1], org[2], org[0] + 4096, org[1], org[2], 0, 0, 0, 0, false, 1<<30, 1, PBLEND_ADD, PARTICLE_HBEAM, -1, -1, -1, 1, 1, 0, 0, NULL);
+	CL_NewParticle(vecorg, pt_beam, 0x00FF00, 0x00FF00, tex_beam, 64, 0, 255, 0, 0, 0, org[0], org[1] - 4096, org[2], org[0], org[1] + 4096, org[2], 0, 0, 0, 0, false, 1<<30, 1, PBLEND_ADD, PARTICLE_HBEAM, -1, -1, -1, 1, 1, 0, 0, NULL);
+	CL_NewParticle(vecorg, pt_beam, 0x0000FF, 0x0000FF, tex_beam, 64, 0, 255, 0, 0, 0, org[0], org[1], org[2] - 4096, org[0], org[1], org[2] + 4096, 0, 0, 0, 0, false, 1<<30, 1, PBLEND_ADD, PARTICLE_HBEAM, -1, -1, -1, 1, 1, 0, 0, NULL);
 }
 
 /*
@@ -1625,11 +1741,11 @@ void CL_ParseParticleEffect (void)
 	vec3_t org, dir;
 	int i, count, msgcount, color;
 
-	MSG_ReadVector(org, cls.protocol);
+	MSG_ReadVector(&cl_message, org, cls.protocol);
 	for (i=0 ; i<3 ; i++)
-		dir[i] = MSG_ReadChar () * (1.0 / 16.0);
-	msgcount = MSG_ReadByte ();
-	color = MSG_ReadByte ();
+		dir[i] = MSG_ReadChar(&cl_message) * (1.0 / 16.0);
+	msgcount = MSG_ReadByte(&cl_message);
+	color = MSG_ReadByte(&cl_message);
 
 	if (msgcount == 255)
 		count = 1024;
@@ -1824,11 +1940,11 @@ void CL_ParticleRain (const vec3_t mins, const vec3_t maxs, const vec3_t dir, in
 	}
 }
 
-static cvar_t r_drawparticles = {0, "r_drawparticles", "1", "enables drawing of particles"};
+cvar_t r_drawparticles = {0, "r_drawparticles", "1", "enables drawing of particles"};
 static cvar_t r_drawparticles_drawdistance = {CVAR_SAVE, "r_drawparticles_drawdistance", "2000", "particles further than drawdistance*size will not be drawn"};
 static cvar_t r_drawparticles_nearclip_min = {CVAR_SAVE, "r_drawparticles_nearclip_min", "4", "particles closer than drawnearclip_min will not be drawn"};
 static cvar_t r_drawparticles_nearclip_max = {CVAR_SAVE, "r_drawparticles_nearclip_max", "4", "particles closer than drawnearclip_min will be faded"};
-static cvar_t r_drawdecals = {0, "r_drawdecals", "1", "enables drawing of decals"};
+cvar_t r_drawdecals = {0, "r_drawdecals", "1", "enables drawing of decals"};
 static cvar_t r_drawdecals_drawdistance = {CVAR_SAVE, "r_drawdecals_drawdistance", "500", "decals further than drawdistance*size will not be drawn"};
 
 #define PARTICLETEXTURESIZE 64
@@ -1868,7 +1984,7 @@ static unsigned char shadebubble(float dx, float dy, vec3_t light)
 }
 
 int particlefontwidth, particlefontheight, particlefontcellwidth, particlefontcellheight, particlefontrows, particlefontcols;
-void CL_Particle_PixelCoordsForTexnum(int texnum, int *basex, int *basey, int *width, int *height)
+static void CL_Particle_PixelCoordsForTexnum(int texnum, int *basex, int *basey, int *width, int *height)
 {
 	*basex = (texnum % particlefontcols) * particlefontcellwidth;
 	*basey = ((texnum / particlefontcols) % particlefontrows) * particlefontcellheight;
@@ -1886,7 +2002,7 @@ static void setuptex(int texnum, unsigned char *data, unsigned char *particletex
 		memcpy(particletexturedata + ((basey + y) * PARTICLEFONTSIZE + basex) * 4, data + y * PARTICLETEXTURESIZE * 4, PARTICLETEXTURESIZE * 4);
 }
 
-void particletextureblotch(unsigned char *data, float radius, float red, float green, float blue, float alpha)
+static void particletextureblotch(unsigned char *data, float radius, float red, float green, float blue, float alpha)
 {
 	int x, y;
 	float cx, cy, dx, dy, f, iradius;
@@ -1915,7 +2031,8 @@ void particletextureblotch(unsigned char *data, float radius, float red, float g
 	}
 }
 
-void particletextureclamp(unsigned char *data, int minr, int ming, int minb, int maxr, int maxg, int maxb)
+#if 0
+static void particletextureclamp(unsigned char *data, int minr, int ming, int minb, int maxr, int maxg, int maxb)
 {
 	int i;
 	for (i = 0;i < PARTICLETEXTURESIZE*PARTICLETEXTURESIZE;i++, data += 4)
@@ -1925,8 +2042,9 @@ void particletextureclamp(unsigned char *data, int minr, int ming, int minb, int
 		data[2] = bound(minr, data[2], maxr);
 	}
 }
+#endif
 
-void particletextureinvert(unsigned char *data)
+static void particletextureinvert(unsigned char *data)
 {
 	int i;
 	for (i = 0;i < PARTICLETEXTURESIZE*PARTICLETEXTURESIZE;i++, data += 4)
@@ -2159,7 +2277,7 @@ static void R_InitParticleTexture (void)
 	}
 
 #ifndef DUMPPARTICLEFONT
-	particletexture[tex_beam].texture = loadtextureimage(particletexturepool, "particles/nexbeam.tga", false, TEXF_ALPHA | TEXF_FORCELINEAR | TEXF_RGBMULTIPLYBYALPHA, true, r_texture_sRGB_skin_diffuse.integer != 0);
+	particletexture[tex_beam].texture = loadtextureimage(particletexturepool, "particles/nexbeam.tga", false, TEXF_ALPHA | TEXF_FORCELINEAR | TEXF_RGBMULTIPLYBYALPHA, true, vid.sRGB3D);
 	if (!particletexture[tex_beam].texture)
 #endif
 	{
@@ -2197,7 +2315,7 @@ static void R_InitParticleTexture (void)
 		bufptr = buf;
 		for(;;)
 		{
-			if(!COM_ParseToken_Simple(&bufptr, true, false))
+			if(!COM_ParseToken_Simple(&bufptr, true, false, true))
 				break;
 			if(!strcmp(com_token, "\n"))
 				continue; // empty line
@@ -2209,22 +2327,22 @@ static void R_InitParticleTexture (void)
 			s2 = 1;
 			t2 = 1;
 
-			if (COM_ParseToken_Simple(&bufptr, true, false) && strcmp(com_token, "\n"))
+			if (COM_ParseToken_Simple(&bufptr, true, false, true) && strcmp(com_token, "\n"))
 			{
 				strlcpy(texturename, com_token, sizeof(texturename));
 				s1 = atof(com_token);
-				if (COM_ParseToken_Simple(&bufptr, true, false) && strcmp(com_token, "\n"))
+				if (COM_ParseToken_Simple(&bufptr, true, false, true) && strcmp(com_token, "\n"))
 				{
 					texturename[0] = 0;
 					t1 = atof(com_token);
-					if (COM_ParseToken_Simple(&bufptr, true, false) && strcmp(com_token, "\n"))
+					if (COM_ParseToken_Simple(&bufptr, true, false, true) && strcmp(com_token, "\n"))
 					{
 						s2 = atof(com_token);
-						if (COM_ParseToken_Simple(&bufptr, true, false) && strcmp(com_token, "\n"))
+						if (COM_ParseToken_Simple(&bufptr, true, false, true) && strcmp(com_token, "\n"))
 						{
 							t2 = atof(com_token);
 							strlcpy(texturename, "particles/particlefont.tga", sizeof(texturename));
-							if (COM_ParseToken_Simple(&bufptr, true, false) && strcmp(com_token, "\n"))
+							if (COM_ParseToken_Simple(&bufptr, true, false, true) && strcmp(com_token, "\n"))
 								strlcpy(texturename, com_token, sizeof(texturename));
 						}
 					}
@@ -2242,7 +2360,7 @@ static void R_InitParticleTexture (void)
 				Con_Printf("particles/particlefont.txt: texnum %i outside valid range (0 to %i)\n", i, MAX_PARTICLETEXTURES);
 				continue;
 			}
-			sf = R_SkinFrame_LoadExternal(texturename, TEXF_ALPHA | TEXF_FORCELINEAR | TEXF_RGBMULTIPLYBYALPHA, true);
+			sf = R_SkinFrame_LoadExternal(texturename, TEXF_ALPHA | TEXF_FORCELINEAR | TEXF_RGBMULTIPLYBYALPHA, true); // note: this loads as sRGB if sRGB is active!
 			if(!sf)
 			{
 				// R_SkinFrame_LoadExternal already complained
@@ -2266,7 +2384,7 @@ static void r_part_start(void)
 		particlepalette[i] = palette_rgb[i][0] * 65536 + palette_rgb[i][1] * 256 + palette_rgb[i][2];
 	particletexturepool = R_AllocTexturePool();
 	R_InitParticleTexture ();
-	CL_Particles_LoadEffectInfo();
+	CL_Particles_LoadEffectInfo(NULL);
 }
 
 static void r_part_shutdown(void)
@@ -2278,7 +2396,7 @@ static void r_part_newmap(void)
 {
 	if (decalskinframe)
 		R_SkinFrame_MarkUsed(decalskinframe);
-	CL_Particles_LoadEffectInfo();
+	CL_Particles_LoadEffectInfo(NULL);
 }
 
 unsigned short particle_elements[MESHQUEUE_TRANSPARENT_BATCHSIZE*6];
@@ -2306,13 +2424,13 @@ void R_Particles_Init (void)
 	R_RegisterModule("R_Particles", r_part_start, r_part_shutdown, r_part_newmap, NULL, NULL);
 }
 
-void R_DrawDecal_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
+static void R_DrawDecal_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
 {
 	int surfacelistindex;
 	const decal_t *d;
 	float *v3f, *t2f, *c4f;
 	particletexture_t *tex;
-	float right[3], up[3], size, ca;
+	vec_t right[3], up[3], size, ca;
 	float alphascale = (1.0f / 65536.0f) * cl_particles_alpha.value;
 
 	RSurf_ActiveWorldEntity();
@@ -2374,7 +2492,7 @@ void R_DrawDecal_TransparentCallback(const entity_render_t *ent, const rtlight_t
 	// now render the decals all at once
 	// (this assumes they all use one particle font texture!)
 	GL_BlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);
-	R_SetupShader_Generic(particletexture[63].texture, NULL, GL_MODULATE, 1);
+	R_SetupShader_Generic(particletexture[63].texture, NULL, GL_MODULATE, 1, false, false, true);
 	R_Mesh_PrepareVertices_Generic_Arrays(numsurfaces * 4, particle_vertex3f, particle_color4f, particle_texcoord2f);
 	R_Mesh_Draw(0, numsurfaces * 4, 0, numsurfaces * 2, NULL, NULL, 0, particle_elements, NULL, 0);
 }
@@ -2433,7 +2551,7 @@ void R_DrawDecals (void)
 			continue;
 
 		if (DotProduct(r_refdef.view.origin, decal->normal) > DotProduct(decal->org, decal->normal) && VectorDistance2(decal->org, r_refdef.view.origin) < drawdist2 * (decal->size * decal->size))
-			R_MeshQueue_AddTransparent(decal->org, R_DrawDecal_TransparentCallback, NULL, i, NULL);
+			R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, decal->org, R_DrawDecal_TransparentCallback, NULL, i, NULL);
 		continue;
 killdecal:
 		decal->typeindex = 0;
@@ -2457,8 +2575,9 @@ killdecal:
 	r_refdef.stats.totaldecals = cl.num_decals;
 }
 
-void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
+static void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtlight_t *rtlight, int numsurfaces, int *surfacelist)
 {
+	vec3_t vecorg, vecvel, baseright, baseup;
 	int surfacelistindex;
 	int batchstart, batchcount;
 	const particle_t *p;
@@ -2468,7 +2587,7 @@ void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtligh
 	particletexture_t *tex;
 	float up2[3], v[3], right[3], up[3], fog, ifog, size, len, lenfactor, alpha;
 //	float ambient[3], diffuse[3], diffusenormal[3];
-	float palpha, spintime, spinrad, spincos, spinsin, spinm1, spinm2, spinm3, spinm4, baseright[3], baseup[3];
+	float palpha, spintime, spinrad, spincos, spinsin, spinm1, spinm2, spinm3, spinm4;
 	vec4_t colormultiplier;
 	float minparticledist_start, minparticledist_end;
 	qboolean dofade;
@@ -2536,7 +2655,12 @@ void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtligh
 			c4f[3] = alpha;
 			// note: lighting is not cheap!
 			if (particletype[p->typeindex].lighting)
-				R_LightPoint(c4f, p->org, LP_LIGHTMAP | LP_RTWORLD | LP_DYNLIGHT);
+			{
+				vecorg[0] = p->org[0];
+				vecorg[1] = p->org[1];
+				vecorg[2] = p->org[2];
+				R_LightPoint(c4f, vecorg, LP_LIGHTMAP | LP_RTWORLD | LP_DYNLIGHT);
+			}
 			// mix in the fog color
 			if (r_refdef.fogenabled)
 			{
@@ -2597,7 +2721,10 @@ void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtligh
 			t2f[6] = tex->s2;t2f[7] = tex->t2;
 			break;
 		case PARTICLE_ORIENTED_DOUBLESIDED:
-			VectorVectors(p->vel, baseright, baseup);
+			vecvel[0] = p->vel[0];
+			vecvel[1] = p->vel[1];
+			vecvel[2] = p->vel[2];
+			VectorVectors(vecvel, baseright, baseup);
 			if (p->angle + p->spin)
 			{
 				spinrad = (p->angle + p->spin * (spintime - p->delayedspawn)) * (float)(M_PI / 180.0f);
@@ -2684,7 +2811,7 @@ void R_DrawParticle_TransparentCallback(const entity_render_t *ent, const rtligh
 		if (texture != particletexture[p->texnum].texture)
 		{
 			texture = particletexture[p->texnum].texture;
-			R_SetupShader_Generic(texture, NULL, GL_MODULATE, 1);
+			R_SetupShader_Generic(texture, NULL, GL_MODULATE, 1, false, false, false);
 		}
 
 		if (p->blendmode == PBLEND_INVMOD)
@@ -2912,7 +3039,7 @@ void R_DrawParticles (void)
 		{
 		case pt_beam:
 			// beams have no culling
-			R_MeshQueue_AddTransparent(p->sortorigin, R_DrawParticle_TransparentCallback, NULL, i, NULL);
+			R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, p->sortorigin, R_DrawParticle_TransparentCallback, NULL, i, NULL);
 			break;
 		default:
 			if(cl_particles_visculling.integer)
@@ -2926,7 +3053,7 @@ void R_DrawParticles (void)
 					}
 			// anything else just has to be in front of the viewer and visible at this distance
 			if (DotProduct(p->org, r_refdef.view.forward) >= minparticledist_start && VectorDistance2(p->org, r_refdef.view.origin) < drawdist2 * (p->size * p->size))
-				R_MeshQueue_AddTransparent(p->sortorigin, R_DrawParticle_TransparentCallback, NULL, i, NULL);
+				R_MeshQueue_AddTransparent(MESHQUEUE_SORT_DISTANCE, p->sortorigin, R_DrawParticle_TransparentCallback, NULL, i, NULL);
 			break;
 		}
 
