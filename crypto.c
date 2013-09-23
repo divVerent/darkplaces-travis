@@ -1495,7 +1495,7 @@ const void *Crypto_EncryptPacket(crypto_t *crypto, const void *data_src, size_t 
 				return NULL;
 			}
 			*len_dst = ((len_src + 15) / 16) * 16 + 16; // add 16 for HMAC, then round to 16-size for AES
-			((unsigned char *) data_dst)[0] = *len_dst - len_src;
+			((unsigned char *) data_dst)[0] = (*len_dst - 16 - len_src) | (rand() & 0xF0);  // Vary the IV a bit.
 			memcpy(((unsigned char *) data_dst)+1, h, 15);
 			aescpy(crypto->dhkey, (const unsigned char *) data_dst, ((unsigned char *) data_dst) + 16, (const unsigned char *) data_src, len_src);
 			//                    IV                                dst                                src                               len
@@ -1553,8 +1553,8 @@ const void *Crypto_DecryptPacket(crypto_t *crypto, const void *data_src, size_t 
 				Con_Printf("Crypto_DecryptPacket failed (not enough space: %d bytes in, %d bytes out)\n", (int) len_src, (int) len);
 				return NULL;
 			}
-			*len_dst = len_src - ((unsigned char *) data_src)[0];
-			if(len < *len_dst || *len_dst > len_src - 16)
+			*len_dst = len_src - 16 - (((unsigned char *) data_src)[0] & 0x0F);
+			if(len < *len_dst)
 			{
 				Con_Printf("Crypto_DecryptPacket failed (not enough space: %d bytes in, %d->%d bytes out)\n", (int) len_src, (int) *len_dst, (int) len);
 				return NULL;
