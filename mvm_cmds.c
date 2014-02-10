@@ -802,16 +802,15 @@ static void VM_M_crypto_getkeyfp(prvm_prog_t *prog)
 {
 	lhnetaddress_t addr;
 	const char *s;
-	char keyfp[FP64_SIZE + 2] = "~";
-	qboolean issigned;
+	char keyfp[FP64_SIZE + 1];
 
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getkeyfp);
 
 	s = PRVM_G_STRING( OFS_PARM0 );
 	VM_CheckEmptyString( prog, s );
 
-	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, keyfp, sizeof(keyfp), NULL, 0, NULL, &issigned))
-		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, issigned ? keyfp : (keyfp-1) );
+	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, keyfp, sizeof(keyfp), NULL, 0, NULL, NULL))
+		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, keyfp );
 	else
 		PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
 }
@@ -830,6 +829,21 @@ static void VM_M_crypto_getidfp(prvm_prog_t *prog)
 		PRVM_G_INT( OFS_RETURN ) = PRVM_SetTempString( prog, idfp );
 	else
 		PRVM_G_INT( OFS_RETURN ) = OFS_NULL;
+}
+static void VM_M_crypto_getidstatus(prvm_prog_t *prog)
+{
+	lhnetaddress_t addr;
+	const char *s;
+
+	VM_SAFEPARMCOUNT(1,VM_M_crypto_getidstatus);
+
+	s = PRVM_G_STRING( OFS_PARM0 );
+	VM_CheckEmptyString( prog, s );
+
+	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, NULL, NULL, NULL, 0, NULL, &issigned))
+		PRVM_G_FLOAT( OFS_RETURN ) = issigned ? 2 : 1;
+	else
+		PRVM_G_FLOAT( OFS_RETURN ) = 0;
 }
 static void VM_M_crypto_getencryptlevel(prvm_prog_t *prog)
 {
@@ -1586,6 +1600,7 @@ VM_digest_hex,						// #639
 NULL,							// #640
 VM_M_crypto_getmyidstatus,				// #641 float(float i) crypto_getmyidstatus
 VM_coverage,						// #642
+VM_M_crypto_getidstatus,				// #643 float(string addr) crypto_getidstatus
 NULL
 };
 
