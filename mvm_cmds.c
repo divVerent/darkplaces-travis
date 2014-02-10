@@ -834,13 +834,14 @@ static void VM_M_crypto_getidstatus(prvm_prog_t *prog)
 {
 	lhnetaddress_t addr;
 	const char *s;
+	qboolean issigned;
 
 	VM_SAFEPARMCOUNT(1,VM_M_crypto_getidstatus);
 
 	s = PRVM_G_STRING( OFS_PARM0 );
 	VM_CheckEmptyString( prog, s );
 
-	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, NULL, NULL, NULL, 0, NULL, &issigned))
+	if(LHNETADDRESS_FromString(&addr, s, 26000) && Crypto_RetrieveHostKey(&addr, NULL, NULL, 0, NULL, 0, NULL, &issigned))
 		PRVM_G_FLOAT( OFS_RETURN ) = issigned ? 2 : 1;
 	else
 		PRVM_G_FLOAT( OFS_RETURN ) = 0;
