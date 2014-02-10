@@ -352,10 +352,10 @@ float(string key) stringtokeynum = #341;
 //idea: divVerent
 //darkplaces implementation: divVerent
 //field definitions: (MENUQC)
-string(string serveraddress) crypto_getkeyfp = #633; // retrieves the cached host key's CA fingerprint of a server given by IP address
+string(string serveraddress) crypto_getkeyfp = #633; // retrieves the cached host key's CA fingerprint of a server given by IP address (prefixed by a tilde if not verified)
 string(string serveraddress) crypto_getidfp = #634; // retrieves the cached host key fingerprint of a server given by IP address
 string(string serveraddress) crypto_getencryptlevel = #635; // 0 if never encrypting, 1 supported, 2 requested, 3 required, appended by list of allowed methods in order of preference ("AES128"), preceded by a space each
-string(float i) crypto_getmykeyfp = #636; // retrieves the CA key fingerprint of a given CA slot, or "" if slot is unused but more to come, or string_null if end of list
+string(float i) crypto_getmykeyfp = #636; // retrieves the CA key fingerprint of a given CA slot (NOTE: no tilde prefix here - use crypto_getmyidstatus for that), or "" if slot is unused but more to come, or string_null if end of list
 string(float i) crypto_getmyidfp = #637; // retrieves the ID fingerprint of a given CA slot, or "" if slot is unused but more to come, or string_null if end of list
 float CRYPTO_IDSTATUS_OUTOFRANGE = -1;
 float CRYPTO_IDSTATUS_EMPTY = 0;
