@@ -820,6 +820,9 @@ static qboolean Crypto_SavePubKeyTextFile(int i)
 
 static void Crypto_BuildIdString(void)
 {
+	int i;
+	char vabuf[1024];
+
 	crypto_idstring = NULL;
 	dpsnprintf(crypto_idstring_buf, sizeof(crypto_idstring_buf), "%d", d0_rijndael_dll ? crypto_aeslevel.integer : 0);
 	for (i = 0; i < MAX_PUBKEYS; ++i)
