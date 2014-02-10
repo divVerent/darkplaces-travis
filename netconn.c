@@ -444,7 +444,7 @@ static void ServerList_ViewList_Insert( serverlist_entry_t *entry )
 				break;
 			}
 		}
-		if(Crypto_RetrieveHostKey(&addr, 0, NULL, 0, idfp, sizeof(idfp), NULL))
+		if(Crypto_RetrieveHostKey(&addr, 0, NULL, 0, idfp, sizeof(idfp), NULL, NULL))
 		{
 			for(i = 0; i < nFavorites_idfp; ++i)
 			{
