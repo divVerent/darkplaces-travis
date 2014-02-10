@@ -3587,6 +3587,7 @@ static void SVVM_init_edict(prvm_prog_t *prog, prvm_edict_t *e)
 			PRVM_serveredictstring(e, crypto_idfp) = PRVM_SetEngineString(prog, svs.clients[num].netconnection->crypto.client_idfp);
 		else
 			PRVM_serveredictstring(e, crypto_idfp) = 0;
+		PRVM_serveredictfloat(e, crypto_idfp_signed) = (svs.clients[num].netconnection != NULL && svs.clients[num].netconnection->crypto.authenticated && svs.clients[num].netconnection->crypto.client_issigned);
 		if(svs.clients[num].netconnection != NULL && svs.clients[num].netconnection->crypto.authenticated && svs.clients[num].netconnection->crypto.client_keyfp[0])
 			PRVM_serveredictstring(e, crypto_keyfp) = PRVM_SetEngineString(prog, svs.clients[num].netconnection->crypto.client_keyfp);
 		else

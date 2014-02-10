@@ -2557,9 +2557,10 @@ void coverage() = #642;  // Reports a coverage event. The engine counts for each
 //idea: divVerent
 //darkplaces implementation: divVerent
 //field definitions: (SVQC)
-.string crypto_keyfp; // fingerprint of CA key the player used to authenticate (prefixed by a tilde if not verified)
-.string crypto_mykeyfp; // fingerprint of CA key the server used to authenticate to the player (prefixed by a tilde if not verified)
+.string crypto_keyfp; // fingerprint of CA key the player used to authenticate
+.string crypto_mykeyfp; // fingerprint of CA key the server used to authenticate to the player
 .string crypto_idfp; // fingerprint of ID used by the player entity, or string_null if not identified
+.float crypto_idfp_signed; // set if the player's ID has been signed
 .string crypto_encryptmethod; // the string "AES128" if encrypting, and string_null if plaintext
 .string crypto_signmethod; // the string "HMAC-SHA256" if signing, and string_null if plaintext
 // there is no field crypto_myidfp, as that info contains no additional information the QC may have a use for
