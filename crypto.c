@@ -818,6 +818,16 @@ static qboolean Crypto_SavePubKeyTextFile(int i)
 	return true;
 }
 
+static void Crypto_BuildIdString(void)
+{
+	crypto_idstring = NULL;
+	dpsnprintf(crypto_idstring_buf, sizeof(crypto_idstring_buf), "%d", d0_rijndael_dll ? crypto_aeslevel.integer : 0);
+	for (i = 0; i < MAX_PUBKEYS; ++i)
+		if (pubkeys[i])
+			strlcat(crypto_idstring_buf, va(vabuf, sizeof(vabuf), " %s@%s%s", pubkeys_priv_fp64[i], pubkeys_havesig[i] ? "" : "~", pubkeys_fp64[i]), sizeof(crypto_idstring_buf));
+	crypto_idstring = crypto_idstring_buf;
+}
+
 void Crypto_LoadKeys(void)
 {
 	char buf[8192];
@@ -839,8 +849,6 @@ void Crypto_LoadKeys(void)
 	//   PUBLIC KEYS to accept (including modulus)
 	//   PRIVATE KEY of user
 
-	crypto_idstring = NULL;
-	dpsnprintf(crypto_idstring_buf, sizeof(crypto_idstring_buf), "%d", d0_rijndael_dll ? crypto_aeslevel.integer : 0);
 	for(i = 0; i < MAX_PUBKEYS; ++i)
 	{
 		memset(pubkeys_fp64[i], 0, sizeof(pubkeys_fp64[i]));
@@ -876,8 +884,6 @@ void Crypto_LoadKeys(void)
 								if(!status)
 									Con_Printf("NOTE: this ID has not yet been signed!\n");
 
-								strlcat(crypto_idstring_buf, va(vabuf, sizeof(vabuf), " %s@%s%s", pubkeys_priv_fp64[i], pubkeys_havesig[i] ? "" : "~", pubkeys_fp64[i]), sizeof(crypto_idstring_buf));
-
 								Crypto_SavePubKeyTextFile(i);
 							}
 							else
@@ -904,9 +910,9 @@ void Crypto_LoadKeys(void)
 			}
 		}
 	}
-	crypto_idstring = crypto_idstring_buf;
 
 	keygen_i = -1;
+	Crypto_BuildIdString();
 	Crypto_BuildChallengeAppend();
 
 	// find a good prefix length for all the keys we know (yes, algorithm is not perfect yet, may yield too long prefix length)
@@ -1178,7 +1184,7 @@ static void Crypto_KeyGen_Finished(int code, size_t length_received, unsigned ch
 
 	Con_Printf("Saved to key_%d.d0si%s\n", keygen_i, sessionid.string);
 
-	// FIXME regen crypto_idstring
+	Crypto_BuildIdString();
 
 	keygen_i = -1;
 	SV_UnlockThreadMutex();
