@@ -1838,6 +1838,7 @@ static int Crypto_ServerParsePacket_Internal(const char *data_in, size_t len_in,
 				// I am the server, and my key is ok... so let's set server_keyfp and server_idfp
 				strlcpy(crypto->server_keyfp, pubkeys_fp64[CDATA->s], sizeof(crypto->server_keyfp));
 				strlcpy(crypto->server_idfp, pubkeys_priv_fp64[CDATA->s], sizeof(crypto->server_idfp));
+				crypto->server_issigned = pubkeys_havesig[CDATA->s];
 
 				if(!CDATA->id)
 					CDATA->id = qd0_blind_id_new();
@@ -2333,6 +2334,7 @@ int Crypto_ClientParsePacket(const char *data_in, size_t len_in, char *data_out,
 				// I am the client, and my key is ok... so let's set client_keyfp and client_idfp
 				strlcpy(crypto->client_keyfp, pubkeys_fp64[CDATA->c], sizeof(crypto->client_keyfp));
 				strlcpy(crypto->client_idfp, pubkeys_priv_fp64[CDATA->c], sizeof(crypto->client_idfp));
+				crypto->client_issigned = pubkeys_havesig[CDATA->c];
 			}
 
 			if(serverid >= 0)
