@@ -1520,12 +1520,14 @@ static void NetConn_ConnectionEstablished(lhnetsocket_t *mysocket, lhnetaddress_
 	if(cls.crypto.authenticated)
 	{
 		Crypto_FinishInstance(crypto, &cls.crypto);
-		Con_Printf("%s connection to %s has been established: server is %s@%.*s, I am %.*s@%.*s\n",
+		Con_Printf("%s connection to %s has been established: server is %s@%s%.*s, I am %.*s@%s%.*s\n",
 				crypto->use_aes ? "Encrypted" : "Authenticated",
 				cls.netcon->address,
 				crypto->server_idfp[0] ? crypto->server_idfp : "-",
+				(crypto->server_issigned || !crypto->server_keyfp[0]) ? "" : "~",
 				crypto_keyfp_recommended_length, crypto->server_keyfp[0] ? crypto->server_keyfp : "-",
 				crypto_keyfp_recommended_length, crypto->client_idfp[0] ? crypto->client_idfp : "-",
+				(crypto->client_issigned || !crypto->client_keyfp[0]) ? "" : "~",
 				crypto_keyfp_recommended_length, crypto->client_keyfp[0] ? crypto->client_keyfp : "-"
 				);
 	}
@@ -2986,12 +2988,14 @@ static int NetConn_ServerParsePacket(lhnetsocket_t *mysocket, unsigned char *dat
 				// no need to check challenge
 				if(crypto_developer.integer)
 				{
-					Con_Printf("%s connection to %s is being established: client is %s@%.*s, I am %.*s@%.*s\n",
+					Con_Printf("%s connection to %s is being established: client is %s@%s%.*s, I am %.*s@%s%.*s\n",
 							crypto->use_aes ? "Encrypted" : "Authenticated",
 							addressstring2,
 							crypto->client_idfp[0] ? crypto->client_idfp : "-",
+							(crypto->client_issigned || !crypto->client_keyfp[0]) ? "" : "~",
 							crypto_keyfp_recommended_length, crypto->client_keyfp[0] ? crypto->client_keyfp : "-",
 							crypto_keyfp_recommended_length, crypto->server_idfp[0] ? crypto->server_idfp : "-",
+							(crypto->server_issigned || !crypto->server_keyfp[0]) ? "" : "~",
 							crypto_keyfp_recommended_length, crypto->server_keyfp[0] ? crypto->server_keyfp : "-"
 						  );
 				}
