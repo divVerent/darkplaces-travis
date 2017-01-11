@@ -3,6 +3,7 @@
 set -ex
 
 export USRLOCAL="$PWD"/usrlocal
+mkdir "$USRLOCAL"
 
 for os in "$@"; do
   git archive --format=tar --remote=git://de.git.xonotic.org/xonotic/xonotic.git \
