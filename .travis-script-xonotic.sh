@@ -9,6 +9,8 @@ set -x
 chmod 0600 id_rsa-xonotic
 # ssh-keygen -y -f id_rsa-xonotic
 
+export USRLOCAL="$PWD"/usrlocal
+
 rev=`git rev-parse HEAD`
 
 sftp -oStrictHostKeyChecking=no -i id_rsa-xonotic -P 2222 -b - autobuild-bin-uploader@beta.xonotic.org <<EOF || true
@@ -40,7 +42,7 @@ for os in "$@"; do
       chroot=
       makeflags='STRIP=:
         CC="${CC} -m64 -g1 -I../../../${deps}/include -L../../../${deps}/lib -DSUPPORTIPV6"
-        SDL_CONFIG=sdl2-config
+        SDL_CONFIG=$USRLOCAL/bin/sdl2-config
         DP_LINK_CRYPTO=shared
           LIB_CRYPTO="../../../${deps}/lib/libd0_blind_id.a ../../../${deps}/lib/libgmp.a"
         DP_LINK_CRYPTO_RIJNDAEL=dlopen
@@ -62,8 +64,8 @@ for os in "$@"; do
         DP_MAKE_TARGET=mingw
         UNAME=MINGW32
         WIN32RELEASE=1
-        CC="/opt/cross_toolchain_32/bin/i686-w64-mingw32-gcc -static -g1 -mstackrealign -Wl,--dynamicbase -Wl,--nxcompat -I../../../${deps}/include -L../../../${deps}/lib -DSUPPORTIPV6"
-        WINDRES="/opt/cross_toolchain_32/bin/i686-w64-mingw32-windres"
+        CC="$USRLOCAL/opt/cross_toolchain_32/bin/i686-w64-mingw32-gcc -static -g1 -mstackrealign -Wl,--dynamicbase -Wl,--nxcompat -I../../../${deps}/include -L../../../${deps}/lib -DSUPPORTIPV6"
+        WINDRES="$USRLOCAL/opt/cross_toolchain_32/bin/i686-w64-mingw32-windres"
         SDL_CONFIG="../../../${deps}/bin/sdl2-config"
         DP_LINK_CRYPTO=dlopen
         DP_LINK_CRYPTO_RIJNDAEL=dlopen
@@ -80,8 +82,8 @@ for os in "$@"; do
         DP_MAKE_TARGET=mingw
         UNAME=MINGW32
         WIN64RELEASE=1
-        CC="/opt/cross_toolchain_64/bin/x86_64-w64-mingw32-gcc -static -g1 -Wl,--dynamicbase -Wl,--nxcompat -I../../../${deps}/include -L../../../${deps}/lib -DSUPPORTIPV6"
-        WINDRES="/opt/cross_toolchain_64/bin/x86_64-w64-mingw32-windres"
+        CC="$USRLOCAL/opt/cross_toolchain_64/bin/x86_64-w64-mingw32-gcc -static -g1 -Wl,--dynamicbase -Wl,--nxcompat -I../../../${deps}/include -L../../../${deps}/lib -DSUPPORTIPV6"
+        WINDRES="$USRLOCAL/opt/cross_toolchain_64/bin/x86_64-w64-mingw32-windres"
         SDL_CONFIG="../../../${deps}/bin/sdl2-config"
         DP_LINK_CRYPTO=dlopen
         DP_LINK_CRYPTO_RIJNDAEL=dlopen

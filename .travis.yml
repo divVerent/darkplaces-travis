@@ -12,7 +12,7 @@ matrix:
   - os: linux
     env: PROJECT=xonotic OS="linux64"
     compiler: gcc
-    sudo: required  # TODO: remove the need.
+    sudo: false
     addons:
       apt:
         packages:
@@ -22,11 +22,11 @@ matrix:
   - os: linux
     env: PROJECT=xonotic OS="win32"
     compiler: gcc
-    sudo: required  # TODO: remove the need.
+    sudo: false
   - os: linux
     env: PROJECT=xonotic OS="win64"
     compiler: gcc
-    sudo: required  # TODO: remove the need.
+    sudo: false
   - os: osx
     env: PROJECT=xonotic OS="osx"
     compiler: gcc
