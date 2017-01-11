@@ -12,6 +12,7 @@ matrix:
           - libsdl1.2-dev:i386
           - libxxf86vm-dev:i386
           - gcc-multilib
+          - g++-multilib
           # Workaround packages to install to fix dependency hell.
           - libglu1-mesa-dev:i386
           - libcaca-dev:i386
