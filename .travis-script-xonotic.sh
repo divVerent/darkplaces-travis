@@ -56,9 +56,10 @@ for os in "$@"; do
       outputs='darkplaces-glx:darkplaces-linux64-glx darkplaces-sdl:darkplaces-linux64-sdl darkplaces-dedicated:darkplaces-linux64-dedicated'
       ;;
     win32)
-      # Need to use -mstackrealign as nothing guarantees that callbacks from
       # other Win32 DLLs - including SDL2 - retain 16 bytes alignment.
+      export LD_LIBRARY_PATH="$USRLOCAL/opt/cross_toolchain_32/x86_64-slackware-linux/i686-w64-mingw32/lib:$USRLOCAL/opt/cross_toolchain_32/libexec/gcc/i686-w64-mingw32/4.8.3"
       chroot=
+      # Need to use -mstackrealign as nothing guarantees that callbacks from
       makeflags='STRIP=:
         D3D=1
         DP_MAKE_TARGET=mingw
@@ -76,6 +77,7 @@ for os in "$@"; do
       outputs='darkplaces.exe:darkplaces-x86-wgl.exe darkplaces-sdl.exe:darkplaces-x86.exe darkplaces-dedicated.exe:darkplaces-x86-dedicated.exe'
       ;;
     win64)
+      export LD_LIBRARY_PATH="$USRLOCAL/opt/cross_toolchain_64/x86_64-slackware-linux/x86_64-w64-mingw32/lib:$USRLOCAL/opt/cross_toolchain_64/libexec/gcc/x86_64-w64-mingw32/4.8.3"
       chroot=
       makeflags='STRIP=:
         D3D=1
