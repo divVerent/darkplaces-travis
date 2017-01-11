@@ -36,7 +36,7 @@ for os in "$@"; do
       tar xf SDL2-2.0.4.tar.gz
       (
       cd SDL2-2.0.4
-      ./configure --enable-static --disable-shared --prefix="$usrlocal"
+      ./configure --enable-static --disable-shared --prefix="$USRLOCAL"
       make
       make install
       )
