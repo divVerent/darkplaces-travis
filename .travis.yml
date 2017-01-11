@@ -11,6 +11,9 @@ matrix:
           - libxpm-dev:i386
           - libsdl1.2-dev:i386
           - libxxf86vm-dev:i386
+          - libglu1-mesa-dev:i386
+          - libcaca-dev:i386
+          - libxext-dev:i386
   - os: linux
     env: PROJECT=xonotic OS="linux64"
     compiler: gcc
