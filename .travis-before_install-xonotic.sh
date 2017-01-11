@@ -11,24 +11,14 @@ for os in "$@"; do
 
   case "$os" in
     linux32)
-      # Prepare an i386 chroot. This is required as we otherwise can't install
-      # our dependencies to be able to compile a 32bit binary. Ubuntu...
-      chroot="$PWD"/buildroot.i386
-      mkdir -p "$chroot$PWD"
-      sudo i386 debootstrap --arch=i386 precise "$chroot"
-      sudo mount --rbind "$PWD" "$chroot$PWD"
-      sudo i386 chroot "$chroot" apt-get install -y \
-        build-essential
-      # Now install our dependencies.
-      sudo i386 chroot "$chroot" apt-get install -y \
-        libxpm-dev libsdl1.2-dev libxxf86vm-dev
       wget https://www.libsdl.org/release/SDL2-2.0.4.tar.gz
       tar xf SDL2-2.0.4.tar.gz
       (
       cd SDL2-2.0.4
-      sudo i386 chroot "$chroot" sh -c "cd $PWD && ./configure --enable-static --disable-shared"
-      sudo i386 chroot "$chroot" make -C "$PWD"
-      sudo i386 chroot "$chroot" make -C "$PWD" install
+      export CC="gcc -m32"
+      ./configure --enable-static --disable-shared --prefix="$USRLOCAL"
+      make
+      make install
       )
       ;;
     linux64)

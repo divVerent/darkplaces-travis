@@ -22,10 +22,10 @@ for os in "$@"; do
   deps=".deps/${os}"
   case "${os}" in
     linux32)
-      chroot="sudo chroot ${PWD}/buildroot.i386"
+      chroot=
       makeflags='STRIP=:
         CC="${CC} -m32 -march=i686 -g1 -I../../../${deps}/include -L../../../${deps}/lib -DSUPPORTIPV6"
-        SDL_CONFIG=sdl2-config
+        SDL_CONFIG=$USRLOCAL/bin/sdl2-config
         DP_LINK_CRYPTO=shared
           LIB_CRYPTO="../../../${deps}/lib/libd0_blind_id.a ../../../${deps}/lib/libgmp.a"
         DP_LINK_CRYPTO_RIJNDAEL=dlopen
