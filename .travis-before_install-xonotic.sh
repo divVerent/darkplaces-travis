@@ -16,7 +16,7 @@ for os in "$@"; do
       (
       cd SDL2-2.0.4
       export CC="gcc -m32"
-      ./configure --enable-static --disable-shared --prefix="$USRLOCAL"
+      ./configure --enable-static --disable-shared --prefix="$USRLOCAL" || cat config.log
       make
       make install
       )
