@@ -4,15 +4,29 @@ matrix:
   - os: linux
     env: PROJECT=xonotic OS="linux32"
     compiler: gcc
+    sudo: required  # For chroot to the i386 environment.
+    addons:
+      apt:
+        packages:
+          - debootstrap
   - os: linux
     env: PROJECT=xonotic OS="linux64"
     compiler: gcc
+    sudo: required  # TODO: remove the need.
+    addons:
+      apt:
+        packages:
+          - libxpm-dev
+          - libsdl1.2-dev
+          - libxxf86vm-dev
   - os: linux
     env: PROJECT=xonotic OS="win32"
     compiler: gcc
+    sudo: required  # TODO: remove the need.
   - os: linux
     env: PROJECT=xonotic OS="win64"
     compiler: gcc
+    sudo: required  # TODO: remove the need.
   - os: osx
     env: PROJECT=xonotic OS="osx"
     compiler: gcc

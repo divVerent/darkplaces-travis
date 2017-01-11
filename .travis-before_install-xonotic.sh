@@ -2,10 +2,6 @@
 
 set -ex
 
-if [ "`uname`" = 'Linux' ]; then
-  sudo apt-get update -qq
-fi
-
 for os in "$@"; do
   git archive --format=tar --remote=git://de.git.xonotic.org/xonotic/xonotic.git \
     --prefix=".deps/${os}/" master:"misc/builddeps/${os}" | tar xvf -
@@ -16,7 +12,6 @@ for os in "$@"; do
       # our dependencies to be able to compile a 32bit binary. Ubuntu...
       chroot="$PWD"/buildroot.i386
       mkdir -p "$chroot$PWD"
-      sudo apt-get install -y debootstrap
       sudo i386 debootstrap --arch=i386 precise "$chroot"
       sudo mount --rbind "$PWD" "$chroot$PWD"
       sudo i386 chroot "$chroot" apt-get install -y \
@@ -34,8 +29,6 @@ for os in "$@"; do
       )
       ;;
     linux64)
-      sudo apt-get install -y \
-        libxpm-dev libsdl1.2-dev libxxf86vm-dev
       wget https://www.libsdl.org/release/SDL2-2.0.4.tar.gz
       tar xf SDL2-2.0.4.tar.gz
       (
